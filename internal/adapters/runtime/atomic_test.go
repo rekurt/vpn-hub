@@ -43,13 +43,17 @@ func TestAtomicWriteLeavesNoTemporaryFiles(t *testing.T) {
 
 // Concurrent writers previously shared a fixed "<path>.tmp" name and could interleave
 // into a truncated file. The reader must always observe a complete revision.
+//
+// Kept deliberately small: every save fsyncs the file and its directory, and on macOS
+// File.Sync issues F_FULLFSYNC, a full drive barrier that costs seconds per call. Four
+// writers demonstrate the property just as well as forty.
 func TestConcurrentSavesNeverExposeAPartialFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	store := FileRevisionStore{StateDir: dir}
 
 	var writers sync.WaitGroup
-	for i := range 16 {
+	for i := range 4 {
 		writers.Add(1)
 		go func() {
 			defer writers.Done()

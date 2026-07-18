@@ -104,9 +104,20 @@ type Operation struct {
 	Command     string `json:"command"`
 }
 
+type HealthStatus string
+
+const (
+	// HealthUnknown means nothing was actually measured. A tunnel with no probes
+	// configured is unknown, never healthy: claiming health without evidence is the
+	// most dangerous answer a VPN can give, because the operator stops looking.
+	HealthUnknown   HealthStatus = "unknown"
+	HealthHealthy   HealthStatus = "healthy"
+	HealthUnhealthy HealthStatus = "unhealthy"
+)
+
 type TunnelHealth struct {
-	TunnelID  string    `json:"tunnel_id"`
-	Healthy   bool      `json:"healthy"`
-	CheckedAt time.Time `json:"checked_at"`
-	Reason    string    `json:"reason,omitempty"`
+	TunnelID  string       `json:"tunnel_id"`
+	Status    HealthStatus `json:"status"`
+	CheckedAt time.Time    `json:"checked_at"`
+	Reason    string       `json:"reason,omitempty"`
 }

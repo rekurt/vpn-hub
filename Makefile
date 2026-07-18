@@ -61,11 +61,19 @@ stand-down:
 	$(TF) destroy -auto-approve
 
 ## deploy-lab: install binaries and the systemd unit onto the lab host
+# Binaries land in a staging directory first: scp cannot write over a running
+# executable (ETXTBSY), whereas `install` replaces the directory entry and leaves the
+# running process on the old inode until it restarts.
 deploy-lab: build-linux
 	@test -n "$(LAB_IP)" || { echo "no lab host; run make stand-up"; exit 1; }
-	scp bin/linux/hubctl bin/linux/vpn-hub-agent root@$(LAB_IP):/usr/local/bin/
+	$(SSH) 'mkdir -p /run/vpn-hub-stage'
+	scp bin/linux/hubctl bin/linux/vpn-hub-agent root@$(LAB_IP):/run/vpn-hub-stage/
 	scp deploy/systemd/vpn-hub-agent.service root@$(LAB_IP):/etc/systemd/system/
-	$(SSH) 'systemctl daemon-reload && systemctl enable --now vpn-hub-agent'
+	$(SSH) 'install -m 0755 /run/vpn-hub-stage/hubctl /run/vpn-hub-stage/vpn-hub-agent /usr/local/bin/ \
+		&& rm -rf /run/vpn-hub-stage \
+		&& systemctl daemon-reload \
+		&& systemctl enable --now vpn-hub-agent \
+		&& systemctl restart vpn-hub-agent'
 
 ## ssh: open a shell on the lab host
 ssh:

@@ -38,11 +38,14 @@ func (s Service) LoadAndValidate(ctx context.Context) (domain.Config, error) {
 	return cfg, nil
 }
 
+// BuildDesiredState compiles a configuration into the immutable revision the agent
+// converges on.
+//
+// The configuration must already have passed Validate; LoadAndValidate does that on
+// every path that reaches here. Re-validating would also reject a configuration that
+// RemoveRevoked has legitimately pruned, since egress ACLs keep naming devices that
+// are deliberately gone.
 func (s Service) BuildDesiredState(cfg domain.Config) (domain.DesiredState, error) {
-	if err := Validate(cfg); err != nil {
-		return domain.DesiredState{}, err
-	}
-
 	devices := append([]domain.Device(nil), cfg.Devices...)
 	tunnels := append([]domain.Tunnel(nil), cfg.Tunnels...)
 	sort.Slice(devices, func(i, j int) bool { return devices[i].ID < devices[j].ID })

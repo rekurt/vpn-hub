@@ -1,12 +1,10 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -84,7 +82,16 @@ func newDeployCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			state, err := service.BuildDesiredState(cfg)
+			// Applied after validation and before compiling the revision, so a revoked
+			// device never reaches the state the agent converges on.
+			revoked, err := runtimeadapter.RevocationStore{StateDir: stateDir}.Load(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if len(revoked) > 0 {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "excluding %d revoked device(s): %s\n", len(revoked), strings.Join(revoked, ", "))
+			}
+			state, err := service.BuildDesiredState(application.RemoveRevoked(cfg, revoked))
 			if err != nil {
 				return err
 			}
@@ -116,7 +123,10 @@ func newStatusCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "revision=%s generated_at=%s tunnels=%d devices=%d\n", state.Revision, state.GeneratedAt.Format("2006-01-02T15:04:05Z"), len(state.Tunnels), len(state.Devices))
+			// This is the revision the hub was told to converge on, read back from
+			// disk. It is not a report of what the machine is currently doing;
+			// observing that arrives with the reconciler.
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "desired: revision=%s generated_at=%s tunnels=%d devices=%d\n", state.Revision, state.GeneratedAt.Format("2006-01-02T15:04:05Z"), len(state.Tunnels), len(state.Devices))
 			return err
 		},
 	}
@@ -141,11 +151,17 @@ func newTestCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !healthState.Healthy {
+			switch healthState.Status {
+			case domain.HealthHealthy:
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "healthy: tunnel=%s checked_at=%s\n",
+					tunnelID, healthState.CheckedAt.Format("2006-01-02T15:04:05Z"))
+				return err
+			case domain.HealthUnhealthy:
 				return fmt.Errorf("tunnel %s is unhealthy: %s", tunnelID, healthState.Reason)
+			default:
+				// Deliberately an error: a script must not read "could not tell" as "fine".
+				return fmt.Errorf("tunnel %s health is unknown: %s", tunnelID, healthState.Reason)
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "healthy: tunnel=%s checked_at=%s\n", tunnelID, healthState.CheckedAt.Format("2006-01-02T15:04:05Z"))
-			return err
 		},
 	}
 	command.AddCommand(tunnel)
@@ -229,33 +245,11 @@ func newDeviceCommand() *cobra.Command {
 		Short: "Persist a local device revocation consumed by the agent",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := os.MkdirAll(stateDir, 0o700); err != nil {
+			if err := (runtimeadapter.RevocationStore{StateDir: stateDir}).Add(cmd.Context(), args[0]); err != nil {
 				return err
 			}
-			path := filepath.Join(stateDir, "revoked-devices.json")
-			revoked := make(map[string]struct{})
-			if data, err := os.ReadFile(path); err == nil {
-				var values []string
-				if err := json.Unmarshal(data, &values); err != nil {
-					return fmt.Errorf("read revocations: %w", err)
-				}
-				for _, value := range values {
-					revoked[value] = struct{}{}
-				}
-			} else if !os.IsNotExist(err) {
-				return err
-			}
-			revoked[args[0]] = struct{}{}
-			values := make([]string, 0, len(revoked))
-			for value := range revoked {
-				values = append(values, value)
-			}
-			sort.Strings(values)
-			data, _ := json.MarshalIndent(values, "", "  ")
-			if err := os.WriteFile(path, data, 0o600); err != nil {
-				return err
-			}
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "revoked device %s\n", args[0])
+			_, err := fmt.Fprintf(cmd.OutOrStdout(),
+				"revoked device %s; run `hubctl deploy` to drop it from the active revision\n", args[0])
 			return err
 		},
 	}

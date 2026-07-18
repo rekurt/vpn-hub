@@ -2,37 +2,57 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"vpn-hub/internal/domain"
 )
 
-func TestFileReconcilerFiltersRevokedDevices(t *testing.T) {
+func TestRevocationStoreRoundTrip(t *testing.T) {
 	t.Parallel()
-	directory := t.TempDir()
-	data, err := json.Marshal([]string{"phone"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(directory, revokedStateFile), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	state := fixtureState()
-	state.Devices = append(state.Devices, domain.DeployedDevice{ID: "phone"})
+	store := RevocationStore{StateDir: t.TempDir()}
+	ctx := context.Background()
 
-	if err := (FileReconciler{StateDir: directory}).Apply(context.Background(), state); err != nil {
+	ids, err := store.Load(ctx)
+	if err != nil {
+		t.Fatalf("loading before anything is revoked must succeed: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("expected no revocations, got %v", ids)
+	}
+
+	if err := store.Add(ctx, "phone"); err != nil {
 		t.Fatal(err)
 	}
-	active, err := readStateFile(filepath.Join(directory, activeStateFile))
+	// Revoking twice must not duplicate the entry.
+	if err := store.Add(ctx, "phone"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Add(ctx, "macbook"); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err = store.Load(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(active.Devices) != 1 || active.Devices[0].ID != "macbook" {
-		t.Fatalf("active devices = %#v", active.Devices)
+	if len(ids) != 2 || ids[0] != "macbook" || ids[1] != "phone" {
+		t.Fatalf("revocations = %v, want a sorted pair", ids)
+	}
+}
+
+// The reconciler used to describe namespaces and systemd units it never created.
+func TestPlanOnlyClaimsWhatItDoes(t *testing.T) {
+	t.Parallel()
+	operations, err := (FileReconciler{StateDir: t.TempDir()}).Plan(context.Background(), fixtureState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range operations {
+		switch operation.Kind {
+		case "namespace", "veth", "systemd", "nftables", "dns":
+			t.Fatalf("this reconciler does not perform %q operations", operation.Kind)
+		}
 	}
 }
 
@@ -60,14 +80,4 @@ func fixtureState() domain.DesiredState {
 		Devices: []domain.DeployedDevice{{ID: "macbook"}},
 		Tunnels: []domain.Tunnel{{ID: "xray", Type: domain.TunnelXray, Role: domain.RoleEgress}},
 	}
-}
-
-func readStateFile(path string) (domain.DesiredState, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return domain.DesiredState{}, err
-	}
-	var state domain.DesiredState
-	err = json.Unmarshal(data, &state)
-	return state, err
 }

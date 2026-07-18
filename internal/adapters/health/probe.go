@@ -16,49 +16,71 @@ type ProbeChecker struct {
 	Timeout time.Duration
 }
 
+// Check runs whichever probes the tunnel configures.
+//
+// All probes run even after one fails, and their reasons accumulate: knowing that
+// both DNS and HTTPS are broken says something different from knowing only about the
+// last one checked.
 func (p ProbeChecker) Check(ctx context.Context, tunnel domain.Tunnel) (domain.TunnelHealth, error) {
-	checkedAt := time.Now().UTC()
 	timeout := p.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Second
 	}
-	health := domain.TunnelHealth{TunnelID: tunnel.ID, CheckedAt: checkedAt, Healthy: true}
+	health := domain.TunnelHealth{
+		TunnelID:  tunnel.ID,
+		CheckedAt: time.Now().UTC(),
+		Status:    domain.HealthUnknown,
+	}
+
+	var reasons []string
+	probes := 0
 
 	if tunnel.Health.TCPAddress != "" {
+		probes++
 		dialer := net.Dialer{Timeout: timeout}
 		conn, err := dialer.DialContext(ctx, "tcp", tunnel.Health.TCPAddress)
 		if err != nil {
-			health.Healthy = false
-			health.Reason = "tcp probe: " + err.Error()
-			return health, nil
+			reasons = append(reasons, "tcp probe: "+err.Error())
+		} else {
+			_ = conn.Close()
 		}
-		_ = conn.Close()
 	}
+
 	if tunnel.Health.HTTPSURL != "" {
+		probes++
 		client := &http.Client{Timeout: timeout}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, tunnel.Health.HTTPSURL, nil)
 		if err != nil {
 			return health, fmt.Errorf("build HTTPS probe: %w", err)
 		}
 		response, err := client.Do(request)
-		if err != nil {
-			health.Healthy = false
-			health.Reason = "https probe: " + err.Error()
-			return health, nil
-		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-		_ = response.Body.Close()
-		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusBadRequest {
-			health.Healthy = false
-			health.Reason = "https probe returned " + response.Status
+		switch {
+		case err != nil:
+			reasons = append(reasons, "https probe: "+err.Error())
+		default:
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+			_ = response.Body.Close()
+			if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusBadRequest {
+				reasons = append(reasons, "https probe returned "+response.Status)
+			}
 		}
 	}
+
 	if tunnel.Health.DNSName != "" {
-		resolver := net.DefaultResolver
-		if _, err := resolver.LookupHost(ctx, tunnel.Health.DNSName); err != nil {
-			health.Healthy = false
-			health.Reason = "dns probe: " + err.Error()
+		probes++
+		if _, err := net.DefaultResolver.LookupHost(ctx, tunnel.Health.DNSName); err != nil {
+			reasons = append(reasons, "dns probe: "+err.Error())
 		}
+	}
+
+	switch {
+	case probes == 0:
+		health.Reason = "no probes are configured, so nothing was measured"
+	case len(reasons) > 0:
+		health.Status = domain.HealthUnhealthy
+		health.Reason = strings.Join(reasons, "; ")
+	default:
+		health.Status = domain.HealthHealthy
 	}
 	return health, nil
 }
