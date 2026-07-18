@@ -30,6 +30,23 @@ type Firewall interface {
 	Apply(context.Context, domain.FirewallPlan) error
 }
 
+// Ingress manages the interface clients connect to.
+type Ingress interface {
+	Apply(context.Context, domain.IngressSpec) error
+}
+
+// HostNetwork answers questions about the machine the hub runs on, which cannot come
+// from configuration.
+type HostNetwork interface {
+	UplinkInterface(context.Context) (string, error)
+}
+
+// ServerKeyStore holds the hub's own private key. It stays on the host and is never
+// carried in a revision.
+type ServerKeyStore interface {
+	PrivateKey(context.Context) (string, error)
+}
+
 type Reconciler interface {
 	Plan(context.Context, domain.DesiredState) ([]domain.Operation, error)
 	Apply(context.Context, domain.DesiredState) error

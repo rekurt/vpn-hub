@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"vpn-hub/internal/domain"
 )
 
 // fakeHost records the commands an adapter issues and replays canned output.
@@ -38,14 +40,14 @@ func newIngress(t *testing.T, host *fakeHost) Ingress {
 	return Ingress{Run: host.run, SecretsDir: t.TempDir()}
 }
 
-func spec() IngressSpec {
-	return IngressSpec{
+func spec() domain.IngressSpec {
+	return domain.IngressSpec{
 		Interface:  "awg0",
 		Address:    "10.80.0.1/24",
 		ListenPort: 51820,
 		PrivateKey: "cOFA+ItsMPRFpKt4kPsUlqUlkxHnFvJdWuBK5rXqL0Y=",
 		Parameters: map[string]string{"Jc": "4", "Jmin": "64"},
-		Peers: []PeerSpec{
+		Peers: []domain.PeerSpec{
 			{PublicKey: "aYo1x9b951yd4mtMeKkW/vyOJvU08j2UU96u/Ve9QWA=", AllowedIPs: []string{"10.80.0.2/32"}},
 		},
 	}
@@ -155,7 +157,7 @@ func TestParametersAreOrderedAndLowercased(t *testing.T) {
 func TestApplyRejectsAnIncompleteSpec(t *testing.T) {
 	t.Parallel()
 	host := &fakeHost{}
-	if err := newIngress(t, host).Apply(context.Background(), IngressSpec{Interface: "awg0"}); err == nil {
+	if err := newIngress(t, host).Apply(context.Background(), domain.IngressSpec{Interface: "awg0"}); err == nil {
 		t.Fatal("expected an error for a spec with no address or key")
 	}
 }

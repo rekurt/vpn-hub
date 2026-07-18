@@ -10,26 +10,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"vpn-hub/internal/domain"
 )
-
-// PeerSpec is one client profile as the ingress interface should hold it.
-type PeerSpec struct {
-	PublicKey  string
-	AllowedIPs []string
-}
-
-// IngressSpec describes the AmneziaWG interface the hub presents to clients.
-type IngressSpec struct {
-	Interface  string
-	Address    string
-	ListenPort uint16
-	// PrivateKey is written to a file under SecretsDir rather than passed as an
-	// argument, because argv is world-readable through /proc.
-	PrivateKey string
-	// Parameters are the obfuscation knobs, already validated and canonicalised.
-	Parameters map[string]string
-	Peers      []PeerSpec
-}
 
 // runner executes a host command, optionally feeding it stdin. Tests substitute a
 // fake so the adapter's command sequence can be asserted without root or Linux.
@@ -80,7 +63,7 @@ func (i Ingress) Observe(ctx context.Context, name string) (IngressState, error)
 
 // Apply converges the interface towards spec. Every step is idempotent, so a repeated
 // reconcile is a no-op rather than a rebuild that would drop client sessions.
-func (i Ingress) Apply(ctx context.Context, spec IngressSpec) error {
+func (i Ingress) Apply(ctx context.Context, spec domain.IngressSpec) error {
 	if spec.Interface == "" || spec.Address == "" || spec.PrivateKey == "" {
 		return fmt.Errorf("ingress interface, address and private key are required")
 	}
@@ -122,7 +105,7 @@ func (i Ingress) Apply(ctx context.Context, spec IngressSpec) error {
 
 // syncPeers adds or updates the configured peers and removes the rest, so a revoked
 // device stops being able to complete a handshake.
-func (i Ingress) syncPeers(ctx context.Context, spec IngressSpec, observed IngressState) error {
+func (i Ingress) syncPeers(ctx context.Context, spec domain.IngressSpec, observed IngressState) error {
 	wanted := make(map[string]struct{}, len(spec.Peers))
 	for _, peer := range spec.Peers {
 		wanted[peer.PublicKey] = struct{}{}
@@ -144,7 +127,7 @@ func (i Ingress) syncPeers(ctx context.Context, spec IngressSpec, observed Ingre
 	return nil
 }
 
-func (i Ingress) writePrivateKey(spec IngressSpec) (string, error) {
+func (i Ingress) writePrivateKey(spec domain.IngressSpec) (string, error) {
 	directory := i.SecretsDir
 	if directory == "" {
 		directory = "/run/vpn-hub"

@@ -7,7 +7,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"vpn-hub/internal/adapters/linux"
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
+	"vpn-hub/internal/application"
+	"vpn-hub/internal/domain"
+	"vpn-hub/internal/ports"
 )
 
 func NewAgentCommand(out, errOut io.Writer) *cobra.Command {
@@ -20,31 +24,58 @@ func NewAgentCommand(out, errOut io.Writer) *cobra.Command {
 	return root
 }
 
+// agentFlags are shared by every command that touches the host.
+type agentFlags struct {
+	stateDir   string
+	keyPath    string
+	runtimeDir string
+}
+
+func (f *agentFlags) bind(command *cobra.Command) {
+	command.Flags().StringVar(&f.stateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
+	command.Flags().StringVar(&f.keyPath, "server-key", "/etc/vpn-hub/server.key", "path to the hub private key")
+	command.Flags().StringVar(&f.runtimeDir, "runtime-dir", "/run/vpn-hub", "tmpfs directory for material that must not reach disk")
+}
+
+// reconciler wires the host-facing adapters. Everything it drives only formats or
+// executes; the decisions live in the application layer.
+func (f *agentFlags) reconciler() ports.Reconciler {
+	return application.HostReconciler{
+		Firewall:  linux.NFTables{},
+		Ingress:   linux.Ingress{SecretsDir: f.runtimeDir},
+		Host:      linux.NetConf{},
+		ServerKey: linux.ServerKeyFile{Path: f.keyPath},
+	}
+}
+
 func newReconcileCommand() *cobra.Command {
-	var stateDir string
+	flags := &agentFlags{}
 	var dryRun bool
 	command := &cobra.Command{
 		Use:   "reconcile",
-		Short: "Reconcile the current desired state",
+		Short: "Reconcile the current desired state once",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return reconcile(cmd, stateDir, dryRun)
+			return (&loop{flags: flags}).reconcile(cmd, dryRun)
 		},
 	}
-	command.Flags().StringVar(&stateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
-	command.Flags().BoolVar(&dryRun, "dry-run", true, "print operations without persisting state")
+	flags.bind(command)
+	command.Flags().BoolVar(&dryRun, "dry-run", true, "print operations without touching the host")
 	return command
 }
 
 func newServeCommand() *cobra.Command {
-	var stateDir string
+	flags := &agentFlags{}
 	var interval time.Duration
 	var once bool
 	command := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the desired-state reconciliation loop",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			run := &loop{flags: flags}
 			if once {
-				return reconcile(cmd, stateDir, false)
+				return run.reconcile(cmd, false)
 			}
 			if interval <= 0 {
 				return fmt.Errorf("--interval must be greater than zero, got %s", interval)
@@ -52,7 +83,7 @@ func newServeCommand() *cobra.Command {
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
 			for {
-				if err := reconcile(cmd, stateDir, false); err != nil {
+				if err := run.reconcile(cmd, false); err != nil {
 					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), err)
 				}
 				select {
@@ -63,44 +94,74 @@ func newServeCommand() *cobra.Command {
 			}
 		},
 	}
-	command.Flags().StringVar(&stateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
+	flags.bind(command)
 	command.Flags().DurationVar(&interval, "interval", time.Minute, "reconciliation interval")
 	command.Flags().BoolVar(&once, "once", false, "reconcile once and exit")
 	return command
 }
 
 func newAgentStatusCommand() *cobra.Command {
-	var stateDir string
+	flags := &agentFlags{}
 	command := &cobra.Command{
 		Use:   "status",
-		Short: "Show agent desired state",
+		Short: "Show the revision the agent is converging on",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			state, err := runtimeadapter.FileRevisionStore{StateDir: stateDir}.Load(cmd.Context())
+			state, err := runtimeadapter.FileRevisionStore{StateDir: flags.stateDir}.Load(cmd.Context())
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "revision=%s tunnels=%d devices=%d\n", state.Revision, len(state.Tunnels), len(state.Devices))
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "desired: revision=%s tunnels=%d devices=%d\n",
+				state.Revision, len(state.Tunnels), len(state.Devices))
 			return err
 		},
 	}
-	command.Flags().StringVar(&stateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
+	flags.bind(command)
 	return command
 }
 
-func reconcile(cmd *cobra.Command, stateDir string, dryRun bool) error {
-	store := runtimeadapter.FileRevisionStore{StateDir: stateDir}
-	state, err := store.Load(cmd.Context())
+// loop carries what has to survive between ticks. It exists so the reconcile
+// function has no package-level state: the suppression below is per-run, and a second
+// agent in the same process would otherwise share it.
+type loop struct {
+	flags *agentFlags
+	// applied is the last revision that converged. Reporting only on change keeps the
+	// journal readable; an unconditional line per tick buries anything that matters.
+	applied string
+}
+
+func (l *loop) reconcile(cmd *cobra.Command, dryRun bool) error {
+	ctx := cmd.Context()
+	state, err := runtimeadapter.FileRevisionStore{StateDir: l.flags.stateDir}.Load(ctx)
 	if err != nil {
 		return err
 	}
-	reconciler := runtimeadapter.FileReconciler{StateDir: stateDir}
-	operations, err := reconciler.Plan(cmd.Context(), state)
+
+	reconciler := l.flags.reconciler()
+	operations, err := reconciler.Plan(ctx, state)
 	if err != nil {
 		return err
 	}
-	printOperations(cmd, operations)
 	if dryRun {
+		printOperations(cmd, operations)
 		return nil
 	}
-	return reconciler.Apply(cmd.Context(), state)
+	if err := reconciler.Apply(ctx, state); err != nil {
+		// Forget the revision so the next success reports again rather than staying
+		// silent after an outage.
+		l.applied = ""
+		return err
+	}
+	if l.applied != state.Revision {
+		printOperations(cmd, operations)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "applied revision %s\n", state.Revision)
+		l.applied = state.Revision
+	}
+	return nil
+}
+
+func printOperations(cmd *cobra.Command, operations []domain.Operation) {
+	for _, operation := range operations {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-10s %-22s %s\n", operation.Kind, operation.Resource, operation.Description)
+	}
 }

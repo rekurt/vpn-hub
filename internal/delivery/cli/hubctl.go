@@ -34,7 +34,8 @@ func NewHubctlCommand(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(newTestCommand(&configPath))
 	root.AddCommand(newProfileCommand(&configPath))
 	root.AddCommand(newSubscriptionCommand(&configPath))
-	root.AddCommand(newDeviceCommand())
+	root.AddCommand(newDeviceCommand(&configPath))
+	root.AddCommand(newKeygenCommand())
 	return root
 }
 
@@ -237,9 +238,10 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 	return command
 }
 
-func newDeviceCommand() *cobra.Command {
+func newDeviceCommand(configPath *string) *cobra.Command {
 	var stateDir string
 	command := newParentCommand("device", "Manage device admission")
+	command.AddCommand(newDeviceAddCommand(configPath))
 	revoke := &cobra.Command{
 		Use:   "revoke <id>",
 		Short: "Persist a local device revocation consumed by the agent",
@@ -267,11 +269,5 @@ func newService(configPath, stateDir string) application.Service {
 		HealthChecker:       health.ProbeChecker{},
 		SubscriptionFetcher: health.HTTPSSubscriptionFetcher{},
 		ProfileRenderer:     runtimeadapter.AmneziaProfileRenderer{},
-	}
-}
-
-func printOperations(cmd *cobra.Command, operations []domain.Operation) {
-	for _, operation := range operations {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s %-28s %s\n", strings.ToUpper(operation.Kind), operation.Resource, operation.Description)
 	}
 }
