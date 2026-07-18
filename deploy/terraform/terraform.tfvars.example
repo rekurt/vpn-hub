@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars (gitignored) and adjust. Every value has a default, so the
+# file is optional.
+
+# Keep a second workstation's already-registered key on the host. MD5 fingerprints come
+# from `doctl compute ssh-key list`.
+# extra_ssh_key_fingerprints = ["65:9a:58:5e:5c:ba:0f:e2:bc:b7:8f:fe:9a:4a:b6:34"]
+
+# Narrow SSH exposure once the host stops being rebuilt constantly.
+# ssh_allowed_cidrs = ["203.0.113.7/32"]
+
+# region = "fra1"
+# size   = "s-1vcpu-1gb"

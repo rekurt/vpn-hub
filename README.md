@@ -1,6 +1,8 @@
 # VPN Hub
 
-Личный multi-VPN hub для Debian 12. Cobra CLI, Viper-конфигурация, гексагональная архитектура: доменная логика не зависит от Cobra, Viper, systemd, netlink и nftables.
+Личный multi-VPN hub для Ubuntu 24.04 LTS. Cobra CLI, Viper-конфигурация, гексагональная архитектура: доменная логика не зависит от Cobra, Viper, systemd, netlink и nftables.
+
+Изначально проект писался под Debian 12, но DigitalOcean его больше не предлагает, а на Debian 13 модуль AmneziaWG не собирается — пакеты Amnezia PPA собраны под Ubuntu. Поэтому база — Ubuntu 24.04 LTS.
 
 ## Состояние проекта
 
@@ -54,17 +56,25 @@ go run ./cmd/hubctl profile render \
 
 ## Стенд
 
-Разработка ведётся против одноразового дроплета DigitalOcean (≈$6/мес, удаляется в одну команду).
+Хост описан в `deploy/terraform/` (OpenTofu + cloud-init) и поднимается одноразово на DigitalOcean — ≈$6/мес, удаляется одной командой.
 
 ```sh
-doctl auth init          # интерактивно, один раз
-make stand-up            # создаёт Debian 12 s-1vcpu-1gb
+brew install opentofu doctl
+doctl auth init          # интерактивно, один раз; токен читается из его конфига
+make stand-init          # tofu init, один раз
+make stand-up            # создаёт хост и ждёт завершения cloud-init
 make deploy-lab          # собирает под linux/amd64 и ставит юнит
 make logs
-make stand-down          # удаляет дроплет
+make stand-down          # удаляет хост
 ```
 
-Регион и размер переопределяются: `make stand-up REGION=ams3 SIZE=s-1vcpu-2gb`.
+Terraform создаёт дроплет Ubuntu 24.04 без IPv6, SSH-ключ и cloud firewall (открыты только 22/tcp и 51820/udp). cloud-init готовит ОС: `ip_forward`, выключение IPv6, `/run/netns`, SSH без паролей, AmneziaWG через DKMS из Amnezia PPA. Отдельно отключаются `ufw` и `nftables.service` — ruleset принадлежит агенту, и они бы с ним конфликтовали.
+
+Параметры переопределяются через `deploy/terraform/terraform.tfvars` (см. `terraform.tfvars.example`) — регион, размер, дополнительные SSH-ключи, сужение доступа к SSH.
+
+cloud-init выполняется только при первой загрузке, поэтому правка `cloud-init.yaml` пересоздаёт хост — `make stand-plan` покажет это до применения.
+
+State OpenTofu лежит локально и не коммитится: он содержит токен. Потеря `terraform.tfstate` означает, что дроплет придётся удалять руками через `doctl`.
 
 ## Разработка
 

@@ -17,6 +17,7 @@ RuntimeDirectory=vpn-hub
 StateDirectory=vpn-hub
 ConfigurationDirectory=vpn-hub
 
+UMask=0077
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
@@ -33,8 +34,8 @@ SystemCallFilter=@system-service
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
 
-# `ip netns` bind-mounts into /run/netns, which ProtectSystem=strict would otherwise make
-# read-only. deploy/tmpfiles/vpn-hub.conf creates the directory at boot.
+# `ip netns` bind-mounts into /run/netns, which ProtectSystem=strict would otherwise
+# make read-only. The tmpfiles rule in deploy/terraform/cloud-init.yaml creates it.
 ReadWritePaths=/run/netns
 
 # ProtectKernelTunables is deliberately NOT set: disabling IPv6 requires writing

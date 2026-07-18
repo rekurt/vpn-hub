@@ -1,0 +1,99 @@
+#cloud-config
+# First-boot provisioning for the vpn-hub host. This prepares the operating system
+# only; the hubctl/vpn-hub-agent binaries and their systemd unit are installed
+# separately by `make deploy-lab`, because they change on every build.
+
+hostname: vpn-hub
+package_update: true
+package_upgrade: true
+
+packages:
+  - nftables
+  - wireguard-tools
+  - iproute2
+  - dkms
+  - software-properties-common
+  - python3-launchpadlib
+  - gnupg2
+  - ca-certificates
+  - curl
+  - jq
+  - qrencode
+
+write_files:
+  - path: /etc/sysctl.d/99-vpn-hub.conf
+    permissions: '0644'
+    content: |
+      # The hub forwards between the client subnet and every egress namespace.
+      net.ipv4.ip_forward = 1
+
+      # IPv6 is blocked by policy. There is no IPv6 egress path, so leaving it enabled
+      # would let traffic leave the host directly, bypassing every tunnel.
+      net.ipv6.conf.all.disable_ipv6 = 1
+      net.ipv6.conf.default.disable_ipv6 = 1
+      net.ipv6.conf.lo.disable_ipv6 = 1
+
+      # Loose mode: with policy routing, return traffic legitimately arrives on an
+      # interface other than the one strict reverse-path filtering would expect.
+      net.ipv4.conf.all.rp_filter = 2
+      net.ipv4.conf.default.rp_filter = 2
+
+  - path: /usr/lib/tmpfiles.d/vpn-hub.conf
+    permissions: '0644'
+    content: |
+      # `ip netns add` bind-mounts namespace handles here, and the agent runs with
+      # ProtectSystem=strict, so the directory must exist before the unit starts.
+      d /run/netns 0755 root root -
+
+  - path: /etc/ssh/sshd_config.d/99-vpn-hub.conf
+    permissions: '0600'
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+
+  - path: /usr/local/sbin/vpn-hub-bootstrap
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      # Idempotent: safe to re-run by hand when a step needs to be retried.
+      set -euo pipefail
+
+      # unattended-upgrades holds the dpkg lock on a freshly booted image.
+      apt_get() { DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 "$@"; }
+
+      echo "==> kernel headers for $(uname -r)"
+      apt_get install -y "linux-headers-$(uname -r)"
+
+      echo "==> AmneziaWG from the Amnezia PPA"
+      add-apt-repository -y ppa:amnezia/ppa
+      apt_get update
+      # `amneziawg` is a metapackage; fall back to the individual packages if the
+      # archive layout changes.
+      apt_get install -y amneziawg amneziawg-tools \
+        || apt_get install -y amneziawg-dkms amneziawg-tools
+
+      echo "==> load the module and make it persistent"
+      modprobe amneziawg
+      echo amneziawg > /etc/modules-load.d/amneziawg.conf
+
+      echo "==> hand the firewall to the agent"
+      # ufw and the distro nftables unit both install their own rulesets and would
+      # fight the agent, which owns the `inet vpn_hub` table and reinstalls it on
+      # every start. Persistence across reboots is the agent's job, not theirs.
+      systemctl disable --now ufw          2>/dev/null || true
+      systemctl disable --now nftables     2>/dev/null || true
+
+      echo "==> directories owned by the hub"
+      install -d -m 0700 /var/lib/vpn-hub
+      install -d -m 0755 /etc/vpn-hub
+
+      echo "==> bootstrap complete"
+
+runcmd:
+  - [ sysctl, --system ]
+  - [ systemd-tmpfiles, --create ]
+  - [ /usr/local/sbin/vpn-hub-bootstrap ]
+  - [ systemctl, restart, ssh ]
+
+final_message: "vpn-hub host provisioned after $UPTIME seconds"

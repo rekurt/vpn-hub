@@ -3,3 +3,12 @@
 /bin
 # The real hub configuration; configs/example.yaml is the template.
 /configs/hub.yaml
+
+# OpenTofu state holds the API token and resource IDs. The lock file is committed.
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate
+deploy/terraform/*.tfstate.*
+deploy/terraform/*.tfvars
+
+# Guard against tofu being run from the wrong directory.
+/terraform.tfstate*

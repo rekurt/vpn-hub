@@ -1,16 +1,14 @@
 SHELL := /bin/bash
 
-# Lab droplet parameters. Override on the command line, e.g. `make stand-up REGION=ams3`.
-DROPLET ?= vpn-hub-lab
-REGION  ?= fra1
-SIZE    ?= s-1vcpu-1gb
-IMAGE   ?= debian-12-x64
-SSH_PUB ?= $(HOME)/.ssh/id_ed25519.pub
+TF_DIR := deploy/terraform
+TF     := tofu -chdir=$(TF_DIR)
 
-# DigitalOcean identifies SSH keys by their MD5 fingerprint.
-SSH_FP = $(shell ssh-keygen -E md5 -lf $(SSH_PUB) | awk '{print $$2}' | sed 's/^MD5://')
-LAB_IP = $(shell doctl compute droplet get $(DROPLET) --format PublicIPv4 --no-header 2>/dev/null)
+LAB_IP = $(shell $(TF) output -raw ipv4 2>/dev/null)
 SSH    = ssh -o StrictHostKeyChecking=accept-new root@$(LAB_IP)
+
+# Evaluated only for the targets that talk to DigitalOcean.
+STAND_TARGETS := stand-init stand-plan stand-up stand-down stand-ip
+$(STAND_TARGETS): export TF_VAR_do_token = $(shell $(TF_DIR)/do-token.sh)
 
 .DEFAULT_GOAL := help
 
@@ -18,9 +16,10 @@ SSH    = ssh -o StrictHostKeyChecking=accept-new root@$(LAB_IP)
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /'
 
-## fmt: format sources
+## fmt: format Go sources and Terraform files
 fmt:
 	gofmt -w .
+	$(TF) fmt
 
 ## lint: report formatting and vet problems
 lint:
@@ -39,39 +38,41 @@ build:
 build-linux:
 	GOOS=linux GOARCH=amd64 go build -trimpath -o bin/linux/ ./cmd/...
 
-## stand-key: register $(SSH_PUB) with DigitalOcean if it is not there yet
-stand-key:
-	@doctl compute ssh-key list --format FingerPrint --no-header | grep -qx '$(SSH_FP)' || \
-		doctl compute ssh-key import $(DROPLET) --public-key-file $(SSH_PUB)
+## stand-init: download the DigitalOcean provider
+stand-init:
+	$(TF) init
 
-## stand-up: create the lab droplet (this costs money)
-stand-up: stand-key
-	doctl compute droplet create $(DROPLET) \
-		--image $(IMAGE) --size $(SIZE) --region $(REGION) \
-		--ssh-keys $(SSH_FP) --wait --format ID,Name,PublicIPv4
+## stand-plan: show what would change on the lab host
+stand-plan:
+	$(TF) plan
 
-## stand-ip: print the lab droplet public address
+## stand-up: create or update the lab host (this costs money)
+stand-up:
+	$(TF) apply -auto-approve
+	@echo "waiting for cloud-init to finish (AmneziaWG builds via DKMS, this takes a few minutes)"
+	@until $(SSH) 'cloud-init status --wait' 2>/dev/null; do sleep 10; done
+
+## stand-ip: print the lab host address
 stand-ip:
-	@echo $(LAB_IP)
+	@$(TF) output -raw ipv4
 
-## stand-down: destroy the lab droplet
+## stand-down: destroy the lab host
 stand-down:
-	doctl compute droplet delete $(DROPLET) --force
+	$(TF) destroy -auto-approve
 
-## deploy-lab: install binaries, unit and tmpfiles rule onto the lab droplet
+## deploy-lab: install binaries and the systemd unit onto the lab host
 deploy-lab: build-linux
-	@test -n "$(LAB_IP)" || { echo "no droplet named $(DROPLET); run make stand-up"; exit 1; }
+	@test -n "$(LAB_IP)" || { echo "no lab host; run make stand-up"; exit 1; }
 	scp bin/linux/hubctl bin/linux/vpn-hub-agent root@$(LAB_IP):/usr/local/bin/
 	scp deploy/systemd/vpn-hub-agent.service root@$(LAB_IP):/etc/systemd/system/
-	scp deploy/tmpfiles/vpn-hub.conf root@$(LAB_IP):/usr/lib/tmpfiles.d/
-	$(SSH) 'systemd-tmpfiles --create && systemctl daemon-reload && systemctl enable --now vpn-hub-agent'
+	$(SSH) 'systemctl daemon-reload && systemctl enable --now vpn-hub-agent'
 
-## ssh: open a shell on the lab droplet
+## ssh: open a shell on the lab host
 ssh:
 	$(SSH)
 
-## logs: follow the agent journal on the lab droplet
+## logs: follow the agent journal on the lab host
 logs:
 	$(SSH) 'journalctl -u vpn-hub-agent -f'
 
-.PHONY: help fmt lint test build build-linux stand-key stand-up stand-ip stand-down deploy-lab ssh logs
+.PHONY: help fmt lint test build build-linux $(STAND_TARGETS) deploy-lab ssh logs
