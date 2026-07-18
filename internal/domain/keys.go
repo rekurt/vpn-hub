@@ -7,8 +7,25 @@ import (
 	"fmt"
 )
 
+// KeyLength is the size of an X25519 key in bytes, before base64 encoding.
+const KeyLength = 32
+
+// ValidatePublicKey reports whether value is a base64-encoded X25519 public key.
+// Public keys arrive from configuration and are never derived locally, so nothing
+// else checks their shape.
+func ValidatePublicKey(value string) error {
+	raw, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return fmt.Errorf("key %q is not valid base64", value)
+	}
+	if len(raw) != KeyLength {
+		return fmt.Errorf("key %q decodes to %d bytes, want %d", value, len(raw), KeyLength)
+	}
+	return nil
+}
+
 func GenerateX25519KeyPair() (privateKey, publicKey string, err error) {
-	private := make([]byte, 32)
+	private := make([]byte, KeyLength)
 	if _, err = rand.Read(private); err != nil {
 		return "", "", fmt.Errorf("read randomness: %w", err)
 	}

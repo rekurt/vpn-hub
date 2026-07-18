@@ -95,10 +95,14 @@ func (profileRendererStub) Render(_ domain.Hub, _ domain.DeviceProfile) (string,
 	return "rendered", nil
 }
 
+// testServerPublicKey is a real X25519 public key: validation now rejects
+// placeholder strings, which is the point of it existing.
+const testServerPublicKey = "TE5crMJPBmCr2bF/uSbHqAlTAHKQwLKMs0RQxfQ0LU4="
+
 func validConfig(privateKey string) domain.Config {
 	return domain.Config{
 		Hub: domain.Hub{
-			Endpoint: "vpn.example.test:51820", ServerPublicKey: "server-public-key", ClientCIDR: "10.80.0.0/24", DNSAddress: "10.80.0.1",
+			Endpoint: "vpn.example.test:51820", ServerPublicKey: testServerPublicKey, ClientCIDR: "10.80.0.0/24", DNSAddress: "10.80.0.1",
 		},
 		Devices: []domain.Device{{
 			ID: "macbook",

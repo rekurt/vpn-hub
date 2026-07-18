@@ -1,0 +1,141 @@
+package application
+
+import (
+	"testing"
+
+	"vpn-hub/internal/domain"
+)
+
+func planState() domain.DesiredState {
+	return domain.DesiredState{
+		Hub: domain.Hub{
+			Endpoint:   "vpn.example.test:51820",
+			ClientCIDR: "10.80.0.0/24",
+			DNSAddress: "10.80.0.1",
+		},
+		Devices: []domain.DeployedDevice{{
+			ID: "macbook",
+			Profiles: []domain.DeployedProfile{
+				{ID: "macbook-direct", Egress: domain.EgressDirect, Address: "10.80.0.2/32"},
+				{ID: "macbook-corp", Egress: "corp-wg", Address: "10.80.0.3/32"},
+			},
+		}},
+		Tunnels: []domain.Tunnel{
+			{ID: "corp-wg", Role: domain.RolePrivateNetwork, Routes: []string{"10.20.0.0/16"}},
+			{ID: "vpn-out", Role: domain.RoleEgress, Routes: []string{"10.30.0.0/16"}},
+		},
+	}
+}
+
+func TestBuildFirewallPlan(t *testing.T) {
+	t.Parallel()
+	plan, err := BuildFirewallPlan(planState(), "eth0")
+	if err != nil {
+		t.Fatalf("BuildFirewallPlan: %v", err)
+	}
+
+	if plan.ListenPort != 51820 {
+		t.Errorf("ListenPort = %d, want 51820", plan.ListenPort)
+	}
+	if plan.ManagementPort == 0 {
+		t.Error("ManagementPort must be set or the ruleset locks the operator out")
+	}
+	if len(plan.Egresses) != 2 {
+		t.Fatalf("expected two egress groups, got %d", len(plan.Egresses))
+	}
+
+	// Only private-network routes are internal; an egress tunnel's routes are not.
+	if len(plan.InternalRoutes) != 1 || plan.InternalRoutes[0] != "10.20.0.0/16" {
+		t.Errorf("InternalRoutes = %v, want just the private-network route", plan.InternalRoutes)
+	}
+}
+
+// direct must keep its mark no matter how the tunnel list changes, because it is the
+// egress that has to keep working while others are edited.
+func TestDirectKeepsAStableMark(t *testing.T) {
+	t.Parallel()
+	before, err := BuildFirewallPlan(planState(), "eth0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state := planState()
+	state.Devices[0].Profiles = append(state.Devices[0].Profiles,
+		domain.DeployedProfile{ID: "macbook-aaa", Egress: "aaa-first", Address: "10.80.0.9/32"})
+	after, err := BuildFirewallPlan(state, "eth0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if markOf(t, before, domain.EgressDirect) != markOf(t, after, domain.EgressDirect) {
+		t.Fatal("adding an alphabetically earlier egress renumbered direct")
+	}
+}
+
+func TestBuildFirewallPlanIsDeterministic(t *testing.T) {
+	t.Parallel()
+	first, err := BuildFirewallPlan(planState(), "eth0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := BuildFirewallPlan(planState(), "eth0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mustJSON(t, first) != mustJSON(t, second) {
+		t.Fatal("two builds of the same state disagreed")
+	}
+}
+
+// nftables sets of type ipv4_addr reject a prefix length.
+func TestAddressesAreRenderedWithoutPrefixLength(t *testing.T) {
+	t.Parallel()
+	plan, err := BuildFirewallPlan(planState(), "eth0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range plan.Egresses {
+		for _, address := range group.Addresses {
+			if got := address; got != "10.80.0.2" && got != "10.80.0.3" {
+				t.Errorf("unexpected address %q", got)
+			}
+		}
+	}
+}
+
+func TestBuildFirewallPlanRejectsBadInput(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		mutate func(*domain.DesiredState)
+		uplink string
+	}{
+		"missing uplink":       {func(*domain.DesiredState) {}, ""},
+		"endpoint has no port": {func(s *domain.DesiredState) { s.Hub.Endpoint = "vpn.example.test" }, "eth0"},
+		"port out of range":    {func(s *domain.DesiredState) { s.Hub.Endpoint = "vpn.example.test:0" }, "eth0"},
+		"bad address": {func(s *domain.DesiredState) {
+			s.Devices[0].Profiles[0].Address = "not-an-address"
+		}, "eth0"},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			state := planState()
+			test.mutate(&state)
+			if _, err := BuildFirewallPlan(state, test.uplink); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}
+
+func markOf(t *testing.T, plan domain.FirewallPlan, id string) uint32 {
+	t.Helper()
+	for _, group := range plan.Egresses {
+		if group.ID == id {
+			return group.Mark
+		}
+	}
+	t.Fatalf("egress %q not found in plan", id)
+	return 0
+}

@@ -176,6 +176,9 @@ func Validate(cfg domain.Config) error {
 		if device.ID == "" {
 			return fmt.Errorf("device id is required")
 		}
+		if err := validateIdentifier("device id", device.ID); err != nil {
+			return err
+		}
 		if _, exists := deviceIDs[device.ID]; exists {
 			return fmt.Errorf("duplicate device %q", device.ID)
 		}
@@ -185,15 +188,23 @@ func Validate(cfg domain.Config) error {
 			if profile.ID == "" || profile.Egress == "" || profile.Address == "" {
 				return fmt.Errorf("device %q: profile id, egress and address are required", device.ID)
 			}
+			if err := validateIdentifier("profile id", profile.ID); err != nil {
+				return fmt.Errorf("device %q: %w", device.ID, err)
+			}
 			if _, exists := profileIDs[profile.ID]; exists {
 				return fmt.Errorf("device %q: duplicate profile %q", device.ID, profile.ID)
 			}
 			profileIDs[profile.ID] = struct{}{}
-			if err := validateProfileAddress(profile.Address); err != nil {
+			if err := validateProfileAddress(profile.Address, cfg.Hub.ClientCIDR); err != nil {
 				return fmt.Errorf("device %q profile %q: %w", device.ID, profile.ID, err)
 			}
 			if profile.ClientPrivateKey == "" && profile.ClientPublicKey == "" {
 				return fmt.Errorf("device %q profile %q: a client public or private key is required", device.ID, profile.ID)
+			}
+			if profile.ClientPublicKey != "" {
+				if err := domain.ValidatePublicKey(profile.ClientPublicKey); err != nil {
+					return fmt.Errorf("device %q profile %q: %w", device.ID, profile.ID, err)
+				}
 			}
 			if previous, exists := profileAddresses[profile.Address]; exists {
 				return fmt.Errorf("profile address %q is shared by %s and %s", profile.Address, previous, device.ID+"/"+profile.ID)
@@ -207,6 +218,12 @@ func Validate(cfg domain.Config) error {
 	for _, tunnel := range cfg.Tunnels {
 		if tunnel.ID == "" {
 			return fmt.Errorf("tunnel id is required")
+		}
+		if err := validateIdentifier("tunnel id", tunnel.ID); err != nil {
+			return err
+		}
+		if len(tunnel.ID) > maxTunnelIDLength {
+			return fmt.Errorf("tunnel id %q is %d characters; at most %d fit in an interface name", tunnel.ID, len(tunnel.ID), maxTunnelIDLength)
 		}
 		if _, exists := tunnelIDs[tunnel.ID]; exists {
 			return fmt.Errorf("duplicate tunnel %q", tunnel.ID)
@@ -231,7 +248,7 @@ func Validate(cfg domain.Config) error {
 
 	for _, device := range cfg.Devices {
 		for _, profile := range device.Profiles {
-			if profile.Egress == "direct" {
+			if profile.Egress == domain.EgressDirect {
 				continue
 			}
 			tunnel, exists := tunnelIDs[profile.Egress]

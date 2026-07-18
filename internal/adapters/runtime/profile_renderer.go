@@ -21,13 +21,20 @@ func (AmneziaProfileRenderer) Render(hub domain.Hub, profile domain.DeviceProfil
 	builder.WriteString("Address = " + profile.Address + "\n")
 	builder.WriteString("DNS = " + hub.DNSAddress + "\n")
 
+	// Emit the canonical spelling: configuration decoding lower-cases these keys, and
+	// the client expects `Jc`, not `jc`. Validation has already rejected anything that
+	// is not a known parameter with a numeric value.
 	keys := make([]string, 0, len(hub.AWGInterface))
 	for key := range hub.AWGInterface {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		builder.WriteString(key + " = " + hub.AWGInterface[key] + "\n")
+		name, known := domain.CanonicalAWGParameter(key)
+		if !known {
+			return "", fmt.Errorf("unsupported AmneziaWG parameter %q", key)
+		}
+		builder.WriteString(name + " = " + hub.AWGInterface[key] + "\n")
 	}
 
 	builder.WriteString("\n[Peer]\n")
