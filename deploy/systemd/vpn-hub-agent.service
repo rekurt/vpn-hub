@@ -1,0 +1,18 @@
+[Unit]
+Description=Private Multi-VPN Hub reconciler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/vpn-hub-agent serve --state-dir /var/lib/vpn-hub --interval 1m
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectHome=true
+ReadWritePaths=/var/lib/vpn-hub /run/vpn-hub /etc/vpn-hub
+
+[Install]
+WantedBy=multi-user.target

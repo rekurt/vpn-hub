@@ -1,0 +1,58 @@
+hub:
+  endpoint: "vpn.example.com:51820"
+  server_public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  client_cidr: "10.80.0.0/24"
+  dns_address: "10.80.0.1"
+  awg_interface:
+    Jc: "4"
+    Jmin: "64"
+    Jmax: "256"
+
+devices:
+  - id: macbook
+    profiles:
+      - id: macbook-xray
+        egress: xray-egress
+        address: "10.80.0.2/32"
+        client_private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      - id: macbook-direct
+        egress: direct
+        address: "10.80.0.3/32"
+        client_public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+tunnels:
+  - id: corp-wg
+    type: wireguard
+    role: private-network
+    source:
+      kind: config
+      value: "secrets/corp-wg.conf"
+    routes: ["10.20.0.0/16"]
+    dns_servers: ["10.20.0.53"]
+    dns_zones: ["corp-a.internal"]
+    health:
+      tcp_address: "10.20.0.53:53"
+  - id: corp-openvpn
+    type: openvpn
+    role: private-network
+    source:
+      kind: config
+      value: "secrets/corp-openvpn.ovpn"
+    routes: ["10.50.0.0/16"]
+    dns_servers: ["10.50.0.53"]
+    dns_zones: ["corp-b.internal"]
+  - id: xray-egress
+    type: xray
+    role: egress
+    source:
+      kind: xray-uri
+      value: "vless://replace-me"
+    allowed_devices: ["macbook"]
+    health:
+      https_url: "https://example.com/"
+  - id: awg-egress
+    type: amneziawg
+    role: egress
+    source:
+      kind: config
+      value: "secrets/awg-exit.conf"
