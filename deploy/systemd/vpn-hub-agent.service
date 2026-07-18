@@ -9,10 +9,36 @@ User=root
 ExecStart=/usr/local/bin/vpn-hub-agent serve --state-dir /var/lib/vpn-hub --interval 1m
 Restart=on-failure
 RestartSec=5s
-NoNewPrivileges=false
-PrivateTmp=true
+
+# systemd creates and owns these, so the unit no longer fails with 226/NAMESPACE on a
+# clean host. They map to /run/vpn-hub, /var/lib/vpn-hub and /etc/vpn-hub and are
+# implicitly writable even under ProtectSystem=strict.
+RuntimeDirectory=vpn-hub
+StateDirectory=vpn-hub
+ConfigurationDirectory=vpn-hub
+
+ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/vpn-hub /run/vpn-hub /etc/vpn-hub
+PrivateTmp=true
+NoNewPrivileges=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=~user pid ipc uts cgroup
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+# The reconciler drives netlink, nftables and network namespaces; everything else is dropped.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+
+# `ip netns` bind-mounts into /run/netns, which ProtectSystem=strict would otherwise make
+# read-only. deploy/tmpfiles/vpn-hub.conf creates the directory at boot.
+ReadWritePaths=/run/netns
+
+# ProtectKernelTunables is deliberately NOT set: disabling IPv6 requires writing
+# /proc/sys/net/ipv6/conf/*/disable_ipv6.
 
 [Install]
 WantedBy=multi-user.target

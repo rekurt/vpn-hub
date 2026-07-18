@@ -88,7 +88,7 @@ func (f HTTPSSubscriptionFetcher) Fetch(ctx context.Context, rawURL string) ([]b
 	if err != nil {
 		return nil, fmt.Errorf("fetch subscription: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("fetch subscription: %s", response.Status)
 	}

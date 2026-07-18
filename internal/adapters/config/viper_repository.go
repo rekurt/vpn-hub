@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 
 	"vpn-hub/internal/domain"
@@ -29,8 +30,12 @@ func (r ViperRepository) Load(_ context.Context) (domain.Config, error) {
 		return domain.Config{}, fmt.Errorf("read %s: %w", r.Path, err)
 	}
 
+	// Reject unknown keys: a typo such as `dns_zone:` for `dns_zones:` would otherwise be
+	// dropped silently, disabling the DNS-zone conflict checks for that tunnel.
+	strict := func(config *mapstructure.DecoderConfig) { config.ErrorUnused = true }
+
 	var cfg domain.Config
-	if err := v.Unmarshal(&cfg); err != nil {
+	if err := v.Unmarshal(&cfg, strict); err != nil {
 		return domain.Config{}, fmt.Errorf("decode %s: %w", r.Path, err)
 	}
 	return cfg, nil

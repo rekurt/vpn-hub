@@ -58,6 +58,11 @@ func (r FileReconciler) Apply(ctx context.Context, state domain.DesiredState) er
 	if err := os.MkdirAll(r.StateDir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
+	release, err := lockStateDir(r.StateDir)
+	if err != nil {
+		return err
+	}
+	defer release()
 	data, err := json.MarshalIndent(filtered, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal active state: %w", err)
@@ -76,6 +81,11 @@ func (s FileRevisionStore) Save(ctx context.Context, state domain.DesiredState) 
 	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
+	release, err := lockStateDir(s.StateDir)
+	if err != nil {
+		return err
+	}
+	defer release()
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal desired state: %w", err)
@@ -86,11 +96,11 @@ func (s FileRevisionStore) Save(ctx context.Context, state domain.DesiredState) 
 func (s FileRevisionStore) Load(_ context.Context) (domain.DesiredState, error) {
 	data, err := os.ReadFile(filepath.Join(s.StateDir, desiredStateFile))
 	if err != nil {
-		return domain.DesiredState{}, fmt.Errorf("read active state: %w", err)
+		return domain.DesiredState{}, fmt.Errorf("read desired state: %w", err)
 	}
 	var state domain.DesiredState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return domain.DesiredState{}, fmt.Errorf("decode active state: %w", err)
+		return domain.DesiredState{}, fmt.Errorf("decode desired state: %w", err)
 	}
 	return state, nil
 }
@@ -122,12 +132,4 @@ func (r FileReconciler) filterRevoked(state domain.DesiredState) (domain.Desired
 		}
 	}
 	return filtered, nil
-}
-
-func atomicWrite(path string, data []byte, mode os.FileMode) error {
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, data, mode); err != nil {
-		return err
-	}
-	return os.Rename(temporary, path)
 }

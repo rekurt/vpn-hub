@@ -1,2 +1,5 @@
 /plans
 /service
+/bin
+# The real hub configuration; configs/example.yaml is the template.
+/configs/hub.yaml

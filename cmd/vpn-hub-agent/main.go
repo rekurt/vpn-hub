@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -13,7 +14,7 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := cli.NewAgentCommand(os.Stdout, os.Stderr).ExecuteContext(ctx); err != nil && err != context.Canceled {
+	if err := cli.NewAgentCommand(os.Stdout, os.Stderr).ExecuteContext(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "vpn-hub-agent:", err)
 		os.Exit(1)
 	}

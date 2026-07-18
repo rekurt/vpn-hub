@@ -1,0 +1,40 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - errorlint
+    - misspell
+    - revive
+
+  settings:
+    revive:
+      rules:
+        # The codebase documents non-obvious decisions rather than every exported
+        # symbol, so `exported` would only add noise.
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: superfluous-else
+        - name: time-naming
+        - name: unreachable-code
+        - name: var-declaration
+
+  exclusions:
+    rules:
+      # Test helpers legitimately ignore write errors to buffers.
+      - path: _test\.go
+        linters:
+          - errcheck

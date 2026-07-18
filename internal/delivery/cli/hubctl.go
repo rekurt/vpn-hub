@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,7 +18,7 @@ import (
 	"vpn-hub/internal/domain"
 )
 
-func NewHubctlCommand(out, errOut *os.File) *cobra.Command {
+func NewHubctlCommand(out, errOut io.Writer) *cobra.Command {
 	var configPath string
 	root := &cobra.Command{
 		Use:           "hubctl",
@@ -27,7 +28,7 @@ func NewHubctlCommand(out, errOut *os.File) *cobra.Command {
 	}
 	root.SetOut(out)
 	root.SetErr(errOut)
-	root.PersistentFlags().StringVarP(&configPath, "config", "c", "config/hub.yaml", "path to the hub YAML configuration")
+	root.PersistentFlags().StringVarP(&configPath, "config", "c", "configs/hub.yaml", "path to the hub YAML configuration")
 
 	root.AddCommand(newValidateCommand(&configPath))
 	root.AddCommand(newDeployCommand(&configPath))
@@ -37,6 +38,18 @@ func NewHubctlCommand(out, errOut *os.File) *cobra.Command {
 	root.AddCommand(newSubscriptionCommand(&configPath))
 	root.AddCommand(newDeviceCommand())
 	return root
+}
+
+// newParentCommand builds a command that only groups subcommands. Cobra skips argument
+// validation for commands without a Run, so an unknown positional would otherwise be
+// silently swallowed; making the parent runnable lets NoArgs reject it.
+func newParentCommand(use, short string) *cobra.Command {
+	return &cobra.Command{
+		Use:   use,
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
+	}
 }
 
 func newValidateCommand(configPath *string) *cobra.Command {
@@ -112,13 +125,13 @@ func newStatusCommand() *cobra.Command {
 }
 
 func newTestCommand(configPath *string) *cobra.Command {
-	var tunnelID string
-	command := &cobra.Command{
-		Use:   "test tunnel <id>",
+	command := newParentCommand("test", "Run preflight probes")
+	tunnel := &cobra.Command{
+		Use:   "tunnel <id>",
 		Short: "Run configured preflight probes for one tunnel",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			tunnelID = args[0]
+			tunnelID := args[0]
 			service := newService(*configPath, "")
 			cfg, err := service.LoadAndValidate(cmd.Context())
 			if err != nil {
@@ -135,14 +148,17 @@ func newTestCommand(configPath *string) *cobra.Command {
 			return err
 		},
 	}
+	command.AddCommand(tunnel)
 	return command
 }
 
 func newProfileCommand(configPath *string) *cobra.Command {
 	var deviceID, egress, output string
-	command := &cobra.Command{
-		Use:   "profile render",
+	command := newParentCommand("profile", "Manage client profiles")
+	render := &cobra.Command{
+		Use:   "render",
 		Short: "Render one AmneziaWG client profile from local secrets",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if deviceID == "" || egress == "" || output == "" {
 				return fmt.Errorf("--device, --egress and --output are required")
@@ -163,15 +179,16 @@ func newProfileCommand(configPath *string) *cobra.Command {
 			return err
 		},
 	}
-	command.Flags().StringVar(&deviceID, "device", "", "device ID")
-	command.Flags().StringVar(&egress, "egress", "", "egress tunnel ID or direct")
-	command.Flags().StringVar(&output, "output", "", "output profile path")
+	render.Flags().StringVar(&deviceID, "device", "", "device ID")
+	render.Flags().StringVar(&egress, "egress", "", "egress tunnel ID or direct")
+	render.Flags().StringVar(&output, "output", "", "output profile path")
+	command.AddCommand(render)
 	return command
 }
 
 func newSubscriptionCommand(configPath *string) *cobra.Command {
 	var output string
-	command := &cobra.Command{Use: "subscription", Short: "Manage Xray subscriptions"}
+	command := newParentCommand("subscription", "Manage Xray subscriptions")
 	refresh := &cobra.Command{
 		Use:   "refresh <id>",
 		Short: "Fetch and persist one Xray subscription candidate",
@@ -206,7 +223,7 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 
 func newDeviceCommand() *cobra.Command {
 	var stateDir string
-	command := &cobra.Command{Use: "device", Short: "Manage device admission"}
+	command := newParentCommand("device", "Manage device admission")
 	revoke := &cobra.Command{
 		Use:   "revoke <id>",
 		Short: "Persist a local device revocation consumed by the agent",

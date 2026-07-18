@@ -2,7 +2,7 @@ package cli
 
 import (
 	"fmt"
-	"os"
+	"io"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -10,7 +10,7 @@ import (
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
 )
 
-func NewAgentCommand(out, errOut *os.File) *cobra.Command {
+func NewAgentCommand(out, errOut io.Writer) *cobra.Command {
 	root := &cobra.Command{Use: "vpn-hub-agent", Short: "Reconcile private multi-VPN hub desired state", SilenceUsage: true, SilenceErrors: true}
 	root.SetOut(out)
 	root.SetErr(errOut)
@@ -45,6 +45,9 @@ func newServeCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if once {
 				return reconcile(cmd, stateDir, false)
+			}
+			if interval <= 0 {
+				return fmt.Errorf("--interval must be greater than zero, got %s", interval)
 			}
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
