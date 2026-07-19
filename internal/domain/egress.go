@@ -12,10 +12,10 @@ type WireGuardPeer struct {
 // WireGuardTunnel is an upstream configuration, as imported from a provider's .conf.
 type WireGuardTunnel struct {
 	// PrivateKey is the hub's identity towards the provider and never leaves the host.
-	PrivateKey string   `json:"-"`
-	Addresses  []string `json:"addresses"`
-	DNS        []string `json:"dns,omitempty"`
-	MTU        int      `json:"mtu,omitempty"`
+	PrivateKey string        `json:"-"`
+	Addresses  []string      `json:"addresses"`
+	DNS        []string      `json:"dns,omitempty"`
+	MTU        int           `json:"mtu,omitempty"`
 	Peer       WireGuardPeer `json:"peer"`
 }
 
