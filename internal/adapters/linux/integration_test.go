@@ -3,6 +3,12 @@
 // These tests create real network namespaces, veth pairs, WireGuard interfaces and
 // nftables rulesets, so they need root and a Linux kernel and sit behind a build tag.
 //
+// Run them on a disposable machine -- a CI runner -- and not on a hub you reach over
+// SSH. They take ownership of `inet vpn_hub`, which is the same table that keeps the
+// management port open, and a test interrupted between flushing and reapplying it
+// leaves the host reachable only through the provider's console. That is not a
+// hypothetical: it happened, and cost a power cycle.
+//
 // They drive the production path: the same plan builder, ingress adapter and firewall
 // adapter the agent uses. They deliberately use plain WireGuard rather than
 // AmneziaWG -- the obfuscation parameters aside the protocol is identical, and the
@@ -54,6 +60,15 @@ func try(format string, args ...any) {
 type bed struct {
 	apply func(t *testing.T)
 	probe func() string
+	// applyWith reloads the ruleset after letting a test adjust the plan, which is
+	// how a scenario adds something the base configuration has no reason to carry --
+	// a SOCKS endpoint, say.
+	applyWith func(t *testing.T, adjust func(*domain.FirewallPlan))
+	uplink    string
+	secrets   string
+	// clientHost is the address the ruleset admits, so a scenario can test both
+	// sides of an access rule.
+	clientHost string
 }
 
 // waitForTraffic polls until the tunnel carries traffic, since the first handshake
@@ -142,7 +157,7 @@ func newBed(t *testing.T) bed {
 	}
 
 	secrets := t.TempDir()
-	apply := func(t *testing.T) {
+	applyWith := func(t *testing.T, adjust func(*domain.FirewallPlan)) {
 		t.Helper()
 		plan, err := application.BuildFirewallPlan(state, uplink)
 		if err != nil {
@@ -160,6 +175,9 @@ func newBed(t *testing.T) bed {
 		spec.Interface = hubInterface
 		spec.ListenPort = listenPort
 		spec.Parameters = nil // plain WireGuard has no obfuscation knobs
+		if adjust != nil {
+			adjust(&plan)
+		}
 
 		if _, err := (linux.NFTables{RuntimeDir: secrets}).Apply(context.Background(), plan); err != nil {
 			t.Fatalf("apply ruleset: %v", err)
@@ -169,6 +187,7 @@ func newBed(t *testing.T) bed {
 			t.Fatalf("apply ingress: %v", err)
 		}
 	}
+	apply := func(t *testing.T) { t.Helper(); applyWith(t, nil) }
 	apply(t)
 
 	// The client lives in its own namespace and reaches the hub over a veth pair, so
@@ -199,7 +218,10 @@ func newBed(t *testing.T) bed {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	return bed{apply: apply, probe: probe}
+	return bed{
+		apply: apply, probe: probe, applyWith: applyWith,
+		uplink: uplink, secrets: secrets, clientHost: clientHost,
+	}
 }
 
 func TestTrafficReachesTheInternetThroughTheHub(t *testing.T) {

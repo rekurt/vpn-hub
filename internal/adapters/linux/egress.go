@@ -140,8 +140,58 @@ func (e Egress) Apply(ctx context.Context, specs []domain.EgressSpec) error {
 		// sing-box UUID and its OpenVPN inline certificates on disk until the next
 		// reboot cleared the tmpfs.
 		e.forgetSecrets(id)
+		e.forgetRouting(ctx, namespace)
 	}
 	return errors.Join(failures...)
+}
+
+// forgetRouting takes down the policy routing a removed tunnel installed.
+//
+// The rule and the table outlive the namespace otherwise: `ip netns del` knows
+// nothing about either. They accumulate across reconciles, and a rule naming an
+// empty table is a lookup that silently falls through to the main table -- the
+// difference between a packet dying in a namespace and a packet leaving by the
+// hub's own uplink.
+func (e Egress) forgetRouting(ctx context.Context, namespace string) {
+	// The layout is derived from the tunnel's position, and the position is gone
+	// with the revision, so the rule is found by the interface it pointed at rather
+	// than recomputed.
+	device := "vh-" + strings.TrimPrefix(namespace, "vpn-hub-")
+	output, err := e.run(ctx, "ip", "rule", "show")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(output, "\n") {
+		mark, table, ok := markAndTable(line)
+		if !ok {
+			continue
+		}
+		routes, err := e.run(ctx, "ip", "route", "show", "table", table)
+		if err != nil || !strings.Contains(routes, device) {
+			continue
+		}
+		_, _ = e.run(ctx, "ip", "rule", "del", "fwmark", mark, "lookup", table)
+		_, _ = e.run(ctx, "ip", "route", "flush", "table", table)
+	}
+}
+
+// markAndTable reads `ip rule show` output of the form
+// "1000:\tfrom all fwmark 0x101 lookup 100".
+func markAndTable(line string) (mark, table string, ok bool) {
+	fields := strings.Fields(line)
+	for index, field := range fields {
+		switch field {
+		case "fwmark":
+			if index+1 < len(fields) {
+				mark = fields[index+1]
+			}
+		case "lookup":
+			if index+1 < len(fields) {
+				table = fields[index+1]
+			}
+		}
+	}
+	return mark, table, mark != "" && table != ""
 }
 
 // forgetSecrets removes the files a tunnel's upstream needed. Failures are ignored:

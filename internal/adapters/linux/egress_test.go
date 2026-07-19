@@ -264,3 +264,34 @@ func TestRemovingATunnelRemovesItsSecrets(t *testing.T) {
 		t.Errorf("%s outlived the tunnel it belonged to", entry.Name())
 	}
 }
+
+// `ip netns del` knows nothing about routing rules, so the rule and the table a
+// tunnel installed outlive it. They accumulate across reconciles, and a rule naming
+// an emptied table is a lookup that falls through to the main table — the difference
+// between a packet dying inside a namespace and a packet leaving by the hub's own
+// uplink. Found on the lab, where one survived the tunnel by hours.
+func TestRemovingATunnelTakesItsPolicyRoutingWithIt(t *testing.T) {
+	t.Parallel()
+	host := workingHost(`[{"name":"vpn-hub-gone"}]`)
+	host.replies["ip rule show"] = "0:\tfrom all lookup local\n" +
+		"1000:\tfrom all fwmark 0x101 lookup 101\n" +
+		"1000:\tfrom all fwmark 0x102 lookup 102\n" +
+		"32766:\tfrom all lookup main\n"
+	host.replies["ip route show table 101"] = "default via 10.90.0.2 dev vh-gone\n"
+	host.replies["ip route show table 102"] = "default via 10.90.0.6 dev vh-other\n"
+	egress := Egress{Run: host.run, SecretsDir: t.TempDir()}
+
+	if err := egress.Apply(context.Background(), nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !host.ran("ip rule del fwmark 0x101 lookup 101") {
+		t.Fatalf("the rule outlived its tunnel; commands: %v", host.commands)
+	}
+	if !host.ran("ip route flush table 101") {
+		t.Errorf("the routing table outlived its tunnel; commands: %v", host.commands)
+	}
+	// And nothing belonging to a tunnel that is still in service.
+	if host.ran("ip rule del fwmark 0x102") || host.ran("ip route flush table 102") {
+		t.Errorf("another tunnel's routing was torn down; commands: %v", host.commands)
+	}
+}
