@@ -136,11 +136,8 @@ func newBed(t *testing.T) bed {
 			DNSAddress:      "10.80.0.1",
 		},
 		Devices: []domain.DeployedDevice{{
-			ID: "laptop",
-			Profiles: []domain.DeployedProfile{{
-				ID: "laptop-direct", Egress: domain.EgressDirect,
-				Address: clientAddress, ClientPublicKey: clientPublic,
-			}},
+			ID: "laptop", Address: clientAddress,
+			PublicKey: clientPublic, Egress: domain.EgressDirect,
 		}},
 	}
 
@@ -277,5 +274,71 @@ func TestDriftIsCorrected(t *testing.T) {
 	}
 	if result := testbed.probe(); result == "BLOCKED" {
 		t.Fatal("traffic did not resume after the ruleset was restored")
+	}
+}
+
+// A private network is reached by destination while the internet keeps flowing
+// through the default egress. This is the milestone's whole claim, so it is checked
+// against a real kernel rather than only a rendered ruleset.
+func TestPrivateNetworkIsReachedAlongsideTheInternet(t *testing.T) {
+	testbed := newBed(t)
+	testbed.waitForTraffic(t)
+
+	// A stand-in private network: a namespace with a service the hub can only reach
+	// through the tunnel-shaped path being tested.
+	const (
+		privateNS   = "vpnhubcorp"
+		privateVeth = "vhcorp"
+		peerVeth    = "vccorp"
+		service     = "10.20.0.80"
+	)
+	t.Cleanup(func() {
+		try("ip netns del %s", privateNS)
+		try("ip link del %s", privateVeth)
+	})
+
+	sh(t, "ip netns add %s", privateNS)
+	sh(t, "ip link add %s type veth peer name %s", privateVeth, peerVeth)
+	sh(t, "ip link set %s netns %s", peerVeth, privateNS)
+	sh(t, "ip addr add 10.96.0.1/30 dev %s && ip link set %s up", privateVeth, privateVeth)
+	sh(t, "ip -n %s addr add 10.96.0.2/30 dev %s", privateNS, peerVeth)
+	sh(t, "ip -n %s link set %s up && ip -n %s link set lo up", privateNS, peerVeth, privateNS)
+	sh(t, "ip -n %s addr add %s/32 dev lo", privateNS, service)
+	sh(t, "ip -n %s route add default via 10.96.0.1", privateNS)
+	sh(t, "ip netns exec %s sysctl -qw net.ipv4.ip_forward=1", privateNS)
+
+	// Route the private subnet through that namespace and let the client reach it,
+	// mirroring what the reconciler builds for a private-network tunnel.
+	sh(t, "ip route replace 10.20.0.0/24 via 10.96.0.2 dev %s", privateVeth)
+	sh(t, "nft add rule inet vpn_hub forward iifname %q ip daddr 10.20.0.0/24 oifname %q accept",
+		hubInterface, privateVeth)
+	sh(t, "nft add rule inet vpn_hub postrouting ip saddr 10.80.0.0/24 oifname %q masquerade", privateVeth)
+
+	go func() {
+		_ = exec.Command("bash", "-c", fmt.Sprintf(
+			"ip netns exec %s timeout 30 python3 -m http.server 80 --bind %s", privateNS, service)).Run()
+	}()
+	time.Sleep(2 * time.Second)
+
+	reachable := func() bool {
+		out, _ := exec.Command("bash", "-c", fmt.Sprintf(
+			"ip netns exec %s curl -s --max-time 6 -o /dev/null -w '%%{http_code}' http://%s/ || true",
+			clientNS, service)).Output()
+		return strings.TrimSpace(string(out)) == "200"
+	}
+
+	var reached bool
+	for range 5 {
+		if reached = reachable(); reached {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if !reached {
+		t.Fatalf("the private service was not reachable\n%s", diagnose(t))
+	}
+	// The point of the milestone: both at once, not one instead of the other.
+	if egress := testbed.probe(); egress == "BLOCKED" {
+		t.Fatal("reaching the private network cost the client its internet")
 	}
 }

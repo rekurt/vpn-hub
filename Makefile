@@ -25,6 +25,8 @@ fmt:
 lint:
 	@test -z "$$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }
 	go vet ./...
+	# Build-tagged files are invisible to the plain vet, and CI checks them.
+	go vet -tags=integration ./...
 
 ## test: run the unit suite with the race detector
 test:
