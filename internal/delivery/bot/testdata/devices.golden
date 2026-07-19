@@ -1,0 +1,9 @@
+📱 <b>Устройства</b>
+
+• <code>macbook</code> — 10.80.0.2/32 → wg-nl
+• <code>old-phone</code> — 10.80.0.3/32 → direct 🚫 отозвано
+
+--- keyboard ---
+[macbook](dev:c:macbook) | [old-phone](dev:c:old-phone)
+[➕ Добавить устройство](dev:add)
+[🏠 Меню](m)

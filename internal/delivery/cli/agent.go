@@ -7,12 +7,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	configadapter "vpn-hub/internal/adapters/config"
-	"vpn-hub/internal/adapters/linux"
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
-	"vpn-hub/internal/application"
 	"vpn-hub/internal/domain"
 	"vpn-hub/internal/ports"
+	"vpn-hub/internal/wiring"
 )
 
 func NewAgentCommand(out, errOut io.Writer) *cobra.Command {
@@ -43,15 +41,7 @@ func (f *agentFlags) bind(command *cobra.Command) {
 // reconciler wires the host-facing adapters. Everything it drives only formats or
 // executes; the decisions live in the application layer.
 func (f *agentFlags) reconciler() ports.Reconciler {
-	return application.HostReconciler{
-		Firewall:      linux.NFTables{RuntimeDir: f.runtimeDir},
-		Ingress:       linux.Ingress{SecretsDir: f.runtimeDir},
-		Egress:        linux.Egress{SecretsDir: f.runtimeDir},
-		DNS:           linux.Dnsmasq{ConfigDir: f.runtimeDir},
-		TunnelConfigs: linux.TunnelConfigFiles{Dir: f.configDir, Secrets: configadapter.SOPSSecretStore{}},
-		Host:          linux.NetConf{},
-		ServerKey:     linux.ServerKeyFile{Path: f.keyPath},
-	}
+	return wiring.Reconciler(f.keyPath, f.runtimeDir, f.configDir)
 }
 
 func newReconcileCommand() *cobra.Command {

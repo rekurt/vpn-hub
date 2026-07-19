@@ -1,0 +1,17 @@
+🚇 <b>corp-a</b>
+
+Роль: private-network
+Тип: wireguard
+Состояние: вкл
+Источник: config <code>corp-a.conf</code>
+Маршруты: <code>10.20.0.0/16</code>
+DNS-зоны: <code>corp.internal</code>
+
+🟢 handshake 10s ago (только что)
+
+--- keyboard ---
+[⏸ Выключить](tun:off:corp-a) | [🩺 Проверить](tun:t:corp-a)
+[➖ маршрут 10.20.0.0/16](tun:rd:corp-a:10.20.0.0/16)
+[➕ Маршрут](tun:ra:corp-a) | [➕ DNS-зона](tun:za:corp-a)
+[➖ зона corp.internal](tun:zd:corp-a:corp.internal)
+[⬅️ Туннели](tun) | [🏠 Меню](m)

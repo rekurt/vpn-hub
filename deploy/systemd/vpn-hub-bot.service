@@ -1,0 +1,38 @@
+[Unit]
+Description=vpn-hub admin Telegram bot
+After=network-online.target vpn-hub-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/vpn-hub-bot serve
+Restart=always
+RestartSec=5s
+
+RuntimeDirectory=vpn-hub
+StateDirectory=vpn-hub
+ConfigurationDirectory=vpn-hub
+
+# The bot is the operator's seat, not the reconciler: it edits /etc/vpn-hub, forks
+# systemctl/journalctl/qrencode and builds the canary namespace for subscription
+# refreshes. That rules out the agent's mount isolation; it gets the subscription
+# unit's confinement level instead. The reconciler's sandbox stays intact precisely
+# because this lives in a separate service.
+UMask=0077
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+ProtectKernelLogs=true
+ProtectClock=true
+
+# Long polling only: the bot dials out to api.telegram.org and listens on nothing.
+# The canary namespace needs the same network capabilities as the agent.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+
+[Install]
+WantedBy=multi-user.target

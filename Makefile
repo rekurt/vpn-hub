@@ -68,21 +68,30 @@ stand-ip:
 stand-down:
 	$(TF) destroy -auto-approve
 
-## deploy-lab: install binaries and the systemd unit onto the lab host
+## deploy-lab: install binaries and the systemd units onto the lab host
 # Binaries land in a staging directory first: scp cannot write over a running
 # executable (ETXTBSY), whereas `install` replaces the directory entry and leaves the
 # running process on the old inode until it restarts.
+# The bot starts only where its config exists: a lab host without a token should not
+# grow a crash-looping unit. The subscription timer is disabled when the bot runs --
+# the bot schedules refreshes itself, through its own mutation gate, so timer and bot
+# cannot collide over the singleton canary namespace.
 deploy-lab: build-linux
 	@test -n "$(LAB_IP)" || { echo "no lab host; run make stand-up"; exit 1; }
 	$(SSH) 'mkdir -p /run/vpn-hub-stage'
-	scp bin/linux/hubctl bin/linux/vpn-hub-agent root@$(LAB_IP):/run/vpn-hub-stage/
-	scp deploy/systemd/vpn-hub-agent.service deploy/systemd/vpn-hub-subscription@.service \
+	scp bin/linux/hubctl bin/linux/vpn-hub-agent bin/linux/vpn-hub-bot root@$(LAB_IP):/run/vpn-hub-stage/
+	scp deploy/systemd/vpn-hub-agent.service deploy/systemd/vpn-hub-bot.service \
+		deploy/systemd/vpn-hub-subscription@.service \
 		deploy/systemd/vpn-hub-subscription@.timer root@$(LAB_IP):/etc/systemd/system/
-	$(SSH) 'install -m 0755 /run/vpn-hub-stage/hubctl /run/vpn-hub-stage/vpn-hub-agent /usr/local/bin/ \
+	$(SSH) 'install -m 0755 /run/vpn-hub-stage/hubctl /run/vpn-hub-stage/vpn-hub-agent /run/vpn-hub-stage/vpn-hub-bot /usr/local/bin/ \
 		&& rm -rf /run/vpn-hub-stage \
 		&& systemctl daemon-reload \
 		&& systemctl enable --now vpn-hub-agent \
-		&& systemctl restart vpn-hub-agent'
+		&& systemctl restart vpn-hub-agent \
+		&& if [ -f /etc/vpn-hub/telegram.yaml ]; then \
+			systemctl disable --now "vpn-hub-subscription@*.timer" 2>/dev/null; \
+			systemctl enable --now vpn-hub-bot && systemctl restart vpn-hub-bot; \
+		else echo "no /etc/vpn-hub/telegram.yaml; vpn-hub-bot not enabled"; fi'
 
 ## ssh: open a shell on the lab host
 ssh:
@@ -92,4 +101,8 @@ ssh:
 logs:
 	$(SSH) 'journalctl -u vpn-hub-agent -f'
 
-.PHONY: help fmt lint test test-integration build build-linux $(STAND_TARGETS) deploy-lab ssh logs
+## logs-bot: follow the bot journal on the lab host
+logs-bot:
+	$(SSH) 'journalctl -u vpn-hub-bot -f'
+
+.PHONY: help fmt lint test test-integration build build-linux $(STAND_TARGETS) deploy-lab ssh logs logs-bot

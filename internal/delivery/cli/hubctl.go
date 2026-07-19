@@ -9,13 +9,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	configadapter "vpn-hub/internal/adapters/config"
 	"vpn-hub/internal/adapters/health"
 	"vpn-hub/internal/adapters/linux"
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	"vpn-hub/internal/application"
 	"vpn-hub/internal/domain"
-	"vpn-hub/internal/ports"
+	"vpn-hub/internal/wiring"
 )
 
 func NewHubctlCommand(out, errOut io.Writer) *cobra.Command {
@@ -340,21 +339,6 @@ func newDeviceCommand(configPath *string) *cobra.Command {
 	return command
 }
 
-// configRepository reads a directory layout when given one and a single file
-// otherwise, so the example and the tests need no directory.
-func configRepository(path string) ports.ConfigRepository {
-	if configadapter.IsDirectory(path) {
-		return configadapter.DirectoryRepository{Path: path}
-	}
-	return configadapter.ViperRepository{Path: path}
-}
-
 func newService(configPath, stateDir string) application.Service {
-	return application.Service{
-		ConfigRepository: configRepository(configPath),
-		RevisionStore:    runtimeadapter.FileRevisionStore{StateDir: stateDir},
-		// Probing from the host would measure the host's own connectivity, which is
-		// the path the tunnel exists to avoid.
-		HealthChecker: linux.HealthChecker{RuntimeDir: "/run/vpn-hub"},
-	}
+	return wiring.Service(configPath, stateDir)
 }

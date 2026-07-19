@@ -1,0 +1,19 @@
+📊 <b>Статус</b>
+
+Ревизия: <code>6b419dc34476ad09</code> (создана 2ч назад)
+Туннелей: 3, устройств: 2
+
+⏳ <b>Ждёт подтверждения</b>: ревизия <code>aaaa000011112222</code>, осталось 3м 20с
+
+Агент: 🟢 active (running), рестартов: 1
+Дрейф: ⚠️ 1 расхождение:
+ • <code>update ingress/awg0: peer set differs</code>
+
+<b>Здоровье туннелей</b> (проба раз в 5м):
+🟢 <code>corp-a</code> — handshake 10s ago (4м назад)
+🔴 <code>wg-nl</code> — the tunnel has never completed a handshake (4м назад)
+⚪️ <code>xray-de</code> — nothing was measured (4м назад)
+
+--- keyboard ---
+[✅ Подтвердить](dep:ok) | [↩️ Откатить](dep:rb!)
+[🔄 Обновить](st) | [🏠 Меню](m)

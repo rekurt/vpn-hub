@@ -71,3 +71,37 @@ func (s RevocationStore) Add(ctx context.Context, deviceID string) error {
 	}
 	return atomicWrite(s.path(), data, 0o600)
 }
+
+// Remove lifts a revocation, so a device that is re-issued a fresh key is not
+// silently dropped again at the next deploy. Removing an id that is not listed is
+// not an error: the state asked for is the state already there.
+func (s RevocationStore) Remove(ctx context.Context, deviceID string) error {
+	if s.StateDir == "" {
+		return fmt.Errorf("state directory is required")
+	}
+	existing, err := s.Load(ctx)
+	if err != nil {
+		return err
+	}
+	kept := make([]string, 0, len(existing))
+	for _, id := range existing {
+		if id != deviceID {
+			kept = append(kept, id)
+		}
+	}
+	if len(kept) == len(existing) {
+		return nil
+	}
+
+	release, err := lockStateDir(s.StateDir)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	data, err := json.MarshalIndent(kept, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal revocations: %w", err)
+	}
+	return atomicWrite(s.path(), data, 0o600)
+}

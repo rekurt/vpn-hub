@@ -64,23 +64,76 @@ jobs:
           printf '%s\n' "$HUB_HOST_KEY" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
+      # The bot's credentials live as environment secrets and are installed by the
+      # deploy, so provisioning a hub never involves pasting a token over SSH by
+      # hand. The content travels on stdin: an argv would be visible to every
+      # process on the host for as long as the command runs, and a heredoc in the
+      # remote command would land in the shell history. When the secrets are not
+      # set, whatever telegram.yaml the host already has is left alone, so a
+      # hand-managed file keeps working.
+      - name: Provision the bot configuration
+        env:
+          HUB_HOST: ${{ secrets.HUB_HOST }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
+          TELEGRAM_NOTIFICATIONS: ${{ secrets.TELEGRAM_NOTIFICATIONS }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] && [ -z "$TELEGRAM_ADMIN_ID" ]; then
+            echo "TELEGRAM_BOT_TOKEN/TELEGRAM_ADMIN_ID are not set; leaving telegram.yaml on the host as it is"
+            exit 0
+          fi
+          # Half a configuration is worse than none: the bot would crash-loop and
+          # fail the deploy without saying which secret is missing.
+          test -n "$TELEGRAM_BOT_TOKEN" || { echo "secret TELEGRAM_BOT_TOKEN is not set"; exit 1; }
+          test -n "$TELEGRAM_ADMIN_ID"  || { echo "secret TELEGRAM_ADMIN_ID is not set"; exit 1; }
+          case "$TELEGRAM_ADMIN_ID" in
+            *[!0-9]*) echo "TELEGRAM_ADMIN_ID must be a numeric Telegram user id"; exit 1 ;;
+          esac
+          {
+            printf 'token: "%s"\n' "$TELEGRAM_BOT_TOKEN"
+            printf 'admin_id: %s\n' "$TELEGRAM_ADMIN_ID"
+            if [ -n "$TELEGRAM_NOTIFICATIONS" ]; then
+              printf 'notifications:\n'
+              printf '%s\n' "$TELEGRAM_NOTIFICATIONS" | sed 's/^/  /'
+            fi
+          } | ssh root@"$HUB_HOST" '
+            umask 077
+            cat > /etc/vpn-hub/telegram.yaml.tmp
+            mv /etc/vpn-hub/telegram.yaml.tmp /etc/vpn-hub/telegram.yaml
+          '
+
       - name: Install
         env:
           HUB_HOST: ${{ secrets.HUB_HOST }}
         run: |
+          # A previously built artifact (the run_id rollback path) may predate the
+          # bot; deploying it must still work, it just does not ship a bot.
           chmod +x bin/linux/hubctl bin/linux/vpn-hub-agent
+          BINARIES="bin/linux/hubctl bin/linux/vpn-hub-agent"
+          if [ -f bin/linux/vpn-hub-bot ]; then
+            chmod +x bin/linux/vpn-hub-bot
+            BINARIES="$BINARIES bin/linux/vpn-hub-bot"
+          fi
           # Staged first: scp cannot overwrite a running executable (ETXTBSY), while
           # install replaces the directory entry and leaves the running process alone
           # until it restarts.
           ssh root@"$HUB_HOST" 'mkdir -p /run/vpn-hub-stage'
-          scp bin/linux/hubctl bin/linux/vpn-hub-agent root@"$HUB_HOST":/run/vpn-hub-stage/
-          scp deploy/systemd/vpn-hub-agent.service root@"$HUB_HOST":/etc/systemd/system/
+          scp $BINARIES root@"$HUB_HOST":/run/vpn-hub-stage/
+          scp deploy/systemd/vpn-hub-agent.service deploy/systemd/vpn-hub-bot.service root@"$HUB_HOST":/etc/systemd/system/
+          # The bot runs only where its config and binary exist; the subscription
+          # timer yields to the bot's own scheduler so the two never race over the
+          # canary.
           ssh root@"$HUB_HOST" '
             set -e
-            install -m 0755 /run/vpn-hub-stage/hubctl /run/vpn-hub-stage/vpn-hub-agent /usr/local/bin/
+            install -m 0755 /run/vpn-hub-stage/* /usr/local/bin/
             rm -rf /run/vpn-hub-stage
             systemctl daemon-reload
             systemctl restart vpn-hub-agent
+            if [ -f /etc/vpn-hub/telegram.yaml ] && [ -x /usr/local/bin/vpn-hub-bot ]; then
+              systemctl disable --now "vpn-hub-subscription@*.timer" 2>/dev/null || true
+              systemctl enable --now vpn-hub-bot
+              systemctl restart vpn-hub-bot
+            fi
           '
 
       # A deploy that leaves the agent crash-looping is a failed deploy, so say so
@@ -94,6 +147,14 @@ jobs:
             systemctl is-active --quiet vpn-hub-agent || {
               echo "agent is not running:"; journalctl -u vpn-hub-agent -n 30 --no-pager; exit 1; }
             hubctl --help >/dev/null
+            if [ -f /etc/vpn-hub/telegram.yaml ] && [ -x /usr/local/bin/vpn-hub-bot ]; then
+              # check validates the configuration and proves the token against the
+              # Bot API, so a bad secret fails the deploy here with the reason,
+              # not later as a crash-looping unit.
+              vpn-hub-bot check || { echo "bot configuration or token is broken"; exit 1; }
+              systemctl is-active --quiet vpn-hub-bot || {
+                echo "bot is not running:"; journalctl -u vpn-hub-bot -n 30 --no-pager; exit 1; }
+            fi
             echo "--- recent agent log ---"
             journalctl -u vpn-hub-agent -n 10 --no-pager
           '

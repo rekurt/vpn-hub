@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	"vpn-hub/internal/domain"
 )
 
@@ -52,9 +53,29 @@ func (c Canary) timeout() time.Duration {
 	return 20 * time.Second
 }
 
+// lock serializes canary runs across processes. The namespace, veth and unit names
+// are fixed, so a bot-driven refresh and a hubctl one racing each other tear down
+// each other's half-built candidate; the flock makes the second wait instead.
+func (c Canary) lock() (func(), error) {
+	dir := c.Egress.secretsDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create %s: %w", dir, err)
+	}
+	return runtimeadapter.LockDir(dir)
+}
+
 // Try brings a candidate up in an isolated namespace, fetches through it and tears
 // the namespace down again. It reports nil only when traffic actually passed.
 func (c Canary) Try(ctx context.Context, candidate domain.ProxyTunnel, uplink string) error {
+	release, err := c.lock()
+	if err != nil {
+		return err
+	}
+	defer release()
+	return c.try(ctx, candidate, uplink)
+}
+
+func (c Canary) try(ctx context.Context, candidate domain.ProxyTunnel, uplink string) error {
 	spec := domain.EgressSpec{
 		TunnelID:  "canary",
 		Namespace: canaryNamespace,
@@ -133,11 +154,19 @@ func (c Canary) Discard(ctx context.Context) {
 const peerVethName = "uplink0"
 
 // SelectCandidate tries candidates in order and returns the first that carries
-// traffic, with the reasons the others were rejected.
+// traffic, with the reasons the others were rejected. The lock is held across the
+// whole selection, not per candidate: interleaving two selections would still
+// thrash the shared namespace between them.
 func (c Canary) SelectCandidate(ctx context.Context, candidates []domain.ProxyTunnel, uplink string) (domain.ProxyTunnel, []string, error) {
+	release, err := c.lock()
+	if err != nil {
+		return domain.ProxyTunnel{}, nil, err
+	}
+	defer release()
+
 	var reasons []string
 	for _, candidate := range candidates {
-		err := c.Try(ctx, candidate, uplink)
+		err := c.try(ctx, candidate, uplink)
 		if err == nil {
 			c.Discard(ctx)
 			return candidate, reasons, nil

@@ -6,6 +6,19 @@ import (
 	"path/filepath"
 )
 
+// AtomicWrite is the crash-safe file replacement the state stores use, exported so
+// other adapters (the YAML editor in particular) share one durability story instead
+// of growing their own slightly different one.
+func AtomicWrite(path string, data []byte, mode os.FileMode) error {
+	return atomicWrite(path, data, mode)
+}
+
+// LockDir takes a blocking exclusive advisory lock on a directory (via <dir>/.lock),
+// shared by every process that mutates files in it.
+func LockDir(dir string) (release func(), err error) {
+	return lockStateDir(dir)
+}
+
 // atomicWrite replaces path with data, surviving a crash at any point: the payload is
 // flushed before the rename, and the parent directory is flushed after it so the new
 // name is durable. The temporary file carries a random suffix, so concurrent writers
