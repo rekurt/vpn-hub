@@ -8,6 +8,12 @@ type PeerObservation struct {
 	AllowedIPs []string `json:"allowed_ips,omitempty"`
 	// LatestHandshake is zero when the peer has never completed one.
 	LatestHandshake time.Time `json:"latest_handshake,omitempty"`
+	// Endpoint is where the peer last spoke from; empty until it connects.
+	Endpoint string `json:"endpoint,omitempty"`
+	// RxBytes and TxBytes count since the interface came up, from the hub's side:
+	// Rx is what the device sent.
+	RxBytes uint64 `json:"rx_bytes,omitempty"`
+	TxBytes uint64 `json:"tx_bytes,omitempty"`
 }
 
 // IngressObservation is the live state of the interface clients connect to.

@@ -1,0 +1,11 @@
+📡 <b>xray-de</b> (вкл)
+
+Upstream: <code>1.2.3.4:443</code>
+Есть last-known-good — предыдущий работавший upstream.
+
+🟢 2 probe(s) succeeded through the proxy
+
+--- keyboard ---
+[🔄 Обновить (авто)](sub:r:xray-de) | [📋 Кандидаты](sub:cand:xray-de)
+[↩️ Вернуть last-known-good](sub:lkg:xray-de)
+[⬅️ Подписки](sub) | [🏠 Меню](m)

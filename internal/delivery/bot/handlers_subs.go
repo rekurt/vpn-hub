@@ -3,10 +3,10 @@ package bot
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"vpn-hub/internal/adapters/health"
@@ -27,6 +27,17 @@ func (b *Bot) subscriptionTunnels(cfg domain.Config) []domain.Tunnel {
 	return tunnels
 }
 
+func (b *Bot) subEntryFor(tunnel domain.Tunnel) subEntry {
+	entry := subEntry{ID: tunnel.ID, Enabled: tunnel.IsEnabled(), Health: b.health.get(tunnel.ID)}
+	if current, hasCurrent, hasPrevious := b.Upstreams.Current(tunnel.ID); hasCurrent {
+		entry.Upstream = fmt.Sprintf("%s:%d", current.Server, current.Port)
+		entry.LastGood = hasPrevious
+	} else if hasPrevious {
+		entry.LastGood = true
+	}
+	return entry
+}
+
 func (b *Bot) buildSubs(ctx context.Context) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
@@ -34,35 +45,227 @@ func (b *Bot) buildSubs(ctx context.Context) screen {
 	}
 	var entries []subEntry
 	for _, tunnel := range b.subscriptionTunnels(cfg) {
-		entry := subEntry{ID: tunnel.ID, Enabled: tunnel.IsEnabled()}
-		path := filepath.Join(b.ConfigDir, "subscriptions", tunnel.ID+".link")
-		if content, err := os.ReadFile(path); err == nil {
-			if proxy, err := linux.ParseVLESS(strings.TrimSpace(string(content))); err == nil {
-				entry.Upstream = fmt.Sprintf("%s:%d", proxy.Server, proxy.Port)
-			} else {
-				entry.Upstream = "нечитаемый link-файл"
-			}
-		}
-		if _, err := os.Stat(path + ".last-known-good"); err == nil {
-			entry.HasLastGood = true
-		}
-		entries = append(entries, entry)
+		entries = append(entries, b.subEntryFor(tunnel))
 	}
 	return scr(renderSubs(entries, b.Cfg.Notifications.SubscriptionRefresh))
 }
 
+func (b *Bot) buildSubCard(ctx context.Context, tunnelID string) screen {
+	tunnel, err := b.subscriptionTunnel(ctx, tunnelID)
+	if err != nil {
+		return renderFailure("подписка не найдена", err)
+	}
+	return scr(renderSubCard(b.subEntryFor(tunnel)))
+}
+
+func (b *Bot) subscriptionTunnel(ctx context.Context, tunnelID string) (domain.Tunnel, error) {
+	cfg, err := b.Service.LoadAndValidate(ctx)
+	if err != nil {
+		return domain.Tunnel{}, err
+	}
+	for _, tunnel := range b.subscriptionTunnels(cfg) {
+		if tunnel.ID == tunnelID {
+			return tunnel, nil
+		}
+	}
+	return domain.Tunnel{}, fmt.Errorf("туннель %q не подписочный", tunnelID)
+}
+
 func (b *Bot) routeSubs(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {
+	if action != "" && len(args) < 1 {
+		return result{toast: "Не указан туннель"}
+	}
 	switch action {
 	case "":
 		return b.show(ctx, cb, b.buildSubs(ctx))
+	case "c":
+		return b.show(ctx, cb, b.buildSubCard(ctx, args[0]))
 	case "r":
-		if len(args) < 1 {
-			return result{toast: "Не указан туннель"}
-		}
 		return b.startManualRefresh(ctx, cb, args[0])
+	case "cand":
+		page := 0
+		if len(args) > 1 {
+			page, _ = strconv.Atoi(args[1])
+		}
+		return b.showCandidates(ctx, cb, args[0], page)
+	case "pick":
+		if len(args) < 2 {
+			return result{toast: "Нет кандидата"}
+		}
+		index, err := strconv.Atoi(args[1])
+		if err != nil {
+			return result{toast: "Кривой индекс"}
+		}
+		return b.pickCandidate(ctx, cb, args[0], index)
+	case "lkg":
+		return b.show(ctx, cb, scr(renderConfirm(
+			fmt.Sprintf("Вернуть предыдущий upstream для <b>%s</b>? Текущий станет last-known-good.", esc(args[0])),
+			"sub:lkg!:"+args[0], "sub:c:"+args[0])))
+	case "lkg!":
+		return b.restoreLastGood(ctx, cb, args[0])
 	default:
 		return result{toast: "Не понимаю эту кнопку"}
 	}
+}
+
+// --- last-known-good -------------------------------------------------------
+
+func (b *Bot) restoreLastGood(ctx context.Context, cb *tg.CallbackQuery, tunnelID string) result {
+	release, busyWith, ok := b.gate.Acquire("возврат last-known-good " + tunnelID)
+	if !ok {
+		return busyResult(busyWith)
+	}
+	defer release()
+
+	restored, err := b.Upstreams.Restore(tunnelID)
+	if err != nil {
+		return result{toast: err.Error(), alert: true}
+	}
+	warning := b.agentInactiveWarning(ctx)
+	text := fmt.Sprintf("↩️ <b>%s</b>: восстановлен upstream <code>%s:%d</code>.\nАгент подхватит его на ближайшем проходе; прежний сохранён как last-known-good.",
+		esc(tunnelID), esc(restored.Server), restored.Port)
+	if warning != "" {
+		text += "\n" + warning
+	}
+	outcome := b.show(ctx, cb, screen{text: text, markup: keyboard(
+		[]tg.InlineKeyboardButton{btn("📡 К подписке", "sub:c:"+tunnelID), btn("📊 Статус", "st")},
+	)})
+	outcome.toast = "Восстановлен"
+	return outcome
+}
+
+// --- candidates ------------------------------------------------------------
+
+// candidateCache keeps the last fetched list per tunnel: a callback carries an
+// index, and the index must point into the exact list the buttons were built from.
+type candidateCache struct {
+	mu       sync.Mutex
+	byTunnel map[string][]domain.ProxyTunnel
+}
+
+func (c *candidateCache) put(tunnelID string, candidates []domain.ProxyTunnel) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byTunnel == nil {
+		c.byTunnel = map[string][]domain.ProxyTunnel{}
+	}
+	c.byTunnel[tunnelID] = candidates
+}
+
+func (c *candidateCache) get(tunnelID string) []domain.ProxyTunnel {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.byTunnel[tunnelID]
+}
+
+// showCandidates renders the provider's candidate list. Nothing on the host is
+// touched, so no gate. Cached pages render inline; page 0 (or an empty cache) needs
+// a network fetch of up to 15s, which runs in the background so the update loop
+// keeps answering.
+func (b *Bot) showCandidates(ctx context.Context, cb *tg.CallbackQuery, tunnelID string, page int) result {
+	tunnel, err := b.subscriptionTunnel(ctx, tunnelID)
+	if err != nil {
+		return result{toast: err.Error(), alert: true}
+	}
+
+	if candidates := b.candidates.get(tunnelID); page > 0 && len(candidates) > 0 {
+		return b.show(ctx, cb, b.candidatesScreen(tunnelID, candidates, page))
+	}
+
+	b.show(ctx, cb, screen{text: "📋 Загружаю список кандидатов…"})
+	b.spawn("candidates-"+tunnelID, func() {
+		edit := func(view screen) {
+			if cb.Message == nil {
+				b.sendScreen(ctx, view)
+				return
+			}
+			if err := b.API.EditMessageText(ctx, cb.Message.Chat.ID, cb.Message.ID, view.text, view.markup); err != nil {
+				b.logf("candidates edit: %v", err)
+			}
+		}
+
+		payload, err := b.Fetch(ctx, tunnel.Source.Value)
+		if err != nil {
+			edit(renderFailure("подписка не скачалась", err))
+			return
+		}
+		candidates, err := b.Parse(payload)
+		if err != nil {
+			edit(renderFailure("подписка не разобралась", err))
+			return
+		}
+		if len(candidates) == 0 {
+			edit(renderFailure("в подписке пусто", fmt.Errorf("провайдер не отдал ни одного пригодного кандидата")))
+			return
+		}
+		b.candidates.put(tunnelID, candidates)
+		edit(b.candidatesScreen(tunnelID, candidates, 0))
+	})
+	return result{}
+}
+
+func (b *Bot) candidatesScreen(tunnelID string, candidates []domain.ProxyTunnel, page int) screen {
+	current := ""
+	if active, hasCurrent, _ := b.Upstreams.Current(tunnelID); hasCurrent {
+		current = fmt.Sprintf("%s:%d", active.Server, active.Port)
+	}
+	return scr(renderCandidates(tunnelID, candidates, page, current))
+}
+
+// pickCandidate proves one chosen candidate and promotes it only when it carried
+// traffic -- the same safety the automatic refresh has, minus the "first that
+// works" part: here the admin picks which one is worth the wait.
+func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID string, index int) result {
+	tunnel, err := b.subscriptionTunnel(ctx, tunnelID)
+	if err != nil {
+		return result{toast: err.Error(), alert: true}
+	}
+	candidates := b.candidates.get(tunnelID)
+	if index < 0 || index >= len(candidates) {
+		return result{toast: "Список устарел — откройте кандидатов заново", alert: true}
+	}
+	candidate := candidates[index]
+
+	release, busyWith, ok := b.gate.Acquire(fmt.Sprintf("проверка кандидата %s:%d", candidate.Server, candidate.Port))
+	if !ok {
+		return busyResult(busyWith)
+	}
+
+	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,
+		fmt.Sprintf("🧪 Проверяю <code>%s:%d</code> в изолированном namespace…", esc(candidate.Server), candidate.Port), nil)
+	if err != nil {
+		release()
+		return result{toast: "Не удалось начать: " + err.Error(), alert: true}
+	}
+
+	b.spawn("pick-"+tunnelID, func() {
+		defer release()
+		edit := func(view screen) {
+			if err := b.API.EditMessageText(ctx, message.Chat.ID, message.ID, view.text, view.markup); err != nil {
+				b.logf("pick edit: %v", err)
+			}
+		}
+
+		uplink, err := b.Uplink(ctx)
+		if err != nil {
+			edit(renderFailure("не определился uplink", err))
+			return
+		}
+		if err := b.Prove(ctx, candidate, uplink); err != nil {
+			edit(screen{
+				text: fmt.Sprintf("❌ <code>%s:%d</code> не пропустил трафик:\n<code>%s</code>\n\nДействующий upstream не тронут.",
+					esc(candidate.Server), candidate.Port, esc(err.Error())),
+				markup: keyboard([]tg.InlineKeyboardButton{btn("📋 К кандидатам", "sub:cand:"+tunnelID), btn("📡 К подписке", "sub:c:"+tunnelID)}),
+			})
+			return
+		}
+		if err := b.Upstreams.Write(ctx, tunnel, candidate); err != nil {
+			edit(renderFailure("кандидат прошёл проверку, но не записался", err))
+			return
+		}
+		edit(scr(renderRefreshResult(tunnelID, candidate, nil, b.agentInactiveWarning(ctx))))
+	})
+	return result{toast: "Проверяю"}
 }
 
 // startManualRefresh launches the prove-and-promote flow in the background: the
@@ -85,7 +288,7 @@ func (b *Bot) startManualRefresh(ctx context.Context, cb *tg.CallbackQuery, tunn
 
 	release, busyWith, ok := b.gate.Acquire("обновление подписки " + tunnelID)
 	if !ok {
-		return result{toast: "⏳ Занято: " + busyWith, alert: true}
+		return busyResult(busyWith)
 	}
 
 	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,

@@ -26,7 +26,26 @@ func renderFailure(what string, err error) screen {
 const agentUnit = "vpn-hub-agent.service"
 
 func (b *Bot) buildStatus(ctx context.Context) screen {
-	view := statusView{Now: b.Now(), HealthEvery: b.Cfg.Notifications.HealthInterval, Health: b.health.list()}
+	view := statusView{Now: b.Now(), HealthEvery: b.Cfg.Notifications.HealthInterval, Health: b.health.list(), DevicesOnline: -1}
+
+	if entries, err := b.deviceEntries(ctx); err == nil {
+		view.DevicesTotal = len(entries)
+		online := 0
+		observed := false
+		for _, entry := range entries {
+			if entry.Peer != nil {
+				observed = true
+			}
+			if entry.online() {
+				online++
+			}
+		}
+		// Zero peers on the interface and zero observations is indistinguishable
+		// from "could not look"; claim a count only when something was seen.
+		if observed {
+			view.DevicesOnline = online
+		}
+	}
 
 	if state, err := b.Revisions.Load(ctx); errors.Is(err, os.ErrNotExist) {
 		// A hub before its first deploy is a legitimate state, not a failure.

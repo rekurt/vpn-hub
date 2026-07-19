@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	"vpn-hub/internal/domain"
 )
 
@@ -55,6 +56,30 @@ func (s ServerKeyFile) Create() (publicKey string, err error) {
 	}
 	if err := os.WriteFile(s.path(), []byte(private+"\n"), 0o600); err != nil {
 		return "", fmt.Errorf("write hub key: %w", err)
+	}
+	return public, nil
+}
+
+// Rotate replaces the key, keeping the old one beside it. Create's refusal stands
+// for accidents; rotation is the deliberate act, and it is only survivable as part
+// of a flow that re-issues every profile -- which is why the previous key is kept:
+// until the new revision deploys, it is what the devices still speak.
+func (s ServerKeyFile) Rotate() (publicKey string, err error) {
+	current, err := os.ReadFile(s.path())
+	if err != nil {
+		return "", fmt.Errorf("read current hub key: %w (nothing was changed)", err)
+	}
+	previous := s.path() + ".previous"
+	if err := os.WriteFile(previous, current, 0o600); err != nil {
+		return "", fmt.Errorf("keep the previous key: %w (nothing was changed)", err)
+	}
+
+	private, public, err := domain.GenerateX25519KeyPair()
+	if err != nil {
+		return "", err
+	}
+	if err := runtimeadapter.AtomicWrite(s.path(), []byte(private+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("write the new hub key: %w (the previous key is intact at %s)", err, previous)
 	}
 	return public, nil
 }

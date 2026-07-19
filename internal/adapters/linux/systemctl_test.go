@@ -9,7 +9,8 @@ import (
 func TestStatusParsesShowOutput(t *testing.T) {
 	t.Parallel()
 	systemctl := Systemctl{Run: func(_ context.Context, name string, args ...string) (string, error) {
-		if name != "systemctl" || args[0] != "show" || args[1] != "vpn-hub-agent.service" {
+		// The unit name must be a positional argument, after "--".
+		if name != "systemctl" || args[0] != "show" || args[len(args)-2] != "--" || args[len(args)-1] != "vpn-hub-agent.service" {
 			t.Fatalf("unexpected command %s %v", name, args)
 		}
 		return "ActiveState=active\nSubState=running\nExecMainStartTimestamp=Fri 2026-07-17 10:00:00 UTC\nNRestarts=2\n", nil
@@ -18,6 +19,11 @@ func TestStatusParsesShowOutput(t *testing.T) {
 	status, err := systemctl.Status(context.Background(), "vpn-hub-agent.service")
 	if err != nil {
 		t.Fatalf("Status: %v", err)
+	}
+
+	// A unit name that could be read as a flag is refused before exec.
+	if _, err := systemctl.Status(context.Background(), "--foo"); err == nil {
+		t.Fatal("expected a suspicious unit name to be rejected")
 	}
 	if status.Active != "active" || status.Sub != "running" || status.Restarts != 2 {
 		t.Fatalf("unexpected status %+v", status)

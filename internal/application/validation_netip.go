@@ -116,6 +116,12 @@ var identifierPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // characters, after the three-character "vh-" prefix.
 const maxTunnelIDLength = 12
 
+// maxDeviceIDLength keeps a device id short enough that every callback the bot
+// builds around it -- "dev:eg:<id>:<egress>", "tun:at:<tunnel>:<id>" -- stays under
+// Telegram's 64-byte callback_data limit. Beyond it those buttons would fail to
+// render and the screen would silently not appear.
+const maxDeviceIDLength = 32
+
 func validateIdentifier(kind, value string) error {
 	if !identifierPattern.MatchString(value) {
 		return fmt.Errorf("%s %q must match %s", kind, value, identifierPattern)

@@ -11,6 +11,9 @@ const (
 	dialogDeviceAdd = "device-add"
 	dialogRouteAdd  = "route-add"
 	dialogZoneAdd   = "zone-add"
+	dialogHubEdit   = "hub-edit"
+	dialogAWGSet    = "awg-set"
+	dialogProbeSet  = "probe-set"
 )
 
 // dialog is the state of one unfinished exchange. There is exactly one admin, so at
@@ -59,5 +62,11 @@ func (b *Bot) handleDialogInput(ctx context.Context, text string) {
 		b.handleDeviceAddInput(ctx, dialog, text)
 	case dialogRouteAdd, dialogZoneAdd:
 		b.handleListAddInput(ctx, dialog, text)
+	case dialogHubEdit:
+		b.handleHubEditInput(ctx, dialog, text)
+	case dialogAWGSet:
+		b.handleAWGSetInput(ctx, dialog, text)
+	case dialogProbeSet:
+		b.handleProbeSetInput(ctx, dialog, text)
 	}
 }

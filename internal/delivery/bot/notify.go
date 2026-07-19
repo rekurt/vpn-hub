@@ -32,36 +32,54 @@ func (b *Bot) emit(ev event) {
 	}
 }
 
+// notifierState is what the notifier remembers between events; kept separate so the
+// delivery decision is a pure function that a test can drive without goroutines.
+type notifierState struct {
+	lastSent     map[string]time.Time
+	lastRollback time.Time
+}
+
+func newNotifierState() *notifierState {
+	return &notifierState{lastSent: map[string]time.Time{}}
+}
+
+// shouldDeliver decides whether one event reaches the admin: category toggle,
+// auto-rollback suppression, and per-text debounce. It updates the state, so it is
+// called once per event in arrival order.
+func (b *Bot) shouldDeliver(st *notifierState, ev event, now time.Time) bool {
+	if ev.category == "rollback" {
+		st.lastRollback = now
+	}
+	if !b.alerts.get(ev.category) {
+		return false
+	}
+	// An auto-rollback rewrites the state files; reporting that again as "changed
+	// outside the bot" would be the same news twice.
+	if ev.category == "oob" && now.Sub(st.lastRollback) < 2*time.Minute {
+		return false
+	}
+	if ev.debounce > 0 {
+		key := ev.category + "|" + ev.text
+		if last, ok := st.lastSent[key]; ok && now.Sub(last) < ev.debounce {
+			return false
+		}
+		st.lastSent[key] = now
+	}
+	return true
+}
+
 // notifier is the single mouth for every watcher: category toggles, debounce and
-// suppression live here so the watchers stay simple.
+// suppression live in shouldDeliver so the watchers stay simple.
 func (b *Bot) notifier(ctx context.Context) {
-	lastSent := map[string]time.Time{}
-	var lastRollback time.Time
+	st := newNotifierState()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case ev := <-b.events:
-			now := b.Now()
-			if ev.category == "rollback" {
-				lastRollback = now
+			if b.shouldDeliver(st, ev, b.Now()) {
+				b.send(ctx, ev.text, ev.markup)
 			}
-			if !b.alerts.get(ev.category) {
-				continue
-			}
-			// An auto-rollback rewrites the state files; reporting that again as
-			// "changed outside the bot" would be the same news twice.
-			if ev.category == "oob" && now.Sub(lastRollback) < 2*time.Minute {
-				continue
-			}
-			if ev.debounce > 0 {
-				key := ev.category + "|" + ev.text
-				if last, ok := lastSent[key]; ok && now.Sub(last) < ev.debounce {
-					continue
-				}
-				lastSent[key] = now
-			}
-			b.send(ctx, ev.text, ev.markup)
 		}
 	}
 }
@@ -259,10 +277,15 @@ func (b *Bot) watchJournal(ctx context.Context) {
 			continue
 		}
 		ev := event{category: category, text: text}
-		if category == "agent-error" {
+		switch category {
+		case "agent-error":
 			ev.debounce = 15 * time.Minute
-		}
-		if category == "rollback" {
+			// Straight from the alert to the fix: the usual first response to a
+			// stuck agent is to restart it.
+			ev.markup = keyboard([]tg.InlineKeyboardButton{
+				btn("📜 Журнал", "log:u:"+agentUnit), btn("🔁 Рестарт агента", "host:ra"),
+			})
+		case "rollback":
 			ev.markup = keyboard([]tg.InlineKeyboardButton{btn("📊 Статус", "st")})
 		}
 		b.emit(ev)
@@ -433,7 +456,9 @@ func (b *Bot) watchDrift(ctx context.Context) {
 			}
 			text.WriteString("Агент должен был устранить это за минуту; проверьте его журнал.")
 			b.emit(event{category: "drift", text: text.String(),
-				markup: keyboard([]tg.InlineKeyboardButton{btn("📜 Журнал агента", "log:u:"+agentUnit)})})
+				markup: keyboard([]tg.InlineKeyboardButton{
+					btn("📜 Журнал агента", "log:u:"+agentUnit), btn("🔁 Рестарт агента", "host:ra"),
+				})})
 			alerted = true
 		default:
 			sawDrift = true

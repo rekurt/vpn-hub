@@ -1,0 +1,10 @@
+📡 <b>Подписки</b>
+
+🟢 <code>xray-de</code> — 1.2.3.4:443
+⏸ <code>xray-nl</code> — upstream ещё не выбран
+
+Автообновление: раз в 6ч, кандидат сперва доказывает работоспособность в изолированном namespace.
+--- keyboard ---
+[xray-de](sub:c:xray-de)
+[xray-nl](sub:c:xray-nl)
+[🏠 Меню](m)

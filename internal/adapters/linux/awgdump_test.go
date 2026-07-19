@@ -52,6 +52,35 @@ func TestParseDumpReadsHandshakeTime(t *testing.T) {
 	}
 }
 
+// The traffic counters and endpoint answer "does this device actually use the
+// hub"; the bot's device screens are built on them.
+func TestParseDumpReadsEndpointAndTraffic(t *testing.T) {
+	t.Parallel()
+	dump := strings.Replace(realDump,
+		"aYo1x9b951yd4mtMeKkW/vyOJvU08j2UU96u/Ve9QWA=\t(none)\t(none)\t10.80.0.2/32\t0\t0\t0\toff",
+		"aYo1x9b951yd4mtMeKkW/vyOJvU08j2UU96u/Ve9QWA=\t(none)\t203.0.113.7:33333\t10.80.0.2/32\t1752900000\t1024\t2048\toff", 1)
+	state, err := ParseDump(dump)
+	if err != nil {
+		t.Fatalf("ParseDump: %v", err)
+	}
+	peer := state.Peers[0]
+	if peer.Endpoint != "203.0.113.7:33333" {
+		t.Errorf("Endpoint = %q", peer.Endpoint)
+	}
+	if peer.RxBytes != 1024 || peer.TxBytes != 2048 {
+		t.Errorf("traffic = %d/%d, want 1024/2048", peer.RxBytes, peer.TxBytes)
+	}
+
+	// The (none) endpoint of a never-connected peer stays empty.
+	original, err := ParseDump(realDump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if original.Peers[0].Endpoint != "" {
+		t.Errorf("a never-connected peer must have no endpoint, got %q", original.Peers[0].Endpoint)
+	}
+}
+
 func TestParseDumpHandlesAnInterfaceWithNoPeers(t *testing.T) {
 	t.Parallel()
 	header := strings.SplitN(realDump, "\n", 2)[0]

@@ -121,6 +121,9 @@ func Validate(cfg domain.Config) error {
 		if err := validateIdentifier("device id", device.ID); err != nil {
 			return err
 		}
+		if len(device.ID) > maxDeviceIDLength {
+			return fmt.Errorf("device id %q is %d characters; keep it to at most %d", device.ID, len(device.ID), maxDeviceIDLength)
+		}
 		// Profiles existed to pick an egress per connection; the hub now decides by
 		// destination, so saying what replaced them beats "unknown field".
 		if len(device.Profiles) > 0 {

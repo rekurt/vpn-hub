@@ -13,6 +13,10 @@ RestartSec=5s
 RuntimeDirectory=vpn-hub
 StateDirectory=vpn-hub
 ConfigurationDirectory=vpn-hub
+# The token lives in /etc/vpn-hub and the offset/settings in /var/lib/vpn-hub;
+# close both directories to their owner even though the files inside are 0600.
+ConfigurationDirectoryMode=0700
+StateDirectoryMode=0700
 
 # The bot is the operator's seat, not the reconciler: it edits /etc/vpn-hub, forks
 # systemctl/journalctl/qrencode and builds the canary namespace for subscription
@@ -27,7 +31,14 @@ LockPersonality=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 ProtectKernelLogs=true
+ProtectKernelModules=true
 ProtectClock=true
+ProtectHostname=true
+SystemCallArchitectures=native
+# Telegram over INET, systemd/journald over UNIX, ip/nft over NETLINK -- nothing
+# else. ProcSubset/ProtectProc are deliberately NOT set: the /host screen reads
+# /proc/uptime and /proc/loadavg.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 # Long polling only: the bot dials out to api.telegram.org and listens on nothing.
 # The canary namespace needs the same network capabilities as the agent.

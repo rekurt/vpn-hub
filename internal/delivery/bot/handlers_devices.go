@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	tg "vpn-hub/internal/adapters/telegram"
+	"vpn-hub/internal/application"
 	"vpn-hub/internal/domain"
 )
 
@@ -24,12 +25,27 @@ func (b *Bot) deviceEntries(ctx context.Context) ([]deviceEntry, error) {
 	for _, id := range revoked {
 		revokedSet[id] = true
 	}
+
+	// The live interface tells who is actually connected. Failing to observe it
+	// (workstation, stopped hub) degrades presence to unknown, not the screen.
+	peers := map[string]domain.PeerObservation{}
+	if observed, err := b.Peers.Observe(ctx, application.IngressInterface); err == nil {
+		for _, peer := range observed.Peers {
+			peers[peer.PublicKey] = peer
+		}
+	}
+
+	now := b.Now()
 	entries := make([]deviceEntry, 0, len(cfg.Devices))
 	for _, device := range cfg.Devices {
-		entries = append(entries, deviceEntry{
+		entry := deviceEntry{
 			ID: device.ID, Address: device.Address, PublicKey: device.PublicKey,
-			Egress: device.Egress, Revoked: revokedSet[device.ID],
-		})
+			Egress: device.Egress, Revoked: revokedSet[device.ID], Now: now,
+		}
+		if peer, exists := peers[device.PublicKey]; exists {
+			entry.Peer = &peer
+		}
+		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 	return entries, nil
@@ -145,7 +161,7 @@ func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args 
 	}
 	release, busyWith, ok := b.gate.Acquire("смена egress " + deviceID)
 	if !ok {
-		return result{toast: "⏳ Занято: " + busyWith, alert: true}
+		return busyResult(busyWith)
 	}
 	defer release()
 
@@ -161,23 +177,27 @@ func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args 
 			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К устройству", "dev:c:"+deviceID)}),
 		})
 	}
-	outcome := b.show(ctx, cb, b.afterConfigChange(ctx,
-		fmt.Sprintf("🔀 <b>%s</b> теперь выходит через <b>%s</b>.", esc(deviceID), esc(target))))
+	outcome := b.show(ctx, cb, b.afterConfigChange(fmt.Sprintf("🔀 <b>%s</b> теперь выходит через <b>%s</b>.", esc(deviceID), esc(target)), backToDevices))
 	outcome.toast = "Готово"
 	return outcome
 }
 
 // afterConfigChange reminds that edits do nothing until deployed -- the same
-// sentence hubctl prints, as buttons.
-func (b *Bot) afterConfigChange(_ context.Context, text string) screen {
+// sentence hubctl prints, as buttons. The back row names the section the change was
+// made in, so the operator returns where they were rather than always to devices.
+func (b *Bot) afterConfigChange(text string, back []tg.InlineKeyboardButton) screen {
 	return screen{
 		text: text + "\n\nИзменение вступит в силу после деплоя.",
 		markup: keyboard(
 			[]tg.InlineKeyboardButton{btn("🚀 Деплой", "dep")},
-			[]tg.InlineKeyboardButton{btn("📱 Устройства", "dev"), btn("🏠 Меню", "m")},
+			back,
 		),
 	}
 }
+
+// backToDevices and backToTunnels are the two return rows config edits use.
+var backToDevices = []tg.InlineKeyboardButton{btn("📱 Устройства", "dev"), btn("🏠 Меню", "m")}
+var backToTunnels = []tg.InlineKeyboardButton{btn("🚇 Туннели", "tun"), btn("🏠 Меню", "m")}
 
 // --- add -------------------------------------------------------------------
 
@@ -324,7 +344,7 @@ func (b *Bot) finishDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, egress 
 
 	release, busyWith, ok := b.gate.Acquire("добавление устройства " + deviceID)
 	if !ok {
-		return result{toast: "⏳ Занято: " + busyWith, alert: true}
+		return busyResult(busyWith)
 	}
 	defer release()
 
@@ -351,7 +371,7 @@ func (b *Bot) finishDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, egress 
 	if outcome := b.sendProfile(ctx, cfg.Hub, deviceID, address, privateKey); outcome != nil {
 		return *outcome
 	}
-	view := b.afterConfigChange(ctx, fmt.Sprintf("✅ Устройство <b>%s</b> добавлено (%s → %s).\nПрофиль и QR-код выше — доставьте их на устройство и удалите из чата.", esc(deviceID), esc(address), esc(egress)))
+	view := b.afterConfigChange(fmt.Sprintf("✅ Устройство <b>%s</b> добавлено (%s → %s).\nПрофиль и QR-код выше — доставьте их на устройство и удалите из чата.", esc(deviceID), esc(address), esc(egress)), backToDevices)
 	b.sendScreen(ctx, view)
 	return result{toast: "Устройство добавлено"}
 }
@@ -385,7 +405,7 @@ func (b *Bot) sendProfile(ctx context.Context, hub domain.Hub, deviceID, address
 func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
 	release, busyWith, ok := b.gate.Acquire("перевыпуск профиля " + deviceID)
 	if !ok {
-		return result{toast: "⏳ Занято: " + busyWith, alert: true}
+		return busyResult(busyWith)
 	}
 	defer release()
 
@@ -424,7 +444,7 @@ func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID 
 	if outcome := b.sendProfile(ctx, cfg.Hub, deviceID, device.Address, privateKey); outcome != nil {
 		return *outcome
 	}
-	view := b.afterConfigChange(ctx, fmt.Sprintf("📤 Профиль <b>%s</b> перевыпущен, отзыв снят (если был).\nСтарый профиль перестанет работать после деплоя.", esc(deviceID)))
+	view := b.afterConfigChange(fmt.Sprintf("📤 Профиль <b>%s</b> перевыпущен, отзыв снят (если был).\nСтарый профиль перестанет работать после деплоя.", esc(deviceID)), backToDevices)
 	b.sendScreen(ctx, view)
 	return result{toast: "Профиль перевыпущен"}
 }
@@ -432,7 +452,7 @@ func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID 
 func (b *Bot) revokeDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
 	release, busyWith, ok := b.gate.Acquire("отзыв устройства " + deviceID)
 	if !ok {
-		return result{toast: "⏳ Занято: " + busyWith, alert: true}
+		return busyResult(busyWith)
 	}
 	defer release()
 
@@ -440,8 +460,7 @@ func (b *Bot) revokeDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID s
 	if err := b.Revocations.Add(ctx, deviceID); err != nil {
 		return result{toast: err.Error(), alert: true}
 	}
-	outcome := b.show(ctx, cb, b.afterConfigChange(ctx,
-		fmt.Sprintf("🚫 Устройство <b>%s</b> отозвано.", esc(deviceID))))
+	outcome := b.show(ctx, cb, b.afterConfigChange(fmt.Sprintf("🚫 Устройство <b>%s</b> отозвано.", esc(deviceID)), backToDevices))
 	outcome.toast = "Отозвано"
 	return outcome
 }

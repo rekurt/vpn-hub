@@ -142,6 +142,49 @@ func TestDeployWritesTheRevision(t *testing.T) {
 	}
 }
 
+// unrevoke undoes revoke, so a mistaken revocation is fixable over SSH without
+// hand-editing the state file.
+func TestDeviceUnrevokeLiftsARevocation(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+
+	if output, err := run(t, "device", "revoke", "laptop", "--state-dir", stateDir); err != nil {
+		t.Fatalf("revoke: %v (%s)", err, output)
+	}
+	output, err := run(t, "device", "unrevoke", "laptop", "--state-dir", stateDir)
+	if err != nil {
+		t.Fatalf("unrevoke: %v (%s)", err, output)
+	}
+	if !strings.Contains(output, "lifted the revocation") {
+		t.Fatalf("unexpected output %q", output)
+	}
+}
+
+// subscription restore is the SSH-side counterpart to the bot's LKG button.
+func TestSubscriptionRestoreReturnsLastKnownGood(t *testing.T) {
+	t.Parallel()
+	configDir := t.TempDir()
+	links := filepath.Join(configDir, "subscriptions")
+	if err := os.MkdirAll(links, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The active link is broken; the last-known-good one still works.
+	if err := os.WriteFile(filepath.Join(links, "xray.link"), []byte("vless://u@2.2.2.2:443?type=tcp\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(links, "xray.link.last-known-good"), []byte("vless://u@1.1.1.1:443?type=tcp\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := run(t, "subscription", "restore", "xray", "--config-dir", configDir)
+	if err != nil {
+		t.Fatalf("restore: %v (%s)", err, output)
+	}
+	if !strings.Contains(output, "restored 1.1.1.1:443") {
+		t.Fatalf("expected the last-known-good upstream, got %q", output)
+	}
+}
+
 func TestDeployWithConfirmationArmsTheRollback(t *testing.T) {
 	t.Parallel()
 	config := writeConfig(t)

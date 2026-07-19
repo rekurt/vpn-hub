@@ -46,6 +46,9 @@ func ParseDump(output string) (domain.IngressObservation, error) {
 		}
 
 		peer := domain.PeerObservation{PublicKey: fields[0]}
+		if fields[2] != unset {
+			peer.Endpoint = fields[2]
+		}
 		if fields[3] != unset {
 			peer.AllowedIPs = strings.Split(fields[3], ",")
 		}
@@ -55,6 +58,12 @@ func ParseDump(output string) (domain.IngressObservation, error) {
 		}
 		if handshake > 0 {
 			peer.LatestHandshake = time.Unix(handshake, 0).UTC()
+		}
+		// Traffic counters answer "does this device actually use the hub"; a line
+		// short enough to lack them still describes a valid peer.
+		if len(fields) >= 7 {
+			peer.RxBytes, _ = strconv.ParseUint(fields[5], 10, 64)
+			peer.TxBytes, _ = strconv.ParseUint(fields[6], 10, 64)
 		}
 		state.Peers = append(state.Peers, peer)
 	}

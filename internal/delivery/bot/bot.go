@@ -9,6 +9,7 @@ import (
 	"time"
 
 	configadapter "vpn-hub/internal/adapters/config"
+	"vpn-hub/internal/adapters/health"
 	"vpn-hub/internal/adapters/linux"
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	tg "vpn-hub/internal/adapters/telegram"
@@ -51,9 +52,34 @@ type settingsStore interface {
 	Save(ctx context.Context, settings runtimeadapter.BotSettings) error
 }
 
+// offsetStore remembers the last processed Telegram update so a restart resumes
+// past it instead of replaying the backlog.
+type offsetStore interface {
+	Load() (int64, error)
+	Save(offset int64) error
+}
+
+// keyRotator replaces the hub key, keeping the previous one recoverable.
+type keyRotator interface {
+	Rotate() (publicKey string, err error)
+}
+
+// peerObserver reads the live ingress interface: who connected, when, how much.
+type peerObserver interface {
+	Observe(ctx context.Context, name string) (domain.IngressObservation, error)
+}
+
 // refreshFunc proves subscription candidates and promotes one, reporting progress
 // as it goes so a minutes-long canary run does not look hung in the chat.
 type refreshFunc func(ctx context.Context, tunnel domain.Tunnel, progress func(tried, total int, rejected []string)) (domain.ProxyTunnel, []string, error)
+
+// upstreamStore is the subscription link files: the active upstream and the
+// last-known-good one kept beside it.
+type upstreamStore interface {
+	Current(tunnelID string) (current domain.ProxyTunnel, hasCurrent, hasPrevious bool)
+	Restore(tunnelID string) (domain.ProxyTunnel, error)
+	Write(ctx context.Context, tunnel domain.Tunnel, chosen domain.ProxyTunnel) error
+}
 
 // Bot is the Telegram delivery. It is the operator's seat, not the reconciler:
 // like hubctl it edits configuration and writes state, and the agent converges the
@@ -77,23 +103,33 @@ type Bot struct {
 	Revocations   runtimeadapter.RevocationStore
 	Profiles      runtimeadapter.AmneziaProfileRenderer
 	Settings      settingsStore
+	Offsets       offsetStore
 
-	Journal journalReader
-	Units   unitManager
-	QR      qrEncoder
-	Host    func() (linux.HostSnapshot, error)
-	Uplink  func(ctx context.Context) (string, error)
-	Refresh refreshFunc
-	Now     func() time.Time
+	Journal   journalReader
+	Units     unitManager
+	QR        qrEncoder
+	Keys      keyRotator
+	Peers     peerObserver
+	Host      func() (linux.HostSnapshot, error)
+	Uplink    func(ctx context.Context) (string, error)
+	Refresh   refreshFunc
+	Upstreams upstreamStore
+	// Fetch and Parse list a subscription's candidates without touching the host;
+	// Prove tries exactly one in the canary namespace.
+	Fetch func(ctx context.Context, url string) ([]byte, error)
+	Parse func(payload []byte) ([]domain.ProxyTunnel, error)
+	Prove func(ctx context.Context, candidate domain.ProxyTunnel, uplink string) error
+	Now   func() time.Time
 
-	gate    opsGate
-	dialogs dialogs
-	alerts  *alertSwitches
-	health  *healthBoard
-	self    *selfMarks
-	deploy  *deployWatch
-	events  chan event
-	wg      sync.WaitGroup
+	gate       opsGate
+	dialogs    dialogs
+	alerts     *alertSwitches
+	health     *healthBoard
+	self       *selfMarks
+	deploy     *deployWatch
+	candidates candidateCache
+	events     chan event
+	wg         sync.WaitGroup
 }
 
 // New wires the production bot. Fields stay exported so tests can build a Bot by
@@ -115,15 +151,24 @@ func New(cfg Config, client *tg.Client, configPath, stateDir, configDir, runtime
 		Confirmations: runtimeadapter.ConfirmationStore{StateDir: stateDir},
 		Revocations:   runtimeadapter.RevocationStore{StateDir: stateDir},
 		Settings:      runtimeadapter.BotSettingsStore{StateDir: stateDir},
+		Offsets:       runtimeadapter.OffsetStore{StateDir: stateDir},
 
-		Journal: linux.Journal{},
-		Units:   linux.Systemctl{},
-		QR:      linux.QREncoder{},
-		Host:    linux.HostInfo{}.Snapshot,
-		Uplink:  linux.NetConf{}.UplinkInterface,
-		Now:     time.Now,
+		Journal:   linux.Journal{},
+		Units:     linux.Systemctl{},
+		QR:        linux.QREncoder{},
+		Keys:      linux.ServerKeyFile{Path: serverKey},
+		Peers:     linux.Ingress{SecretsDir: runtimeDir},
+		Host:      linux.HostInfo{}.Snapshot,
+		Uplink:    linux.NetConf{}.UplinkInterface,
+		Upstreams: linux.UpstreamFile{Dir: configDir},
+		Fetch:     health.HTTPSSubscriptionFetcher{}.Fetch,
+		Parse:     linux.ParseSubscription,
+		Now:       time.Now,
 	}
 	b.Refresh = b.canaryRefresh
+	b.Prove = func(ctx context.Context, candidate domain.ProxyTunnel, uplink string) error {
+		return linux.Canary{Egress: linux.Egress{SecretsDir: runtimeDir}}.Try(ctx, candidate, uplink)
+	}
 	b.init()
 	return b
 }
@@ -157,17 +202,50 @@ func (b *Bot) logf(format string, args ...any) {
 	_, _ = fmt.Fprintf(b.Out, format+"\n", args...)
 }
 
-// spawn runs a worker the bot waits for on shutdown.
+// spawn runs a one-shot worker the bot waits for on shutdown. A panic is recovered
+// and logged; the worker is not restarted, which is right for a single flow (a
+// deploy, a refresh) but wrong for a watcher -- see supervise.
 func (b *Bot) spawn(name string, worker func()) {
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
-		defer func() {
-			if reason := recover(); reason != nil {
-				b.logf("panic in %s: %v", name, reason)
+		b.guarded(name, worker)
+	}()
+}
+
+func (b *Bot) guarded(name string, worker func()) {
+	defer func() {
+		if reason := recover(); reason != nil {
+			b.logf("panic in %s: %v", name, reason)
+		}
+	}()
+	worker()
+}
+
+// supervise runs a long-lived watcher and restarts it after a panic with backoff.
+// A watcher that dies silently is the worst failure the bot has: notifications
+// simply stop, and nothing in the chat says so. A clean exit (context cancelled on
+// shutdown) is not restarted.
+func (b *Bot) supervise(ctx context.Context, name string, worker func()) {
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		backoff := time.Second
+		for ctx.Err() == nil {
+			b.guarded(name, worker)
+			if ctx.Err() != nil {
+				return
 			}
-		}()
-		worker()
+			b.logf("%s stopped unexpectedly; restarting in %s", name, backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
+		}
 	}()
 }
 
@@ -181,6 +259,7 @@ var botCommands = []tg.BotCommand{
 	{Command: "routes", Description: "Маршруты"},
 	{Command: "logs", Description: "Логи"},
 	{Command: "host", Description: "Хост и юниты"},
+	{Command: "hub", Description: "Параметры хаба"},
 	{Command: "settings", Description: "Уведомления"},
 	{Command: "cancel", Description: "Прервать диалог"},
 }
@@ -194,19 +273,31 @@ func (b *Bot) Run(ctx context.Context) error {
 		b.logf("setMyCommands: %v", err)
 	}
 
-	b.spawn("notifier", func() { b.notifier(ctx) })
-	b.spawn("journal-watcher", func() { b.watchJournal(ctx) })
-	b.spawn("file-watcher", func() { b.watchStateFiles(ctx) })
-	b.spawn("health-prober", func() { b.probeHealth(ctx) })
-	b.spawn("drift-watcher", func() { b.watchDrift(ctx) })
-	b.spawn("subscription-scheduler", func() { b.scheduleRefreshes(ctx) })
+	b.supervise(ctx, "notifier", func() { b.notifier(ctx) })
+	b.supervise(ctx, "journal-watcher", func() { b.watchJournal(ctx) })
+	b.supervise(ctx, "file-watcher", func() { b.watchStateFiles(ctx) })
+	b.supervise(ctx, "health-prober", func() { b.probeHealth(ctx) })
+	b.supervise(ctx, "drift-watcher", func() { b.watchDrift(ctx) })
+	b.supervise(ctx, "subscription-scheduler", func() { b.scheduleRefreshes(ctx) })
+
+	b.resumePendingDeploy(ctx)
 
 	menu := scr(renderMain())
 	if _, err := b.API.SendMessage(ctx, b.Cfg.AdminID, "🤖 Бот запущен.\n\n"+menu.text, menu.markup); err != nil {
 		b.logf("startup message: %v", err)
 	}
 
-	var offset int64
+	// Resume past the last processed update rather than replaying the backlog: a
+	// restart mid-deploy must not re-run a confirmed key rotation or upstream swap.
+	offset := int64(0)
+	if b.Offsets != nil {
+		if saved, err := b.Offsets.Load(); err != nil {
+			b.logf("load telegram offset: %v", err)
+		} else {
+			offset = saved
+		}
+	}
+
 	for ctx.Err() == nil {
 		updates, err := b.API.GetUpdates(ctx, offset, 25)
 		if err != nil {
@@ -223,6 +314,14 @@ func (b *Bot) Run(ctx context.Context) error {
 		for _, update := range updates {
 			offset = update.ID + 1
 			b.handleUpdate(ctx, update)
+			// Persisted after handling so a crash resumes past this update. A
+			// spawned long op is already running by now, so it is treated as
+			// consumed -- the safe direction: never auto-repeat a destructive op.
+			if b.Offsets != nil {
+				if err := b.Offsets.Save(offset); err != nil {
+					b.logf("save telegram offset: %v", err)
+				}
+			}
 		}
 	}
 	b.wg.Wait()
@@ -294,6 +393,8 @@ func (b *Bot) handleCommand(ctx context.Context, command string) {
 		b.sendScreen(ctx, b.buildLogsMenu(ctx))
 	case "host":
 		b.sendScreen(ctx, b.buildHost(ctx))
+	case "hub":
+		b.sendScreen(ctx, b.buildHub(ctx))
 	case "settings":
 		b.sendScreen(ctx, b.buildSettings())
 	case "cancel":
@@ -316,11 +417,28 @@ type result struct {
 }
 
 func (b *Bot) handleCallback(ctx context.Context, callback *tg.CallbackQuery) {
-	parts := strings.Split(callback.Data, ":")
+	// The scheme is area:action:arg1:arg2, and only the final argument can carry a
+	// colon -- a route or address is IPv6 (fd00::/8), an id never is. Splitting into
+	// at most four keeps that last value whole; a plain Split would shatter
+	// "tun:rd:wg-nl:fd00::/8" into pieces no handler could reassemble.
+	parts := strings.SplitN(callback.Data, ":", 4)
 	outcome := b.routeCallback(ctx, callback, parts)
-	if err := b.API.AnswerCallbackQuery(ctx, callback.ID, outcome.toast, outcome.alert); err != nil {
+	if err := b.API.AnswerCallbackQuery(ctx, callback.ID, clampToast(outcome.toast), outcome.alert); err != nil {
 		b.logf("answerCallbackQuery: %v", err)
 	}
+}
+
+// clampToast keeps a callback answer within Telegram's limit. answerCallbackQuery
+// caps the text near 200 characters, and a raw validation or editor error can be
+// far longer; past the cap the whole answer is rejected with a 400 and the button
+// spins forever -- worst exactly on the failure the toast was meant to report.
+func clampToast(text string) string {
+	const limit = 190
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func (b *Bot) routeCallback(ctx context.Context, cb *tg.CallbackQuery, parts []string) result {
@@ -352,6 +470,8 @@ func (b *Bot) routeCallback(ctx context.Context, cb *tg.CallbackQuery, parts []s
 		return b.routeLogs(ctx, cb, action, args)
 	case "host":
 		return b.routeHost(ctx, cb, action)
+	case "hub":
+		return b.routeHub(ctx, cb, action, args)
 	case "set":
 		return b.routeSettings(ctx, cb, action, args)
 	default:

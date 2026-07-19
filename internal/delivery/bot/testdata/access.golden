@@ -1,0 +1,10 @@
+👥 <b>Доступ к wg-nl</b>
+
+Egress разрешён только отмеченным устройствам.
+Снимите все отметки, чтобы снова разрешить всем.
+
+--- keyboard ---
+[☐ laptop](tun:at:wg-nl:laptop)
+[☑️ macbook](tun:at:wg-nl:macbook)
+[☐ phone](tun:at:wg-nl:phone)
+[⬅️ К туннелю](tun:c:wg-nl) | [🏠 Меню](m)

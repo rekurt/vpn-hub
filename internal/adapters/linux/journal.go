@@ -36,6 +36,9 @@ func (j Journal) run(ctx context.Context, name string, args ...string) (string, 
 
 // Tail returns the last lines for one unit, newest last.
 func (j Journal) Tail(ctx context.Context, unit string, lines int) (string, error) {
+	if err := ValidateUnitName(unit); err != nil {
+		return "", err
+	}
 	return j.run(ctx, "journalctl", "-u", unit, "-n", strconv.Itoa(lines),
 		"--no-pager", "-o", "short-iso")
 }

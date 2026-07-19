@@ -3,6 +3,7 @@ package bot
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"vpn-hub/internal/domain"
 )
@@ -84,6 +85,49 @@ func TestHealthBoardPrune(t *testing.T) {
 	}
 	if board.get("kept") == nil {
 		t.Fatal("a present tunnel was pruned")
+	}
+}
+
+// The notifier's delivery decision is where a refactor most easily drops or
+// duplicates an alert; pin every branch.
+func TestShouldDeliver(t *testing.T) {
+	t.Parallel()
+	instance, _ := hubFixture(t)
+	st := newNotifierState()
+	base := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+
+	// An auto-rollback is delivered, and it suppresses an out-of-band notice that
+	// follows within two minutes (the rollback is what rewrote the state files).
+	if !instance.shouldDeliver(st, event{category: "rollback", text: "rb"}, base) {
+		t.Fatal("rollback must be delivered")
+	}
+	if instance.shouldDeliver(st, event{category: "oob", text: "changed"}, base.Add(30*time.Second)) {
+		t.Fatal("oob within 2 min of a rollback must be suppressed")
+	}
+	if !instance.shouldDeliver(st, event{category: "oob", text: "changed"}, base.Add(3*time.Minute)) {
+		t.Fatal("oob well after a rollback must be delivered")
+	}
+
+	// Debounce collapses repeats of the same text within the window, but a
+	// different text passes.
+	err := event{category: "agent-error", text: "boom", debounce: 15 * time.Minute}
+	if !instance.shouldDeliver(st, err, base) {
+		t.Fatal("first agent error must be delivered")
+	}
+	if instance.shouldDeliver(st, err, base.Add(time.Minute)) {
+		t.Fatal("a repeat within the debounce window must be suppressed")
+	}
+	if !instance.shouldDeliver(st, event{category: "agent-error", text: "other", debounce: 15 * time.Minute}, base.Add(time.Minute)) {
+		t.Fatal("a different error text must be delivered")
+	}
+	if !instance.shouldDeliver(st, err, base.Add(20*time.Minute)) {
+		t.Fatal("the same error after the window must be delivered again")
+	}
+
+	// A muted category is never delivered.
+	instance.alerts.set("drift", false)
+	if instance.shouldDeliver(st, event{category: "drift", text: "d"}, base) {
+		t.Fatal("a muted category must not be delivered")
 	}
 }
 

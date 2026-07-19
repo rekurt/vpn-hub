@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"sort"
 	"strings"
 	"time"
 
@@ -86,6 +87,21 @@ func gib(bytes uint64) string {
 	return fmt.Sprintf("%.1f ГиБ", float64(bytes)/(1<<30))
 }
 
+// formatBytes picks a readable unit: traffic counters range from kilobytes on a
+// fresh peer to hundreds of gigabytes, and one fixed unit misreads both ends.
+func formatBytes(bytes uint64) string {
+	switch {
+	case bytes >= 1<<30:
+		return fmt.Sprintf("%.1f ГиБ", float64(bytes)/(1<<30))
+	case bytes >= 1<<20:
+		return fmt.Sprintf("%.1f МиБ", float64(bytes)/(1<<20))
+	case bytes >= 1<<10:
+		return fmt.Sprintf("%.0f КиБ", float64(bytes)/(1<<10))
+	default:
+		return fmt.Sprintf("%d Б", bytes)
+	}
+}
+
 func healthIcon(status domain.HealthStatus) string {
 	switch status {
 	case domain.HealthHealthy:
@@ -113,7 +129,7 @@ func renderMain() (string, *tg.InlineKeyboardMarkup) {
 		[]tg.InlineKeyboardButton{btn("🚇 Туннели", "tun"), btn("📡 Подписки", "sub")},
 		[]tg.InlineKeyboardButton{btn("🚀 Деплой", "dep"), btn("🗺 Маршруты", "rt")},
 		[]tg.InlineKeyboardButton{btn("📜 Логи", "log"), btn("🖥 Хост", "host")},
-		[]tg.InlineKeyboardButton{btn("🔔 Настройки", "set")},
+		[]tg.InlineKeyboardButton{btn("⚙️ Хаб", "hub"), btn("🔔 Настройки", "set")},
 	)
 }
 
@@ -139,6 +155,10 @@ type statusView struct {
 	DriftErr    string
 	Health      []healthEntry
 	HealthEvery time.Duration
+	// DevicesOnline counts fresh handshakes; -1 means the interface could not be
+	// observed and nothing should be claimed.
+	DevicesOnline int
+	DevicesTotal  int
 }
 
 func renderStatus(view statusView) (string, *tg.InlineKeyboardMarkup) {
@@ -153,6 +173,9 @@ func renderStatus(view statusView) (string, *tg.InlineKeyboardMarkup) {
 	default:
 		fmt.Fprintf(&b, "Ревизия: <code>%s</code> (создана %s)\n", esc(view.State.Revision), ruAge(view.Now, view.State.GeneratedAt))
 		fmt.Fprintf(&b, "Туннелей: %d, устройств: %d\n", len(view.State.Tunnels), len(view.State.Devices))
+	}
+	if view.DevicesOnline >= 0 && view.DevicesTotal > 0 {
+		fmt.Fprintf(&b, "Онлайн: %d из %d устройств\n", view.DevicesOnline, view.DevicesTotal)
 	}
 
 	if view.Pending != nil {
@@ -214,6 +237,38 @@ type deviceEntry struct {
 	PublicKey string
 	Egress    string
 	Revoked   bool
+	// Peer is the live kernel state for this device's key; nil when the ingress
+	// interface has no such peer (not yet deployed, or observation unavailable).
+	Peer *domain.PeerObservation
+	Now  time.Time
+}
+
+// online means the handshake is fresh enough that traffic flowed moments ago.
+func (d deviceEntry) online() bool {
+	return d.Peer != nil && !d.Peer.LatestHandshake.IsZero() &&
+		d.Now.Sub(d.Peer.LatestHandshake) <= linux.HandshakeGrace
+}
+
+func (d deviceEntry) presence() string {
+	switch {
+	case d.Peer == nil || d.Peer.LatestHandshake.IsZero():
+		return "не подключалось"
+	case d.online():
+		return "онлайн"
+	default:
+		return "было " + ruAge(d.Now, d.Peer.LatestHandshake)
+	}
+}
+
+func (d deviceEntry) presenceIcon() string {
+	switch {
+	case d.Revoked:
+		return "🚫"
+	case d.online():
+		return "🟢"
+	default:
+		return "⚪️"
+	}
 }
 
 func renderDevices(devices []deviceEntry) (string, *tg.InlineKeyboardMarkup) {
@@ -225,9 +280,10 @@ func renderDevices(devices []deviceEntry) (string, *tg.InlineKeyboardMarkup) {
 	for _, device := range devices {
 		mark := ""
 		if device.Revoked {
-			mark = " 🚫 отозвано"
+			mark = ", отозвано"
 		}
-		fmt.Fprintf(&b, "• <code>%s</code> — %s → %s%s\n", esc(device.ID), esc(device.Address), esc(device.Egress), mark)
+		fmt.Fprintf(&b, "%s <code>%s</code> → %s — %s%s\n",
+			device.presenceIcon(), esc(device.ID), esc(device.Egress), device.presence(), mark)
 	}
 
 	var rows [][]tg.InlineKeyboardButton
@@ -248,6 +304,10 @@ func renderDeviceCard(device deviceEntry) (string, *tg.InlineKeyboardMarkup) {
 	fmt.Fprintf(&b, "Адрес: <code>%s</code>\n", esc(device.Address))
 	fmt.Fprintf(&b, "Egress: <code>%s</code>\n", esc(device.Egress))
 	fmt.Fprintf(&b, "Ключ: <code>%s…</code>\n", esc(shorten(device.PublicKey, 12)))
+	fmt.Fprintf(&b, "\n%s %s\n", device.presenceIcon(), device.presence())
+	if device.Peer != nil && (device.Peer.RxBytes > 0 || device.Peer.TxBytes > 0) {
+		fmt.Fprintf(&b, "Трафик: ⭱ %s от устройства, ⭳ %s к нему\n", formatBytes(device.Peer.RxBytes), formatBytes(device.Peer.TxBytes))
+	}
 	if device.Revoked {
 		b.WriteString("\n🚫 <b>Отозвано</b>: устройство исключается из ревизии при деплое.\nПеревыпуск профиля снимет отзыв.\n")
 	}
@@ -262,11 +322,15 @@ func renderDeviceCard(device deviceEntry) (string, *tg.InlineKeyboardMarkup) {
 	return b.String(), keyboard(rows...)
 }
 
+// shorten truncates by runes, not bytes: a server name from a subscription can be
+// an IDN, and cutting mid-rune yields invalid UTF-8 that Telegram rejects with a
+// 400 -- taking the whole screen down with it.
 func shorten(value string, length int) string {
-	if len(value) <= length {
+	runes := []rune(value)
+	if len(runes) <= length {
 		return value
 	}
-	return value[:length]
+	return string(runes[:length])
 }
 
 func renderEgressChoice(deviceID, current string, egresses []string) (string, *tg.InlineKeyboardMarkup) {
@@ -301,6 +365,7 @@ func renderTunnels(tunnels []tunnelEntry) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
 	b.WriteString("🚇 <b>Туннели</b>\n\n")
 	var rows [][]tg.InlineKeyboardButton
+	enabled := 0
 	for _, entry := range tunnels {
 		tunnel := entry.Tunnel
 		icon := "⚪️"
@@ -309,11 +374,43 @@ func renderTunnels(tunnels []tunnelEntry) (string, *tg.InlineKeyboardMarkup) {
 		}
 		if !tunnel.IsEnabled() {
 			icon = "⏸"
+		} else {
+			enabled++
 		}
 		fmt.Fprintf(&b, "%s <code>%s</code> — %s, %s, %s\n", icon, esc(tunnel.ID), esc(string(tunnel.Role)), esc(string(tunnel.Type)), onOff(tunnel.IsEnabled()))
 		rows = append(rows, []tg.InlineKeyboardButton{btn(tunnel.ID, "tun:c:"+tunnel.ID)})
 	}
+	if enabled > 0 {
+		rows = append(rows, []tg.InlineKeyboardButton{btn("🩺 Проверить все", "tun:ta")})
+	}
 	rows = append(rows, backRow)
+	return b.String(), keyboard(rows...)
+}
+
+// renderAccess is the allowed_devices editor: which devices may use this egress.
+func renderAccess(tunnelID string, devices []string, allowed []string) (string, *tg.InlineKeyboardMarkup) {
+	allowedSet := map[string]bool{}
+	for _, id := range allowed {
+		allowedSet[id] = true
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "👥 <b>Доступ к %s</b>\n\n", esc(tunnelID))
+	if len(allowed) == 0 {
+		b.WriteString("Список пуст — egress разрешён <b>всем</b> устройствам.\nОтметьте устройство, чтобы ограничить доступ только отмеченными.\n")
+	} else {
+		b.WriteString("Egress разрешён только отмеченным устройствам.\nСнимите все отметки, чтобы снова разрешить всем.\n")
+	}
+	var rows [][]tg.InlineKeyboardButton
+	for _, id := range devices {
+		mark := "☐"
+		if allowedSet[id] {
+			mark = "☑️"
+		}
+		if data := "tun:at:" + tunnelID + ":" + id; len(data) <= 64 {
+			rows = append(rows, []tg.InlineKeyboardButton{btn(mark+" "+id, data)})
+		}
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID), btn("🏠 Меню", "m")})
 	return b.String(), keyboard(rows...)
 }
 
@@ -331,6 +428,8 @@ func renderTunnelCard(entry tunnelEntry, now time.Time) (string, *tg.InlineKeybo
 	}
 	if len(tunnel.AllowedDevices) > 0 {
 		fmt.Fprintf(&b, "Только для: <code>%s</code>\n", esc(strings.Join(tunnel.AllowedDevices, ", ")))
+	} else if tunnel.Role == domain.RoleEgress {
+		b.WriteString("Доступ: все устройства\n")
 	}
 	if entry.Health != nil {
 		fmt.Fprintf(&b, "\n%s %s (%s)\n", healthIcon(entry.Health.Status), esc(entry.Health.Reason), ruAge(now, entry.Health.CheckedAt))
@@ -342,6 +441,11 @@ func renderTunnelCard(entry tunnelEntry, now time.Time) (string, *tg.InlineKeybo
 	} else {
 		rows = append(rows, []tg.InlineKeyboardButton{btn("▶️ Включить", "tun:on:"+tunnel.ID), btn("🩺 Проверить", "tun:t:"+tunnel.ID)})
 	}
+	probesRow := []tg.InlineKeyboardButton{btn("🩺 Пробы (tcp/https/dns)", "tun:pr:"+tunnel.ID)}
+	if tunnel.Role == domain.RoleEgress {
+		probesRow = append(probesRow, btn("👥 Доступ", "tun:ac:"+tunnel.ID))
+	}
+	rows = append(rows, probesRow)
 	for _, route := range tunnel.Routes {
 		data := "tun:rd:" + tunnel.ID + ":" + route
 		if len(data) <= 64 {
@@ -397,11 +501,11 @@ func renderDeployPreview(view deployView) (string, *tg.InlineKeyboardMarkup) {
 			fmt.Fprintf(&b, " • %s\n", esc(change))
 		}
 	}
-	b.WriteString("\nСо страховкой агент вернёт предыдущую ревизию сам, если не подтвердить за 5 минут — даже если новая ревизия отрежет доступ.")
+	b.WriteString("\nСо страховкой агент вернёт предыдущую ревизию сам, если не подтвердить за выбранное время — даже если новая ревизия отрежет доступ.")
 
 	revision := view.Next.Revision
 	rows := [][]tg.InlineKeyboardButton{
-		{btn("✅ Применить (страховка 5 мин)", "dep:go:300:"+revision)},
+		{btn("✅ Со страховкой…", "dep:arm:"+revision)},
 		{btn("⚡ Применить без страховки", "dep:now:"+revision)},
 	}
 	if view.Current != nil {
@@ -476,6 +580,24 @@ func sameJSON(a, b any) bool {
 	return errA == nil && errB == nil && string(left) == string(right)
 }
 
+// renderConfirmWithinChoice offers the rollback deadline. The right length depends
+// on what is being deployed: a routine egress switch needs a minute, a firewall
+// experiment on a remote hub deserves half an hour of grace.
+func renderConfirmWithinChoice(revision string) (string, *tg.InlineKeyboardMarkup) {
+	text := "⏱ За какое время успеете подтвердить? Не подтвердите — агент вернёт предыдущую ревизию сам."
+	return text, keyboard(
+		[]tg.InlineKeyboardButton{
+			btn("1 мин", "dep:go:60:"+revision),
+			btn("5 мин", "dep:go:300:"+revision),
+		},
+		[]tg.InlineKeyboardButton{
+			btn("15 мин", "dep:go:900:"+revision),
+			btn("30 мин", "dep:go:1800:"+revision),
+		},
+		[]tg.InlineKeyboardButton{btn("✖️ Назад", "dep")},
+	)
+}
+
 func renderCountdown(revision string, left time.Duration) (string, *tg.InlineKeyboardMarkup) {
 	text := fmt.Sprintf("⏳ Ревизия <code>%s</code> применена и ждёт подтверждения.\nОсталось: <b>%s</b>\n\nБез подтверждения агент вернёт предыдущую ревизию.", esc(revision), ruDuration(left))
 	return text, keyboard([]tg.InlineKeyboardButton{btn("✅ Подтвердить", "dep:ok"), btn("↩️ Откатить", "dep:rb!")})
@@ -489,10 +611,11 @@ func renderCountdownOverdue(revision string) (string, *tg.InlineKeyboardMarkup) 
 // --- Subscriptions ---------------------------------------------------------
 
 type subEntry struct {
-	ID          string
-	Enabled     bool
-	Upstream    string
-	HasLastGood bool
+	ID       string
+	Enabled  bool
+	Upstream string
+	LastGood bool
+	Health   *healthEntry
 }
 
 func renderSubs(entries []subEntry, every time.Duration) (string, *tg.InlineKeyboardMarkup) {
@@ -507,15 +630,81 @@ func renderSubs(entries []subEntry, every time.Duration) (string, *tg.InlineKeyb
 		if upstream == "" {
 			upstream = "upstream ещё не выбран"
 		}
-		fmt.Fprintf(&b, "• <code>%s</code> (%s) — %s", esc(entry.ID), onOff(entry.Enabled), esc(upstream))
-		if entry.HasLastGood {
-			b.WriteString(", есть last-known-good")
+		icon := "⚪️"
+		if entry.Health != nil {
+			icon = healthIcon(entry.Health.Status)
 		}
-		b.WriteString("\n")
-		rows = append(rows, []tg.InlineKeyboardButton{btn("🔄 Обновить "+entry.ID, "sub:r:"+entry.ID)})
+		if !entry.Enabled {
+			icon = "⏸"
+		}
+		fmt.Fprintf(&b, "%s <code>%s</code> — %s\n", icon, esc(entry.ID), esc(upstream))
+		rows = append(rows, []tg.InlineKeyboardButton{btn(entry.ID, "sub:c:"+entry.ID)})
 	}
 	fmt.Fprintf(&b, "\nАвтообновление: раз в %s, кандидат сперва доказывает работоспособность в изолированном namespace.", ruDuration(every))
 	rows = append(rows, backRow)
+	return b.String(), keyboard(rows...)
+}
+
+func renderSubCard(entry subEntry) (string, *tg.InlineKeyboardMarkup) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "📡 <b>%s</b> (%s)\n\n", esc(entry.ID), onOff(entry.Enabled))
+	if entry.Upstream == "" {
+		b.WriteString("Upstream ещё не выбран: запустите обновление.\n")
+	} else {
+		fmt.Fprintf(&b, "Upstream: <code>%s</code>\n", esc(entry.Upstream))
+	}
+	if entry.LastGood {
+		b.WriteString("Есть last-known-good — предыдущий работавший upstream.\n")
+	}
+	if entry.Health != nil {
+		fmt.Fprintf(&b, "\n%s %s\n", healthIcon(entry.Health.Status), esc(entry.Health.Reason))
+	}
+
+	rows := [][]tg.InlineKeyboardButton{
+		{btn("🔄 Обновить (авто)", "sub:r:"+entry.ID), btn("📋 Кандидаты", "sub:cand:"+entry.ID)},
+	}
+	if entry.LastGood {
+		rows = append(rows, []tg.InlineKeyboardButton{btn("↩️ Вернуть last-known-good", "sub:lkg:"+entry.ID)})
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ Подписки", "sub"), btn("🏠 Меню", "m")})
+	return b.String(), keyboard(rows...)
+}
+
+const candidatesPerPage = 8
+
+// renderCandidates lists what the provider currently offers. Picking one proves it
+// in the canary first, so a dead entry costs a wait, never the working upstream.
+func renderCandidates(tunnelID string, candidates []domain.ProxyTunnel, page int, current string) (string, *tg.InlineKeyboardMarkup) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "📋 <b>%s</b>: %d %s в подписке\n\n", esc(tunnelID), len(candidates),
+		ruPlural(len(candidates), "кандидат", "кандидата", "кандидатов"))
+	b.WriteString("Выбранный кандидат сперва проверяется в изолированном namespace; действующий upstream меняется только на доказанно рабочий.\n")
+
+	start := page * candidatesPerPage
+	end := min(start+candidatesPerPage, len(candidates))
+	var rows [][]tg.InlineKeyboardButton
+	for index := start; index < end; index++ {
+		candidate := candidates[index]
+		label := fmt.Sprintf("%s:%d", candidate.Server, candidate.Port)
+		if label == current {
+			label = "• " + label + " (текущий)"
+		}
+		rows = append(rows, []tg.InlineKeyboardButton{
+			btn(label, fmt.Sprintf("sub:pick:%s:%d", tunnelID, index)),
+		})
+	}
+	var pager []tg.InlineKeyboardButton
+	if page > 0 {
+		pager = append(pager, btn("⬅️", fmt.Sprintf("sub:cand:%s:%d", tunnelID, page-1)))
+	}
+	if end < len(candidates) {
+		pager = append(pager, btn("➡️", fmt.Sprintf("sub:cand:%s:%d", tunnelID, page+1)))
+	}
+	if len(pager) > 0 {
+		fmt.Fprintf(&b, "\nСтраница %d из %d\n", page+1, (len(candidates)+candidatesPerPage-1)/candidatesPerPage)
+		rows = append(rows, pager)
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ К подписке", "sub:c:"+tunnelID)})
 	return b.String(), keyboard(rows...)
 }
 
@@ -597,23 +786,41 @@ func renderLogsMenu(units []linux.UnitStatus) (string, *tg.InlineKeyboardMarkup)
 }
 
 func renderLogTail(unit, tail string) (string, *tg.InlineKeyboardMarkup) {
-	const limit = 3500
-	trimmed := strings.TrimSpace(tail)
-	if len(trimmed) > limit {
-		if cut := strings.IndexByte(trimmed[len(trimmed)-limit:], '\n'); cut >= 0 {
-			trimmed = trimmed[len(trimmed)-limit+cut+1:]
-		} else {
-			trimmed = trimmed[len(trimmed)-limit:]
-		}
+	// The budget is measured on the escaped content, not the raw journal: esc()
+	// turns one `<` into `&lt;`, so trimming the raw text to 3500 could still blow
+	// past Telegram's 4096-char cap and lose the whole screen -- exactly when the
+	// operator most needs the log.
+	content := esc(strings.TrimSpace(tail))
+	if content == "" {
+		content = "(журнал пуст)"
 	}
-	if trimmed == "" {
-		trimmed = "(журнал пуст)"
-	}
-	text := fmt.Sprintf("📜 <b>%s</b>\n<pre>%s</pre>", esc(unit), esc(trimmed))
+	content = tailWithinBudget(content, 3800)
+	text := fmt.Sprintf("📜 <b>%s</b>\n<pre>%s</pre>", esc(unit), content)
 	return text, keyboard(
 		[]tg.InlineKeyboardButton{btn("🔄 Обновить", "log:u:"+unit), btn("📄 Файлом (500)", "log:f:"+unit)},
 		[]tg.InlineKeyboardButton{btn("⬅️ Логи", "log"), btn("🏠 Меню", "m")},
 	)
+}
+
+// tailWithinBudget keeps the last runes of an already-escaped string under a char
+// budget, dropping whole leading lines. A newline never falls inside an HTML
+// entity esc() produces, so cutting at one cannot split an entity and yield markup
+// Telegram rejects.
+func tailWithinBudget(escaped string, limit int) string {
+	for len([]rune(escaped)) > limit {
+		cut := strings.IndexByte(escaped, '\n')
+		if cut < 0 {
+			break
+		}
+		escaped = escaped[cut+1:]
+	}
+	// A single line longer than the budget is pathological for journal output; cut
+	// it on a rune boundary. A leading entity fragment renders literally rather
+	// than breaking the message, and the result is always valid UTF-8.
+	if runes := []rune(escaped); len(runes) > limit {
+		escaped = string(runes[len(runes)-limit:])
+	}
+	return escaped
 }
 
 // --- Host ------------------------------------------------------------------
@@ -652,6 +859,85 @@ func renderHost(view hostView) (string, *tg.InlineKeyboardMarkup) {
 		[]tg.InlineKeyboardButton{btn("🔄 Обновить", "host"), btn("🔁 Перезапустить агента", "host:ra")},
 		backRow,
 	)
+}
+
+// --- Hub -------------------------------------------------------------------
+
+func renderHub(hub domain.Hub) (string, *tg.InlineKeyboardMarkup) {
+	var b strings.Builder
+	b.WriteString("⚙️ <b>Хаб</b>\n\n")
+	fmt.Fprintf(&b, "Endpoint: <code>%s</code>\n", esc(hub.Endpoint))
+	fmt.Fprintf(&b, "Клиентская сеть: <code>%s</code>\n", esc(hub.ClientCIDR))
+	fmt.Fprintf(&b, "DNS: <code>%s</code>\n", esc(hub.DNSAddress))
+	fmt.Fprintf(&b, "Публичный ключ: <code>%s…</code>\n", esc(shorten(hub.ServerPublicKey, 12)))
+	if len(hub.AWGInterface) > 0 {
+		b.WriteString("\n<b>AmneziaWG-параметры:</b>\n")
+		keys := make([]string, 0, len(hub.AWGInterface))
+		for key := range hub.AWGInterface {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			name, _ := domain.CanonicalAWGParameter(key)
+			fmt.Fprintf(&b, " • <code>%s = %s</code>\n", esc(name), esc(hub.AWGInterface[key]))
+		}
+	}
+	b.WriteString("\n⚠️ Смена endpoint, сети или DNS ломает уже выданные профили: устройства придётся перевыпустить.")
+
+	rows := [][]tg.InlineKeyboardButton{
+		{btn("✏️ Endpoint", "hub:e:endpoint"), btn("✏️ DNS", "hub:e:dns_address")},
+		{btn("✏️ Клиентская сеть", "hub:e:client_cidr"), btn("➕ AWG-параметр", "hub:aa")},
+	}
+	if len(hub.AWGInterface) > 0 {
+		keys := make([]string, 0, len(hub.AWGInterface))
+		for key := range hub.AWGInterface {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			name, _ := domain.CanonicalAWGParameter(key)
+			if data := "hub:ad:" + key; len(data) <= 64 {
+				rows = append(rows, []tg.InlineKeyboardButton{btn("➖ "+name, data)})
+			}
+		}
+	}
+	rows = append(rows,
+		[]tg.InlineKeyboardButton{btn("🔑 Ротация ключа хаба", "hub:rk"), btn("📦 Выгрузить конфиг", "hub:dl")},
+		backRow)
+	return b.String(), keyboard(rows...)
+}
+
+// --- Tunnel probes ---------------------------------------------------------
+
+var probeKinds = []struct {
+	Key, Field, Title, Example string
+}{
+	{"tcp", "tcp_address", "TCP", "10.20.0.1:443"},
+	{"https", "https_url", "HTTPS", "https://1.1.1.1/cdn-cgi/trace"},
+	{"dns", "dns_name", "DNS", "host.corp.internal"},
+}
+
+func renderProbes(tunnelID string, health domain.HealthCheck) (string, *tg.InlineKeyboardMarkup) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "🩺 <b>Пробы туннеля %s</b>\n\n", esc(tunnelID))
+	b.WriteString("Проба выполняется внутри namespace туннеля и отвечает на вопрос «идёт ли трафик прямо сейчас». Без проб здоровье — «неизвестно», и это честнее, чем «работает».\n\n")
+	values := map[string]string{"tcp": health.TCPAddress, "https": health.HTTPSURL, "dns": health.DNSName}
+	var rows [][]tg.InlineKeyboardButton
+	for _, kind := range probeKinds {
+		value := values[kind.Key]
+		if value == "" {
+			fmt.Fprintf(&b, "• %s: не задана\n", kind.Title)
+			rows = append(rows, []tg.InlineKeyboardButton{btn("➕ "+kind.Title, "tun:ps:"+tunnelID+":"+kind.Key)})
+			continue
+		}
+		fmt.Fprintf(&b, "• %s: <code>%s</code>\n", kind.Title, esc(value))
+		rows = append(rows, []tg.InlineKeyboardButton{
+			btn("✏️ "+kind.Title, "tun:ps:"+tunnelID+":"+kind.Key),
+			btn("➖ "+kind.Title, "tun:pd:"+tunnelID+":"+kind.Key),
+		})
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID), btn("🏠 Меню", "m")})
+	return b.String(), keyboard(rows...)
 }
 
 // --- Settings --------------------------------------------------------------

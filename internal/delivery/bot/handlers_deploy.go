@@ -43,6 +43,11 @@ func (b *Bot) routeDeploy(ctx context.Context, cb *tg.CallbackQuery, action stri
 	switch action {
 	case "":
 		return b.show(ctx, cb, b.buildDeployPreview(ctx))
+	case "arm":
+		if len(args) < 1 {
+			return result{toast: "Нет ревизии"}
+		}
+		return b.show(ctx, cb, scr(renderConfirmWithinChoice(args[0])))
 	case "go":
 		if len(args) < 2 {
 			return result{toast: "Нет параметров"}
@@ -81,7 +86,7 @@ func (b *Bot) routeDeploy(ctx context.Context, cb *tg.CallbackQuery, action stri
 func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRevision string, confirmWithin time.Duration) result {
 	release, busyWith, ok := b.gate.Acquire("деплой")
 	if !ok {
-		return result{toast: "⏳ Занято: " + busyWith, alert: true}
+		return busyResult(busyWith)
 	}
 	defer release()
 
@@ -106,6 +111,12 @@ func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRev
 		}
 	}
 	if err := b.Service.Save(ctx, state); err != nil {
+		// Arm ran but Save did not: a pending confirmation now points at a revision
+		// that was never written, and the agent would "roll back" to the already
+		// active one at the deadline. Clear it so nothing is armed over nothing.
+		if armed {
+			_ = b.Confirmations.Confirm()
+		}
 		return b.show(ctx, cb, renderFailure("ревизия не сохранилась", err))
 	}
 
@@ -156,7 +167,7 @@ func (b *Bot) confirmDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
 func (b *Bot) rollbackDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
 	release, busyWith, ok := b.gate.Acquire("откат")
 	if !ok {
-		return result{toast: "⏳ Занято: " + busyWith, alert: true}
+		return busyResult(busyWith)
 	}
 	defer release()
 
@@ -193,6 +204,31 @@ func (d *deployWatch) replace(cancel context.CancelFunc) {
 
 func (d *deployWatch) stop() {
 	d.replace(nil)
+}
+
+// resumePendingDeploy reattaches a countdown after a restart. The bot restarts on
+// every deploy, so an armed-and-unconfirmed revision is the normal state right
+// after applying one: without this the old countdown message freezes and the
+// deadline passes with no warning until the agent's auto-rollback line appears.
+func (b *Bot) resumePendingDeploy(ctx context.Context) {
+	pending, armed, err := b.Confirmations.Load()
+	if err != nil || !armed {
+		return
+	}
+	left := pending.Deadline.Sub(b.Now())
+	var view screen
+	if left > 0 {
+		view = scr(renderCountdown(pending.Revision, left))
+	} else {
+		view = scr(renderCountdownOverdue(pending.Revision))
+	}
+	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,
+		"↻ Возобновлён отсчёт после перезапуска бота.\n\n"+view.text, view.markup)
+	if err != nil {
+		b.logf("resume countdown: %v", err)
+		return
+	}
+	b.startCountdown(ctx, message.Chat.ID, message.ID, pending.Revision)
 }
 
 // startCountdown keeps the armed-deploy message alive: remaining time while the

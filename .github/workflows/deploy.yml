@@ -97,7 +97,11 @@ jobs:
               printf '%s\n' "$TELEGRAM_NOTIFICATIONS" | sed 's/^/  /'
             fi
           } | ssh root@"$HUB_HOST" '
+            set -e
             umask 077
+            # A trap clears the temp file if ssh dies mid-write, so a partial token
+            # never lingers in /etc/vpn-hub; the mv itself is atomic.
+            trap "rm -f /etc/vpn-hub/telegram.yaml.tmp" EXIT
             cat > /etc/vpn-hub/telegram.yaml.tmp
             mv /etc/vpn-hub/telegram.yaml.tmp /etc/vpn-hub/telegram.yaml
           '

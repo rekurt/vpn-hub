@@ -36,6 +36,9 @@ type fakeAPI struct {
 	photos  []string
 	toasts  []string
 	nextID  int64
+	// failDocumentsAfter, when > 0, makes SendDocument fail once that many have
+	// succeeded -- used to drive partial-failure flows.
+	failDocumentsAfter int
 }
 
 func (f *fakeAPI) GetUpdates(context.Context, int64, int) ([]tg.Update, error) { return nil, nil }
@@ -67,6 +70,9 @@ func (f *fakeAPI) AnswerCallbackQuery(_ context.Context, _, text string, _ bool)
 func (f *fakeAPI) SendDocument(_ context.Context, _ int64, filename string, _ []byte, _ string) (tg.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failDocumentsAfter > 0 && len(f.docs) >= f.failDocumentsAfter {
+		return tg.Message{}, fmt.Errorf("document delivery failed (test)")
+	}
 	f.docs = append(f.docs, filename)
 	return tg.Message{}, nil
 }
@@ -110,6 +116,12 @@ func (fakeUnits) Restart(context.Context, string) error                         
 type fakeQR struct{}
 
 func (fakeQR) PNG(context.Context, string) ([]byte, error) { return []byte{0x89, 'P', 'N', 'G'}, nil }
+
+type fakePeers struct{ observation domain.IngressObservation }
+
+func (f fakePeers) Observe(context.Context, string) (domain.IngressObservation, error) {
+	return f.observation, nil
+}
 
 type fakeReconciler struct{ operations []domain.Operation }
 
@@ -160,6 +172,11 @@ tunnels:
 		t.Fatal(err)
 	}
 	stateDir := t.TempDir()
+	configDir := t.TempDir()
+	serverKeyPath := filepath.Join(t.TempDir(), "server.key")
+	if _, err := (linux.ServerKeyFile{Path: serverKeyPath}).Create(); err != nil {
+		t.Fatal(err)
+	}
 
 	api := &fakeAPI{}
 	instance := &Bot{
@@ -167,7 +184,7 @@ tunnels:
 		Cfg:           Config{AdminID: adminID, Notifications: Notifications{HealthInterval: time.Minute, DriftInterval: time.Minute, SubscriptionRefresh: time.Hour}},
 		ConfigPath:    configPath,
 		StateDir:      stateDir,
-		ConfigDir:     t.TempDir(),
+		ConfigDir:     configDir,
 		RuntimeDir:    t.TempDir(),
 		Service:       wiring.Service(configPath, stateDir),
 		Reconciler:    fakeReconciler{},
@@ -176,13 +193,24 @@ tunnels:
 		Confirmations: runtimeadapter.ConfirmationStore{StateDir: stateDir},
 		Revocations:   runtimeadapter.RevocationStore{StateDir: stateDir},
 		Settings:      runtimeadapter.BotSettingsStore{StateDir: stateDir},
+		Offsets:       runtimeadapter.OffsetStore{StateDir: stateDir},
 		Journal:       fakeJournal{},
 		Units:         fakeUnits{},
 		QR:            fakeQR{},
-		Host:          func() (linux.HostSnapshot, error) { return linux.HostSnapshot{}, nil },
-		Uplink:        func(context.Context) (string, error) { return "", fmt.Errorf("no uplink in tests") },
-		Now:           func() time.Time { return time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC) },
-		Out:           testWriter{t},
+		Peers:         fakePeers{},
+		Keys:          linux.ServerKeyFile{Path: serverKeyPath},
+		Upstreams:     linux.UpstreamFile{Dir: configDir},
+		Fetch: func(context.Context, string) ([]byte, error) {
+			return nil, fmt.Errorf("no subscription in tests")
+		},
+		Parse: linux.ParseSubscription,
+		Prove: func(context.Context, domain.ProxyTunnel, string) error {
+			return fmt.Errorf("no canary in tests")
+		},
+		Host:   func() (linux.HostSnapshot, error) { return linux.HostSnapshot{}, nil },
+		Uplink: func(context.Context) (string, error) { return "", fmt.Errorf("no uplink in tests") },
+		Now:    func() time.Time { return time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC) },
+		Out:    testWriter{t},
 	}
 	instance.init()
 	return instance, api
@@ -343,9 +371,11 @@ func TestDeployArmConfirmCycle(t *testing.T) {
 	// Change something so the next revision differs.
 	instance.handleUpdate(ctx, tap(adminID, "dev:eg:macbook:wg-nl"))
 
-	// Armed deploy: pending confirmation appears, confirm clears it.
+	// Armed deploy: pick the deadline, pending confirmation appears, confirm clears it.
 	instance.handleUpdate(ctx, tap(adminID, "dep"))
-	armed := findButton(t, api.lastScreen(t).markup, "страховка 5 мин")
+	choose := findButton(t, api.lastScreen(t).markup, "Со страховкой")
+	instance.handleUpdate(ctx, tap(adminID, choose))
+	armed := findButton(t, api.lastScreen(t).markup, "5 мин")
 	instance.handleUpdate(ctx, tap(adminID, armed))
 	if _, isArmed, _ := instance.Confirmations.Load(); !isArmed {
 		t.Fatal("the deploy was not armed")
@@ -431,4 +461,451 @@ func TestDeviceAddDialogDeliversProfileAndQR(t *testing.T) {
 	if len(cfg.Devices) != 2 {
 		t.Fatalf("the device was not added: %+v", cfg.Devices)
 	}
+}
+
+// A hub edit that breaks validation must be reverted, and a good one must land.
+func TestHubEndpointEditWithRevert(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	instance.handleUpdate(ctx, tap(adminID, "hub:e:endpoint"))
+	instance.handleUpdate(ctx, message(adminID, "not-an-endpoint"))
+	if !strings.Contains(api.lastScreen(t).text, "host:port") {
+		t.Fatalf("expected the validation hint:\n%s", api.lastScreen(t).text)
+	}
+
+	instance.handleUpdate(ctx, message(adminID, "new.example.test:51821"))
+	cfg, err := instance.Service.LoadAndValidate(ctx)
+	if err != nil {
+		t.Fatalf("config no longer validates: %v", err)
+	}
+	if cfg.Hub.Endpoint != "new.example.test:51821" {
+		t.Fatalf("endpoint was not changed: %q", cfg.Hub.Endpoint)
+	}
+}
+
+func TestProbeSetAndRemove(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	instance.handleUpdate(ctx, tap(adminID, "tun:ps:wg-nl:https"))
+	// Plain http is refused by the domain's own rules: the probe exists to prove
+	// the tunnel carries traffic, and it must not be spoofable in transit.
+	instance.handleUpdate(ctx, message(adminID, "http://1.1.1.1/x"))
+	if !strings.Contains(api.lastScreen(t).text, "Попробуйте ещё раз") {
+		t.Fatalf("expected a validation refusal:\n%s", api.lastScreen(t).text)
+	}
+
+	instance.handleUpdate(ctx, message(adminID, "https://1.1.1.1/cdn-cgi/trace"))
+	cfg, err := instance.Service.LoadAndValidate(ctx)
+	if err != nil {
+		t.Fatalf("config no longer validates: %v", err)
+	}
+	if cfg.Tunnels[0].Health.HTTPSURL != "https://1.1.1.1/cdn-cgi/trace" {
+		t.Fatalf("the probe was not written: %+v", cfg.Tunnels[0].Health)
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "tun:pd:wg-nl:https"))
+	cfg, _ = instance.Service.LoadAndValidate(ctx)
+	if cfg.Tunnels[0].Health.HTTPSURL != "" {
+		t.Fatalf("the probe was not removed: %+v", cfg.Tunnels[0].Health)
+	}
+}
+
+func TestKeyRotationReissuesEveryDevice(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	before, err := instance.Service.LoadAndValidate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "hub:rk"))
+	if !strings.Contains(api.lastScreen(t).text, "теряют связь") {
+		t.Fatalf("expected the hard warning:\n%s", api.lastScreen(t).text)
+	}
+	instance.handleUpdate(ctx, tap(adminID, "hub:rk:go"))
+	instance.wg.Wait()
+
+	after, err := instance.Service.LoadAndValidate(ctx)
+	if err != nil {
+		t.Fatalf("config no longer validates after rotation: %v", err)
+	}
+	if after.Hub.ServerPublicKey == before.Hub.ServerPublicKey {
+		t.Fatal("the hub key did not change")
+	}
+	if after.Devices[0].PublicKey == before.Devices[0].PublicKey {
+		t.Fatal("the device key did not change")
+	}
+
+	api.mu.Lock()
+	docs := append([]string(nil), api.docs...)
+	api.mu.Unlock()
+	if len(docs) != len(before.Devices) {
+		t.Fatalf("expected %d profiles, got %v", len(before.Devices), docs)
+	}
+}
+
+func TestCandidatePickPromotesOnlyProven(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	// Make wg-nl a subscription tunnel for this test's purposes: rewrite config.
+	link := "vless://3b1c8a52-4b6e-4d8a-9f00-0123456789ab@1.2.3.4:443?encryption=none&type=tcp\n" +
+		"vless://3b1c8a52-4b6e-4d8a-9f00-0123456789ab@5.6.7.8:443?encryption=none&type=tcp\n"
+	instance.Fetch = func(context.Context, string) ([]byte, error) { return []byte(link), nil }
+	proved := ""
+	instance.Prove = func(_ context.Context, candidate domain.ProxyTunnel, _ string) error {
+		proved = candidate.Server
+		if candidate.Server == "1.2.3.4" {
+			return fmt.Errorf("did not carry traffic")
+		}
+		return nil
+	}
+	instance.Uplink = func(context.Context) (string, error) { return "eth0", nil }
+
+	body := strings.Replace(read(t, instance.ConfigPath),
+		"    source: {kind: config, value: \"wg-nl.conf\"}",
+		"    source: {kind: subscription, value: \"https://provider.example/sub\"}", 1)
+	body = strings.Replace(body, "type: wireguard", "type: xray", 1)
+	if err := os.WriteFile(instance.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "sub:cand:wg-nl"))
+	instance.wg.Wait() // the candidate fetch runs in the background
+	if !strings.Contains(api.lastScreen(t).text, "2 кандидата") {
+		t.Fatalf("expected the candidate list:\n%s", api.lastScreen(t).text)
+	}
+
+	// The failing candidate is refused and the upstream stays absent.
+	instance.handleUpdate(ctx, tap(adminID, "sub:pick:wg-nl:0"))
+	instance.wg.Wait()
+	if proved != "1.2.3.4" {
+		t.Fatalf("the candidate was not proven: %q", proved)
+	}
+	if _, hasCurrent, _ := instance.Upstreams.Current("wg-nl"); hasCurrent {
+		t.Fatal("a failing candidate was promoted")
+	}
+
+	// The passing one is promoted.
+	instance.handleUpdate(ctx, tap(adminID, "sub:pick:wg-nl:1"))
+	instance.wg.Wait()
+	current, hasCurrent, _ := instance.Upstreams.Current("wg-nl")
+	if !hasCurrent || current.Server != "5.6.7.8" {
+		t.Fatalf("the proven candidate was not promoted: %+v %v", current, hasCurrent)
+	}
+}
+
+func TestAccessToggleRefusedWhenItStrandsADevice(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	// macbook uses wg-nl; allowing only some *other* device would strand it.
+	instance.handleUpdate(ctx, tap(adminID, "dev:eg:macbook:wg-nl"))
+
+	instance.handleUpdate(ctx, tap(adminID, "tun:ac:wg-nl"))
+	if !strings.Contains(api.lastScreen(t).text, "разрешён <b>всем</b>") {
+		t.Fatalf("expected the empty-list explanation:\n%s", api.lastScreen(t).text)
+	}
+
+	// Add a second device that will hold the only allow slot.
+	instance.handleUpdate(ctx, tap(adminID, "dev:add"))
+	instance.handleUpdate(ctx, message(adminID, "phone"))
+	suggestion := findButton(t, api.lastScreen(t).markup, "Использовать")
+	instance.handleUpdate(ctx, tap(adminID, suggestion))
+	egress := findButton(t, api.lastScreen(t).markup, "direct")
+	instance.handleUpdate(ctx, tap(adminID, egress))
+
+	// Allowing only phone excludes macbook, which uses this egress → refused.
+	instance.handleUpdate(ctx, tap(adminID, "tun:at:wg-nl:phone"))
+	last := api.lastScreen(t)
+	if !strings.Contains(last.text, "Отменено") {
+		t.Fatalf("expected the revert, got:\n%s", last.text)
+	}
+	cfg, err := instance.Service.LoadAndValidate(ctx)
+	if err != nil {
+		t.Fatalf("config was left broken: %v", err)
+	}
+	for _, tunnel := range cfg.Tunnels {
+		if tunnel.ID == "wg-nl" && len(tunnel.AllowedDevices) != 0 {
+			t.Fatalf("the exclusion was not reverted: %v", tunnel.AllowedDevices)
+		}
+	}
+
+	// Allowing macbook itself is fine.
+	instance.handleUpdate(ctx, tap(adminID, "tun:at:wg-nl:macbook"))
+	cfg, _ = instance.Service.LoadAndValidate(ctx)
+	for _, tunnel := range cfg.Tunnels {
+		if tunnel.ID == "wg-nl" && (len(tunnel.AllowedDevices) != 1 || tunnel.AllowedDevices[0] != "macbook") {
+			t.Fatalf("allowed_devices = %v", tunnel.AllowedDevices)
+		}
+	}
+}
+
+func TestAlertTogglePersists(t *testing.T) {
+	t.Parallel()
+	instance, _ := hubFixture(t)
+	ctx := context.Background()
+
+	instance.handleUpdate(ctx, tap(adminID, "set:t:health"))
+	if instance.alerts.get("health") {
+		t.Fatal("the toggle did not turn the category off")
+	}
+
+	// A second bot over the same state dir starts with the saved switches.
+	second := &Bot{Settings: instance.Settings}
+	second.init()
+	second.loadAlertSettings(ctx)
+	if second.alerts.get("health") {
+		t.Fatal("the saved switch did not survive a restart")
+	}
+	if !second.alerts.get("drift") {
+		t.Fatal("an untouched category lost its default")
+	}
+}
+
+// An IPv6 route survives the callback round-trip: the remove button carries a
+// value with colons, which a naive split would shatter.
+func TestIPv6RouteRoundTrip(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	// Add an IPv6 route to the tunnel via the dialog.
+	instance.handleUpdate(ctx, tap(adminID, "tun:ra:wg-nl"))
+	instance.handleUpdate(ctx, message(adminID, "fd00::/8"))
+	cfg, err := instance.Service.LoadAndValidate(ctx)
+	if err != nil {
+		t.Fatalf("config no longer validates: %v", err)
+	}
+	if len(cfg.Tunnels[0].Routes) != 1 || cfg.Tunnels[0].Routes[0] != "fd00::/8" {
+		t.Fatalf("the IPv6 route was not added: %v", cfg.Tunnels[0].Routes)
+	}
+
+	// The card offers a remove button whose callback carries the IPv6 value.
+	instance.handleUpdate(ctx, tap(adminID, "tun:c:wg-nl"))
+	remove := findButton(t, api.lastScreen(t).markup, "fd00::/8")
+	if !strings.HasSuffix(remove, "fd00::/8") {
+		t.Fatalf("remove callback lost the colons: %q", remove)
+	}
+	instance.handleUpdate(ctx, tap(adminID, remove))
+
+	cfg, _ = instance.Service.LoadAndValidate(ctx)
+	if len(cfg.Tunnels[0].Routes) != 0 {
+		t.Fatalf("the IPv6 route was not removed: %v", cfg.Tunnels[0].Routes)
+	}
+}
+
+// A restart resumes past the last processed update instead of replaying it -- the
+// safety behind not re-running a confirmed key rotation.
+func TestOffsetResumesPastProcessedUpdates(t *testing.T) {
+	t.Parallel()
+	store := runtimeadapter.OffsetStore{StateDir: t.TempDir()}
+	if err := store.Save(41); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load()
+	if err != nil || got != 41 {
+		t.Fatalf("offset did not persist: %d %v", got, err)
+	}
+}
+
+// Key rotation that fails partway must name which devices were re-issued and which
+// still need it by hand, and must not lose the profiles it already delivered.
+func TestKeyRotationPartialFailureIsHonest(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	// Add a second device so the rotation has more than one to walk.
+	instance.handleUpdate(ctx, tap(adminID, "dev:add"))
+	instance.handleUpdate(ctx, message(adminID, "phone"))
+	suggestion := findButton(t, api.lastScreen(t).markup, "Использовать")
+	instance.handleUpdate(ctx, tap(adminID, suggestion))
+	egress := findButton(t, api.lastScreen(t).markup, "direct")
+	instance.handleUpdate(ctx, tap(adminID, egress))
+
+	// Fail every SendDocument after the first, so exactly one profile is delivered.
+	api.failDocumentsAfter = 1
+
+	instance.handleUpdate(ctx, tap(adminID, "hub:rk"))
+	instance.handleUpdate(ctx, tap(adminID, "hub:rk:go"))
+	instance.wg.Wait()
+
+	last := api.lastScreen(t)
+	if !strings.Contains(last.text, "прервана") {
+		t.Fatalf("expected an interrupted-rotation message:\n%s", last.text)
+	}
+	if !strings.Contains(last.text, "перевыпуска вручную") {
+		t.Fatalf("the message must name devices needing manual re-issue:\n%s", last.text)
+	}
+}
+
+func TestAWGParameterAddAndRemove(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	instance.handleUpdate(ctx, tap(adminID, "hub:aa"))
+	// An unknown parameter is refused.
+	instance.handleUpdate(ctx, message(adminID, "Nope 5"))
+	if !strings.Contains(api.lastScreen(t).text, "неизвестен") {
+		t.Fatalf("expected an unknown-parameter refusal:\n%s", api.lastScreen(t).text)
+	}
+	// A known one with a numeric value lands.
+	instance.handleUpdate(ctx, message(adminID, "Jc 5"))
+	cfg, err := instance.Service.LoadAndValidate(ctx)
+	if err != nil {
+		t.Fatalf("config no longer validates: %v", err)
+	}
+	if cfg.Hub.AWGInterface["jc"] != "5" {
+		t.Fatalf("the parameter was not written: %v", cfg.Hub.AWGInterface)
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "hub:ad:jc"))
+	cfg, _ = instance.Service.LoadAndValidate(ctx)
+	if _, exists := cfg.Hub.AWGInterface["jc"]; exists {
+		t.Fatalf("the parameter was not removed: %v", cfg.Hub.AWGInterface)
+	}
+}
+
+// Re-issuing a revoked device lifts the revocation as part of the same action.
+func TestReissueLiftsRevocation(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	instance.handleUpdate(ctx, tap(adminID, "dev:rv!:macbook"))
+	if revoked, _ := instance.Revocations.Load(ctx); len(revoked) != 1 {
+		t.Fatal("the device was not revoked")
+	}
+
+	before, _ := instance.Service.LoadAndValidate(ctx)
+	instance.handleUpdate(ctx, tap(adminID, "dev:re!:macbook"))
+
+	revoked, _ := instance.Revocations.Load(ctx)
+	if len(revoked) != 0 {
+		t.Fatalf("re-issue did not lift the revocation: %v", revoked)
+	}
+	after, _ := instance.Service.LoadAndValidate(ctx)
+	if after.Devices[0].PublicKey == before.Devices[0].PublicKey {
+		t.Fatal("re-issue did not change the device key")
+	}
+	api.mu.Lock()
+	docs := len(api.docs)
+	api.mu.Unlock()
+	if docs != 1 {
+		t.Fatalf("expected a re-issued profile document, got %d", docs)
+	}
+}
+
+func TestLastKnownGoodRestore(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	// Turn wg-nl into a subscription tunnel and seed an upstream + last-known-good.
+	body := strings.Replace(read(t, instance.ConfigPath),
+		"    source: {kind: config, value: \"wg-nl.conf\"}",
+		"    source: {kind: subscription, value: \"https://provider.example/sub\"}", 1)
+	body = strings.Replace(body, "type: wireguard", "type: xray", 1)
+	if err := os.WriteFile(instance.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tunnel := domain.Tunnel{ID: "wg-nl", Source: domain.TunnelSource{Kind: domain.SourceSubscription}}
+	proxy := func(server string) domain.ProxyTunnel {
+		return domain.ProxyTunnel{Protocol: "vless", Server: server, Port: 443, UUID: "3b1c8a52-4b6e-4d8a-9f00-0123456789ab"}
+	}
+	if err := instance.Upstreams.Write(ctx, tunnel, proxy("1.1.1.1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Upstreams.Write(ctx, tunnel, proxy("2.2.2.2")); err != nil {
+		t.Fatal(err)
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "sub:lkg!:wg-nl"))
+	if !strings.Contains(api.lastScreen(t).text, "1.1.1.1") {
+		t.Fatalf("expected the previous upstream restored:\n%s", api.lastScreen(t).text)
+	}
+	current, hasCurrent, _ := instance.Upstreams.Current("wg-nl")
+	if !hasCurrent || current.Server != "1.1.1.1" {
+		t.Fatalf("the active upstream was not restored: %+v", current)
+	}
+}
+
+func TestDeployRollback(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	// Deploy once so there is a revision, then arm a second so a rollback has a
+	// target.
+	instance.handleUpdate(ctx, tap(adminID, "dep"))
+	first := findButton(t, api.lastScreen(t).markup, "без страховки")
+	instance.handleUpdate(ctx, tap(adminID, first))
+	confirmed := findButton(t, api.lastScreen(t).markup, "Да")
+	instance.handleUpdate(ctx, tap(adminID, confirmed))
+
+	instance.handleUpdate(ctx, tap(adminID, "dev:eg:macbook:wg-nl"))
+	instance.handleUpdate(ctx, tap(adminID, "dep"))
+	choose := findButton(t, api.lastScreen(t).markup, "Со страховкой")
+	instance.handleUpdate(ctx, tap(adminID, choose))
+	armed := findButton(t, api.lastScreen(t).markup, "5 мин")
+	instance.handleUpdate(ctx, tap(adminID, armed))
+
+	instance.handleUpdate(ctx, tap(adminID, "dep:rb!"))
+	if _, isArmed, _ := instance.Confirmations.Load(); isArmed {
+		t.Fatal("rollback did not clear the pending state")
+	}
+	if !strings.Contains(api.lastScreen(t).text, "Восстановлена") {
+		t.Fatalf("expected a rollback confirmation:\n%s", api.lastScreen(t).text)
+	}
+}
+
+func TestExportConfigSendsDocuments(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	instance.handleUpdate(ctx, tap(adminID, "hub:dl!"))
+	instance.wg.Wait()
+
+	api.mu.Lock()
+	docs := append([]string(nil), api.docs...)
+	api.mu.Unlock()
+	if len(docs) != 1 || docs[0] != "hub.yaml" {
+		t.Fatalf("expected the config file to be sent, got %v", docs)
+	}
+}
+
+func TestClampToast(t *testing.T) {
+	t.Parallel()
+	short := "коротко"
+	if clampToast(short) != short {
+		t.Fatal("a short toast must pass through unchanged")
+	}
+	long := strings.Repeat("ошибка ", 100)
+	clamped := clampToast(long)
+	if n := len([]rune(clamped)); n > 190 {
+		t.Fatalf("clamped toast is %d runes, over 190", n)
+	}
+	if !strings.HasSuffix(clamped, "…") {
+		t.Fatal("a clamped toast must end with an ellipsis")
+	}
+}
+
+func read(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
 }

@@ -1,0 +1,13 @@
+🩺 <b>Пробы туннеля corp-a</b>
+
+Проба выполняется внутри namespace туннеля и отвечает на вопрос «идёт ли трафик прямо сейчас». Без проб здоровье — «неизвестно», и это честнее, чем «работает».
+
+• TCP: не задана
+• HTTPS: <code>https://intranet.corp.internal/health</code>
+• DNS: не задана
+
+--- keyboard ---
+[➕ TCP](tun:ps:corp-a:tcp)
+[✏️ HTTPS](tun:ps:corp-a:https) | [➖ HTTPS](tun:pd:corp-a:https)
+[➕ DNS](tun:ps:corp-a:dns)
+[⬅️ К туннелю](tun:c:corp-a) | [🏠 Меню](m)

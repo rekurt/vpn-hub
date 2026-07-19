@@ -1,0 +1,13 @@
+🖥 <b>Хост</b>
+
+Аптайм: 26ч 3м
+Загрузка: 0.15 0.10 0.05
+Диск /: свободно 18.0 ГиБ из 25.0 ГиБ
+
+<b>Юниты:</b>
+🟢 <code>vpn-hub-agent.service</code> — active (running)
+🟢 <code>vpn-hub-proxy-nl.service</code> — active (running), рестартов: 1
+
+--- keyboard ---
+[🔄 Обновить](host) | [🔁 Перезапустить агента](host:ra)
+[🏠 Меню](m)

@@ -1,0 +1,10 @@
+📜 <b>Логи</b>
+
+Юниты vpn-hub на хосте:
+• <code>vpn-hub-agent.service</code> — active (running)
+• <code>vpn-hub-proxy-nl.service</code> — active (running)
+
+--- keyboard ---
+[Агент](log:u:vpn-hub-agent.service) | [Бот](log:u:vpn-hub-bot.service)
+[vpn-hub-proxy-nl.service](log:u:vpn-hub-proxy-nl.service)
+[🏠 Меню](m)

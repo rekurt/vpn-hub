@@ -3,6 +3,7 @@ package linux
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -36,11 +37,31 @@ func (s Systemctl) run(ctx context.Context, name string, args ...string) (string
 	return execRunner(ctx, name, args...)
 }
 
+// unitNamePattern is what a real systemd unit name looks like: it starts with an
+// alphanumeric, so it can never be read as a command-line option.
+var unitNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9@._-]*\.(service|timer|socket|target|mount)$`)
+
+// ValidateUnitName rejects anything that is not a plausible unit name. Unit names
+// reach these adapters from bot callback data, and while exec.Command runs no shell
+// (so there is no injection), a name beginning with "-" could still be parsed as a
+// flag; this closes that off before it can matter.
+func ValidateUnitName(unit string) error {
+	if !unitNamePattern.MatchString(unit) {
+		return fmt.Errorf("refusing suspicious unit name %q", unit)
+	}
+	return nil
+}
+
 // Status describes one unit. Asking about a unit that does not exist is not an
 // error: systemd answers with an inactive/dead status, and that answer is the truth.
 func (s Systemctl) Status(ctx context.Context, unit string) (UnitStatus, error) {
-	output, err := s.run(ctx, "systemctl", "show", unit,
-		"--property=ActiveState,SubState,ExecMainStartTimestamp,NRestarts")
+	if err := ValidateUnitName(unit); err != nil {
+		return UnitStatus{}, err
+	}
+	// The unit goes after `--` so it is always a positional argument, never an
+	// option, whatever it starts with.
+	output, err := s.run(ctx, "systemctl", "show",
+		"--property=ActiveState,SubState,ExecMainStartTimestamp,NRestarts", "--", unit)
 	if err != nil {
 		return UnitStatus{}, err
 	}
@@ -89,6 +110,9 @@ func (s Systemctl) ListMatching(ctx context.Context, pattern string) ([]UnitStat
 
 // Restart restarts one unit.
 func (s Systemctl) Restart(ctx context.Context, unit string) error {
-	_, err := s.run(ctx, "systemctl", "restart", unit)
+	if err := ValidateUnitName(unit); err != nil {
+		return err
+	}
+	_, err := s.run(ctx, "systemctl", "restart", "--", unit)
 	return err
 }

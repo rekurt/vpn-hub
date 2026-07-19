@@ -1,5 +1,5 @@
-// Package telegram is a minimal Bot API client: the ten methods the bot needs,
-// on the standard library.
+// Package telegram is a minimal Bot API client: the handful of methods the bot
+// needs, on the standard library.
 //
 // A library would bring its own routing and middleware model on top of these same
 // HTTP calls, and the delivery layer owns routing anyway. Long polling only -- the
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -51,8 +52,29 @@ func (c Client) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return http.DefaultClient
+	return defaultHTTPClient
 }
+
+// defaultHTTPClient bounds connection setup but sets no overall Timeout: a
+// getUpdates long poll legitimately holds the connection open for its whole poll
+// window, and http.Client.Timeout would abort it. Per-request deadlines in post()
+// bound a hung request instead. http.DefaultClient, used before, had neither, so a
+// silently dropped connection could freeze the update loop indefinitely -- and the
+// process stays alive, so systemd never restarts it.
+var defaultHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		MaxIdleConns:          4,
+		IdleConnTimeout:       90 * time.Second,
+	},
+}
+
+// requestTimeout bounds a single HTTP attempt. It sits comfortably above the 25s
+// long-poll window getUpdates uses, so one value covers both polling and sending.
+const requestTimeout = 60 * time.Second
 
 // call posts one method and decodes the result. A 429 with retry_after is waited
 // out and retried a couple of times; anything else is the caller's problem.
@@ -77,6 +99,11 @@ func (c Client) call(ctx context.Context, method string, payload io.Reader, cont
 }
 
 func (c Client) post(ctx context.Context, method string, payload io.Reader, contentType string, result any) error {
+	// Bound each attempt: a connection dropped after the request was sent would
+	// otherwise wait out the kernel's TCP retransmissions -- minutes -- and a
+	// spawned flow blocked here holds the ops gate the whole time.
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		fmt.Sprintf("%s/bot%s/%s", c.baseURL(), c.Token, method), payload)
 	if err != nil {
@@ -189,18 +216,6 @@ func (c Client) EditMessageText(ctx context.Context, chatID, messageID int64, te
 	return ignoreNotModified(err)
 }
 
-func (c Client) EditMessageReplyMarkup(ctx context.Context, chatID, messageID int64, keyboard *InlineKeyboardMarkup) error {
-	payload := map[string]any{
-		"chat_id":    chatID,
-		"message_id": messageID,
-	}
-	if keyboard != nil {
-		payload["reply_markup"] = keyboard
-	}
-	err := c.callJSON(ctx, "editMessageReplyMarkup", payload, nil)
-	return ignoreNotModified(err)
-}
-
 // AnswerCallbackQuery acknowledges a button tap; without it the client shows a
 // spinner until it times out.
 func (c Client) AnswerCallbackQuery(ctx context.Context, callbackID, text string, showAlert bool) error {
@@ -208,13 +223,6 @@ func (c Client) AnswerCallbackQuery(ctx context.Context, callbackID, text string
 		"callback_query_id": callbackID,
 		"text":              text,
 		"show_alert":        showAlert,
-	}, nil)
-}
-
-func (c Client) DeleteMessage(ctx context.Context, chatID, messageID int64) error {
-	return c.callJSON(ctx, "deleteMessage", map[string]any{
-		"chat_id":    chatID,
-		"message_id": messageID,
 	}, nil)
 }
 

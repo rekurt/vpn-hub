@@ -23,7 +23,7 @@ func (f HTTPSSubscriptionFetcher) Fetch(ctx context.Context, rawURL string) ([]b
 	}
 	client := f.Client
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = &http.Client{Timeout: 15 * time.Second, CheckRedirect: httpsOnlyRedirect}
 	}
 	maxSize := f.MaxSize
 	if maxSize == 0 {
@@ -52,4 +52,17 @@ func (f HTTPSSubscriptionFetcher) Fetch(ctx context.Context, rawURL string) ([]b
 		return nil, fmt.Errorf("subscription is empty")
 	}
 	return data, nil
+}
+
+// httpsOnlyRedirect keeps the HTTPS-only guarantee across redirects. Without it a
+// hostile or hijacked provider could answer a 302 to http://169.254.169.254/… or an
+// internal http://10.x/… and turn this fetch -- run as root in the host's main
+// namespace -- into a blind request against the metadata service or the private
+// network the hub is meant to gateway. The scheme check on the original URL alone
+// does not cover where a redirect points.
+func httpsOnlyRedirect(request *http.Request, _ []*http.Request) error {
+	if request.URL.Scheme != "https" {
+		return fmt.Errorf("subscription redirect to non-HTTPS %q refused", request.URL.Scheme)
+	}
+	return nil
 }

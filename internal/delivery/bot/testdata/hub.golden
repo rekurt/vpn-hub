@@ -1,0 +1,19 @@
+⚙️ <b>Хаб</b>
+
+Endpoint: <code>vpn.example.test:51820</code>
+Клиентская сеть: <code>10.80.0.0/24</code>
+DNS: <code>10.80.0.1</code>
+Публичный ключ: <code>TE5crMJPBmCr…</code>
+
+<b>AmneziaWG-параметры:</b>
+ • <code>Jc = 5</code>
+ • <code>Jmin = 50</code>
+
+⚠️ Смена endpoint, сети или DNS ломает уже выданные профили: устройства придётся перевыпустить.
+--- keyboard ---
+[✏️ Endpoint](hub:e:endpoint) | [✏️ DNS](hub:e:dns_address)
+[✏️ Клиентская сеть](hub:e:client_cidr) | [➕ AWG-параметр](hub:aa)
+[➖ Jc](hub:ad:jc)
+[➖ Jmin](hub:ad:jmin)
+[🔑 Ротация ключа хаба](hub:rk) | [📦 Выгрузить конфиг](hub:dl)
+[🏠 Меню](m)

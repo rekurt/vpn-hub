@@ -11,6 +11,7 @@ DNS-зоны: <code>corp.internal</code>
 
 --- keyboard ---
 [⏸ Выключить](tun:off:corp-a) | [🩺 Проверить](tun:t:corp-a)
+[🩺 Пробы (tcp/https/dns)](tun:pr:corp-a)
 [➖ маршрут 10.20.0.0/16](tun:rd:corp-a:10.20.0.0/16)
 [➕ Маршрут](tun:ra:corp-a) | [➕ DNS-зона](tun:za:corp-a)
 [➖ зона corp.internal](tun:zd:corp-a:corp.internal)

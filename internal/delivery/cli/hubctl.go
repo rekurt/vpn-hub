@@ -305,13 +305,36 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// No deploy needed: the revision names the link file, not its contents,
+			// so the agent re-reads it and restarts the proxy on its next pass.
 			_, err = fmt.Fprintf(cmd.OutOrStdout(),
-				"promoted %s:%d for %s; run `hubctl deploy` to apply\n", chosen.Server, chosen.Port, subject.ID)
+				"promoted %s:%d for %s; the agent applies it on its next pass\n", chosen.Server, chosen.Port, subject.ID)
 			return err
 		},
 	}
 	refresh.Flags().StringVar(&configDir, "config-dir", "/etc/vpn-hub", "directory holding upstream configurations")
-	command.AddCommand(refresh)
+
+	var restoreConfigDir string
+	restore := &cobra.Command{
+		Use:   "restore <id>",
+		Short: "Swap a subscription's upstream back to its last-known-good",
+		Long: "The emergency counterpart to refresh, reachable over SSH when the bot is " +
+			"not: when a subscription starts serving only broken nodes, this brings back " +
+			"the previous working upstream. The swap is itself reversible.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			restored, err := linux.UpstreamFile{Dir: restoreConfigDir}.Restore(args[0])
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(),
+				"restored %s:%d for %s; the agent applies it on its next pass\n", restored.Server, restored.Port, args[0])
+			return err
+		},
+	}
+	restore.Flags().StringVar(&restoreConfigDir, "config-dir", "/etc/vpn-hub", "directory holding upstream configurations")
+
+	command.AddCommand(refresh, restore)
 	return command
 }
 
@@ -335,7 +358,27 @@ func newDeviceCommand(configPath *string) *cobra.Command {
 		},
 	}
 	revoke.Flags().StringVar(&stateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
-	command.AddCommand(revoke)
+
+	var unrevokeStateDir string
+	unrevoke := &cobra.Command{
+		Use:   "unrevoke <id>",
+		Short: "Lift a device revocation",
+		Long: "Undoes an over-hasty `device revoke`. Without this, correcting a mistaken " +
+			"revocation over SSH means editing the revocation file by hand; re-issuing the " +
+			"device's profile from the bot also lifts it.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := (runtimeadapter.RevocationStore{StateDir: unrevokeStateDir}).Remove(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			_, err := fmt.Fprintf(cmd.OutOrStdout(),
+				"lifted the revocation of %s; run `hubctl deploy` to restore it to the active revision\n", args[0])
+			return err
+		},
+	}
+	unrevoke.Flags().StringVar(&unrevokeStateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
+
+	command.AddCommand(revoke, unrevoke)
 	return command
 }
 
