@@ -18,21 +18,9 @@ StateDirectory=vpn-hub
 ConfigurationDirectory=vpn-hub
 
 UMask=0077
-
-# Mount-based sandboxing is deliberately absent, and this is the one hardening
-# trade-off the agent makes.
-#
-# `ip netns add` bind-mounts a namespace handle into /run/netns. Anything that gives
-# the service a private mount namespace -- ProtectSystem, ProtectHome, PrivateTmp --
-# confines that mount to the service, where it is unusable even by the agent's own
-# later invocations: the namespace appears to exist and every operation on it fails
-# with "Invalid argument". MountFlags=shared does not rescue it, and neither does
-# CAP_SYS_ADMIN; managing network namespaces and having a private mount namespace are
-# simply incompatible.
-#
-# Everything that does not depend on mount isolation is kept below.
-ProtectHome=false
-PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
 NoNewPrivileges=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
@@ -40,10 +28,16 @@ RestrictSUIDSGID=true
 RestrictRealtime=true
 RestrictNamespaces=~user pid ipc uts cgroup
 SystemCallArchitectures=native
-# @system-service alone kills `ip netns add` with SIGSYS: creating a network
-# namespace needs unshare and setns, and `ip` bind-mounts the handle into /run/netns,
-# which needs @mount. Found only after a reboot -- running the agent by hand from a
-# shell carries no seccomp filter, so the failure is invisible outside systemd.
+
+# Creating a network namespace is a bind mount under /run/netns, and the directives
+# above give this service a private mount namespace where such a mount would be
+# confined and unusable -- even to the agent itself. The agent therefore delegates
+# `ip netns add|del` to a transient unit, which performs the mount in the host's
+# namespace; systemd mounts with MS_SLAVE, so it propagates back in here while this
+# service's own mounts stay contained. That is what lets the sandbox stay on.
+#
+# setns is still needed to enter those namespaces, and @mount for the tooling that
+# reads the mount table.
 SystemCallFilter=@system-service @mount
 SystemCallFilter=setns unshare
 

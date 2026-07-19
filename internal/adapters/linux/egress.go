@@ -25,6 +25,10 @@ type Egress struct {
 	// RulePriority is where the fwmark rules sit. It is above the main table's
 	// implicit rule so marked traffic is diverted before ordinary routing sees it.
 	RulePriority int
+	// DirectNamespaces calls `ip netns` without delegating to a transient unit. Set
+	// it where there is no sandbox to escape -- integration tests, and hosts without
+	// systemd -- since delegation buys nothing there.
+	DirectNamespaces bool
 }
 
 func (e Egress) run(ctx context.Context, name string, args ...string) (string, error) {
@@ -37,6 +41,28 @@ func (e Egress) run(ctx context.Context, name string, args ...string) (string, e
 // inNS prefixes a command so it runs inside the tunnel's namespace.
 func (e Egress) inNS(ctx context.Context, namespace string, args ...string) (string, error) {
 	return e.run(ctx, "ip", append([]string{"netns", "exec", namespace}, args...)...)
+}
+
+// namespaceLifecycle runs `ip netns add|del` through a transient systemd unit.
+//
+// Creating or deleting a network namespace is a bind mount under /run/netns, and the
+// agent runs with a private mount namespace. A mount made there is confined to the
+// service and unusable even by its own later commands -- the namespace appears to
+// exist and every operation on it fails with "Invalid argument".
+//
+// A transient unit performs the mount in the host's mount namespace, from where it
+// propagates back in: systemd mounts with MS_SLAVE, so host mounts are visible to
+// the service while the service's own are not visible outside. That asymmetry is
+// what lets the agent keep ProtectSystem=strict and still manage namespaces.
+func (e Egress) namespaceLifecycle(ctx context.Context, action, namespace string) error {
+	if e.DirectNamespaces {
+		_, err := e.run(ctx, "ip", "netns", action, namespace)
+		return err
+	}
+	_, err := e.run(ctx, "systemd-run",
+		"--quiet", "--wait", "--collect", "--unit=vpn-hub-netns-"+action+"-"+namespace,
+		"ip", "netns", action, namespace)
+	return err
 }
 
 func (e Egress) rulePriority() int {
@@ -77,7 +103,7 @@ func (e Egress) Apply(ctx context.Context, specs []domain.EgressSpec) error {
 			continue
 		}
 		// Deleting the namespace takes its interfaces, routes and processes with it.
-		if _, err := e.run(ctx, "ip", "netns", "del", namespace); err != nil {
+		if err := e.namespaceLifecycle(ctx, "del", namespace); err != nil {
 			return fmt.Errorf("remove namespace %s: %w", namespace, err)
 		}
 	}
@@ -116,7 +142,7 @@ func (e Egress) ensureNamespace(ctx context.Context, spec domain.EgressSpec) err
 	// cleaned up by hand. Prove it works before trusting it.
 	if present {
 		if _, err := e.inNS(ctx, spec.Namespace, "true"); err != nil {
-			if _, err := e.run(ctx, "ip", "netns", "del", spec.Namespace); err != nil {
+			if err := e.namespaceLifecycle(ctx, "del", spec.Namespace); err != nil {
 				return fmt.Errorf("remove unusable namespace %s: %w", spec.Namespace, err)
 			}
 			present = false
@@ -124,7 +150,7 @@ func (e Egress) ensureNamespace(ctx context.Context, spec domain.EgressSpec) err
 	}
 
 	if !present {
-		if _, err := e.run(ctx, "ip", "netns", "add", spec.Namespace); err != nil {
+		if err := e.namespaceLifecycle(ctx, "add", spec.Namespace); err != nil {
 			return err
 		}
 	}
