@@ -1,6 +1,11 @@
+# Demonstration values. Generate real ones with `hubctl keygen` (hub) and
+# `hubctl device add` (devices); keep upstream provider files in SOPS.
+#
+# No private key appears here on purpose. The hub only ever needs a device's public
+# half, and an example private key invites being copied into a real deployment.
 hub:
   endpoint: "vpn.example.com:51820"
-  server_public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  server_public_key: "W/kKaUP1n48AgIzxs8po0HKV+UEk1vMcTuBW648atSE="
   client_cidr: "10.80.0.0/24"
   dns_address: "10.80.0.1"
   awg_interface:
@@ -14,11 +19,11 @@ devices:
       - id: macbook-xray
         egress: xray-egress
         address: "10.80.0.2/32"
-        client_private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        client_public_key: "TE5crMJPBmCr2bF/uSbHqAlTAHKQwLKMs0RQxfQ0LU4="
       - id: macbook-direct
         egress: direct
         address: "10.80.0.3/32"
-        client_public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        client_public_key: "6OUoSDjcaLflZn3V7U3aO6eW1Mn5HE4xPJYmzoVvnhU="
 
 tunnels:
   - id: corp-wg

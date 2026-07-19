@@ -16,6 +16,10 @@
 - **AmneziaWG на входе**: агент поднимает интерфейс, ставит ключ, порт и параметры обфускации, синхронизирует пиров;
 - **nftables с kill switch**: трафик проходит только при явном совпадении с egress, fallback на `direct` невозможен по построению;
 - **выход `direct`** с NAT через аплинк хоста;
+- **WireGuard-egress**: каждый апстрим в отдельном network namespace со своей меткой, таблицей маршрутизации и вторым kill switch;
+- **observe и коррекция drift**: отпечаток плана хранится в самой nft-таблице, сошедшийся хост молчит, разошедшийся объясняет расхождение;
+- **health по свежести handshake**, пробы выполняются **внутри** namespace туннеля;
+- **SOPS**: upstream-конфиги расшифровываются прозрачно, определение по содержимому файла;
 - **отзыв устройства**: `device revoke` + `deploy` убирает пира, связь рвётся;
 - **коррекция drift**: удалённый вручную ruleset восстанавливается на следующем такте;
 - `hubctl keygen` и `device add` — ключи и профили без ручного редактирования YAML;
@@ -24,11 +28,9 @@
 
 ## Чего пока нет
 
-- **Исходящие туннели.** Работает только `direct`. WireGuard/OpenVPN/Xray/AmneziaWG на выход валидируются, но драйверов нет — профиль с таким egress попадёт в set, а трафик будет отброшен, потому что интерфейса не существует. Это корректное поведение kill switch, но не рабочий multi-VPN.
-- **Шаг observe.** Агент применяет состояние каждый такт, а не сравнивает наблюдаемое с желаемым. Drift исправляется, но не диагностируется.
+- **Только WireGuard на выход.** OpenVPN, Xray и AmneziaWG-egress валидируются, но драйверов нет: `BuildEgressSpecs` отказывается их собирать, а не делает вид.
 - **Split-DNS.** `dns_zones` валидируются и никем не используются; DNS-сервер на хабе не запускается.
-- **Health по handshake.** Пробы выполняются из хостового namespace, а не изнутри туннеля.
-- **SOPS не подключён:** пути из `source.value` не расшифровываются.
+- **Xray, OpenVPN, SOCKS5.** Валидируются, драйверов нет.
 
 Порядок дальнейших работ — в плане развития.
 
@@ -48,14 +50,16 @@ go run ./cmd/hubctl deploy --config configs/example.yaml --state-dir ./state --d
 go run ./cmd/vpn-hub-agent reconcile --state-dir ./state --dry-run
 ```
 
-Выпуск клиентского профиля:
+Заведение устройства и выпуск профиля:
 
 ```sh
-go run ./cmd/hubctl profile render \
-  --config configs/example.yaml \
-  --device macbook --egress xray-egress \
-  --output ./macbook-xray.conf
+hubctl keygen --output /etc/vpn-hub/server.key   # один раз на хаб
+hubctl device add laptop --egress direct --address 10.80.0.2/32
+# вставить напечатанный блок в devices, приватный ключ оставить устройству
+hubctl profile render --device laptop --egress direct --output ./laptop.conf
 ```
+
+`configs/example.yaml` намеренно не содержит приватных ключей: хабу нужна только публичная половина, а пример приватного ключа рано или поздно копируют в реальную установку.
 
 ## Стенд
 

@@ -11,6 +11,7 @@ import (
 
 	configadapter "vpn-hub/internal/adapters/config"
 	"vpn-hub/internal/adapters/health"
+	"vpn-hub/internal/adapters/linux"
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	"vpn-hub/internal/application"
 	"vpn-hub/internal/domain"
@@ -264,9 +265,11 @@ func newDeviceCommand(configPath *string) *cobra.Command {
 
 func newService(configPath, stateDir string) application.Service {
 	return application.Service{
-		ConfigRepository:    configadapter.ViperRepository{Path: configPath},
-		RevisionStore:       runtimeadapter.FileRevisionStore{StateDir: stateDir},
-		HealthChecker:       health.ProbeChecker{},
+		ConfigRepository: configadapter.ViperRepository{Path: configPath},
+		RevisionStore:    runtimeadapter.FileRevisionStore{StateDir: stateDir},
+		// Probing from the host would measure the host's own connectivity, which is
+		// the path the tunnel exists to avoid.
+		HealthChecker:       linux.HealthChecker{},
 		SubscriptionFetcher: health.HTTPSSubscriptionFetcher{},
 		ProfileRenderer:     runtimeadapter.AmneziaProfileRenderer{},
 	}

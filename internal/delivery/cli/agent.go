@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	configadapter "vpn-hub/internal/adapters/config"
 	"vpn-hub/internal/adapters/linux"
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	"vpn-hub/internal/application"
@@ -46,7 +47,7 @@ func (f *agentFlags) reconciler() ports.Reconciler {
 		Firewall:      linux.NFTables{},
 		Ingress:       linux.Ingress{SecretsDir: f.runtimeDir},
 		Egress:        linux.Egress{SecretsDir: f.runtimeDir},
-		TunnelConfigs: linux.TunnelConfigFiles{Dir: f.configDir},
+		TunnelConfigs: linux.TunnelConfigFiles{Dir: f.configDir, Secrets: configadapter.SOPSSecretStore{}},
 		Host:          linux.NetConf{},
 		ServerKey:     linux.ServerKeyFile{Path: f.keyPath},
 	}

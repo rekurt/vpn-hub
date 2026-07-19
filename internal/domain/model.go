@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type TunnelType string
 
@@ -38,6 +41,19 @@ type Hub struct {
 type TunnelSource struct {
 	Kind  SourceKind `mapstructure:"kind" json:"kind"`
 	Value string     `mapstructure:"value" json:"value"`
+}
+
+// MarshalJSON keeps credential-bearing sources out of the persisted revision.
+//
+// A `config` source names a file on the host and is safe — and useful — to see. An
+// Xray URI or a subscription URL embeds a UUID or token, and a revision is written
+// to disk and read back by anything that can open the state directory.
+func (s TunnelSource) MarshalJSON() ([]byte, error) {
+	type plain TunnelSource // avoids recursing into this method
+	if s.Kind == SourceXrayURI || s.Kind == SourceSubscription {
+		return json.Marshal(plain{Kind: s.Kind, Value: "[redacted]"})
+	}
+	return json.Marshal(plain(s))
 }
 
 type HealthCheck struct {
