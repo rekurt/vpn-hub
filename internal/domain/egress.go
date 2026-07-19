@@ -46,9 +46,10 @@ type EgressSpec struct {
 	Interface string `json:"interface"`
 
 	// Type selects which upstream below is meaningful.
-	Type   TunnelType      `json:"type"`
-	Tunnel WireGuardTunnel `json:"tunnel,omitempty"`
-	Proxy  ProxyTunnel     `json:"proxy,omitempty"`
+	Type    TunnelType      `json:"type"`
+	Tunnel  WireGuardTunnel `json:"tunnel,omitempty"`
+	Proxy   ProxyTunnel     `json:"proxy,omitempty"`
+	OpenVPN OpenVPNTunnel   `json:"openvpn,omitempty"`
 }
 
 // Upstream is a tunnel's provider-side configuration, whichever form it takes.
@@ -56,4 +57,30 @@ type Upstream struct {
 	Type      TunnelType
 	WireGuard WireGuardTunnel
 	Proxy     ProxyTunnel
+	OpenVPN   OpenVPNTunnel
+}
+
+// OpenVPNRemote is one server a configuration offers.
+type OpenVPNRemote struct {
+	Host     string `json:"host"`
+	Port     uint16 `json:"port"`
+	Protocol string `json:"protocol"`
+}
+
+// OpenVPNTunnel is a provider's .ovpn, interpreted only as far as the hub must act
+// on it. The original text is carried through and handed to OpenVPN, which
+// understands its own options better than a reimplementation would.
+type OpenVPNTunnel struct {
+	Remotes  []OpenVPNRemote `json:"remotes"`
+	Protocol string          `json:"protocol,omitempty"`
+	Device   string          `json:"device,omitempty"`
+	// RedirectsGateway means the provider expects to become the default route. Inside
+	// a namespace that is exactly right for an egress and exactly wrong for a private
+	// network, which would silently capture everything.
+	RedirectsGateway bool `json:"redirects_gateway"`
+	// NeedsCredentials marks a configuration that would stop and prompt.
+	NeedsCredentials bool `json:"-"`
+	// Config is the file as written, including inline keys, so it is deliberately
+	// not serialised.
+	Config string `json:"-"`
 }

@@ -29,6 +29,15 @@ type HealthChecker struct {
 	Now func() time.Time
 	// Timeout bounds each probe.
 	Timeout time.Duration
+	// RuntimeDir holds the management sockets OpenVPN tunnels report through.
+	RuntimeDir string
+}
+
+func (h HealthChecker) runtimeDir() string {
+	if h.RuntimeDir != "" {
+		return h.RuntimeDir
+	}
+	return "/run/vpn-hub"
 }
 
 func (h HealthChecker) run(ctx context.Context, name string, args ...string) (string, error) {
@@ -65,6 +74,9 @@ func (h HealthChecker) Check(ctx context.Context, tunnel domain.Tunnel) (domain.
 	// because a running process proves only that it started.
 	if tunnel.Type == domain.TunnelXray {
 		return h.checkProxy(ctx, tunnel, namespace, health), nil
+	}
+	if tunnel.Type == domain.TunnelOpenVPN {
+		return h.checkOpenVPN(ctx, tunnel, namespace, health), nil
 	}
 
 	output, err := h.run(ctx, "ip", "netns", "exec", namespace, "wg", "show", "wg0", "dump")
@@ -131,6 +143,37 @@ func (h HealthChecker) checkProxy(ctx context.Context, tunnel domain.Tunnel, nam
 	default:
 		health.Status = domain.HealthHealthy
 		health.Reason = fmt.Sprintf("%d probe(s) succeeded through the proxy", ran)
+	}
+	return health
+}
+
+// checkOpenVPN asks the management socket, whose vocabulary names the stage a stuck
+// connection reached -- far more useful than "not working".
+func (h HealthChecker) checkOpenVPN(ctx context.Context, tunnel domain.Tunnel, namespace string, health domain.TunnelHealth) domain.TunnelHealth {
+	state, err := OpenVPNState(OpenVPNManagementSocket(h.runtimeDir(), tunnel.ID), h.timeout())
+	if err != nil {
+		health.Status = domain.HealthUnhealthy
+		health.Reason = err.Error()
+		return health
+	}
+	if state != "CONNECTED" {
+		health.Status = domain.HealthUnhealthy
+		health.Reason = "the connection is at stage " + state
+		return health
+	}
+
+	// Connected says the tunnel came up; a probe says traffic passes now.
+	reasons, ran := h.probe(ctx, namespace, tunnel.Health)
+	switch {
+	case ran == 0:
+		health.Status = domain.HealthHealthy
+		health.Reason = "the provider reports CONNECTED"
+	case len(reasons) > 0:
+		health.Status = domain.HealthUnhealthy
+		health.Reason = strings.Join(reasons, "; ")
+	default:
+		health.Status = domain.HealthHealthy
+		health.Reason = fmt.Sprintf("CONNECTED, and %d probe(s) succeeded through the tunnel", ran)
 	}
 	return health
 }

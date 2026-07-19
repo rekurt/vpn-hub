@@ -19,6 +19,7 @@ packages:
   - curl
   - jq
   - qrencode
+  - openvpn
 
 write_files:
   - path: /etc/sysctl.d/99-vpn-hub.conf

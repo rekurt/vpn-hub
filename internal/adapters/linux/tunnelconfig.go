@@ -65,6 +65,22 @@ func (t TunnelConfigFiles) Load(ctx context.Context, tunnel domain.Tunnel) (doma
 		}
 		return domain.Upstream{Type: tunnel.Type, Proxy: parsed}, nil
 
+	case domain.TunnelOpenVPN:
+		parsed, err := ParseOpenVPNConfig(string(content))
+		if err != nil {
+			return domain.Upstream{}, fmt.Errorf("%s: %w", tunnel.Source.Value, err)
+		}
+		// A provider's egress configuration takes over the default route, which is
+		// right inside its own namespace and wrong for a private network: there it
+		// would capture everything instead of the subnets it serves.
+		if tunnel.Role == domain.RolePrivateNetwork && parsed.RedirectsGateway {
+			return domain.Upstream{}, fmt.Errorf(
+				"%s uses redirect-gateway, which would make this private network the default route "+
+					"for everything: remove that line or give the tunnel the egress role",
+				tunnel.Source.Value)
+		}
+		return domain.Upstream{Type: tunnel.Type, OpenVPN: parsed}, nil
+
 	default:
 		return domain.Upstream{}, fmt.Errorf("tunnel type %q has no loader", tunnel.Type)
 	}

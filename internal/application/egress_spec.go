@@ -21,6 +21,8 @@ const (
 	// proxyInterface is the tun device sing-box creates, named separately so a glance
 	// at a namespace says which kind of tunnel it holds.
 	proxyInterface = "sb0"
+	// openvpnInterface is the tun device OpenVPN creates. Same reasoning.
+	openvpnInterface = "ovpn0"
 	// peerVeth is the namespace end of the link. Same reasoning.
 	peerVeth = "uplink0"
 )
@@ -76,10 +78,9 @@ func BuildEgressSpecs(state domain.DesiredState, plan domain.FirewallPlan, tunne
 			return nil, fmt.Errorf("tunnel %q is referenced by the plan but is not in this revision", placement.id)
 		}
 		switch tunnel.Type {
-		case domain.TunnelWireGuard, domain.TunnelAmneziaWG, domain.TunnelXray:
+		case domain.TunnelWireGuard, domain.TunnelAmneziaWG, domain.TunnelXray, domain.TunnelOpenVPN:
 		default:
-			// OpenVPN has no driver yet; refusing beats pretending.
-			return nil, fmt.Errorf("tunnel %q is of type %s, which has no egress driver yet", tunnel.ID, tunnel.Type)
+			return nil, fmt.Errorf("tunnel %q is of type %s, which has no egress driver", tunnel.ID, tunnel.Type)
 		}
 		upstream, loaded := tunnels[tunnel.ID]
 		if !loaded {
@@ -105,6 +106,7 @@ func BuildEgressSpecs(state domain.DesiredState, plan domain.FirewallPlan, tunne
 			Type:        tunnel.Type,
 			Tunnel:      upstream.WireGuard,
 			Proxy:       upstream.Proxy,
+			OpenVPN:     upstream.OpenVPN,
 		})
 	}
 	return specs, nil
@@ -112,10 +114,14 @@ func BuildEgressSpecs(state domain.DesiredState, plan domain.FirewallPlan, tunne
 
 // upstreamInterface names the device that carries traffic out of a namespace.
 func upstreamInterface(kind domain.TunnelType) string {
-	if kind == domain.TunnelXray {
+	switch kind {
+	case domain.TunnelXray:
 		return proxyInterface
+	case domain.TunnelOpenVPN:
+		return openvpnInterface
+	default:
+		return egressInterface
 	}
-	return egressInterface
 }
 
 // linkAddresses carves the index-th /30 out of the link base, giving .1 to the main

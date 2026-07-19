@@ -170,16 +170,34 @@ func TestDirectIsNotAnEgressNamespace(t *testing.T) {
 	}
 }
 
-func TestBuildEgressSpecsRejectsProtocolsWithoutADriver(t *testing.T) {
+// Every configured type now has a driver, so an unknown one is the only thing left
+// to refuse -- and refusing beats pretending.
+func TestBuildEgressSpecsRejectsAnUnknownProtocol(t *testing.T) {
 	t.Parallel()
 	state, tunnels := egressState(t)
-	state.Tunnels[0].Type = domain.TunnelOpenVPN
+	state.Tunnels[0].Type = "ipsec"
 	plan, err := BuildFirewallPlan(state, "eth0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := BuildEgressSpecs(state, plan, tunnels); err == nil {
 		t.Fatal("expected a tunnel type with no driver to be refused rather than pretended")
+	}
+}
+
+// Each protocol gets the device its own tooling creates, so a glance at a namespace
+// says which kind of tunnel it holds.
+func TestEachProtocolGetsItsOwnDeviceName(t *testing.T) {
+	t.Parallel()
+	for kind, device := range map[domain.TunnelType]string{
+		domain.TunnelWireGuard: "wg0",
+		domain.TunnelAmneziaWG: "wg0",
+		domain.TunnelXray:      "sb0",
+		domain.TunnelOpenVPN:   "ovpn0",
+	} {
+		if got := upstreamInterface(kind); got != device {
+			t.Errorf("%s uses %q, want %q", kind, got, device)
+		}
 	}
 }
 

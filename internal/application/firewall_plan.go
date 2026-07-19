@@ -52,7 +52,10 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 
 	proxied := make(map[string]bool, len(state.Tunnels))
 	for _, tunnel := range state.Tunnels {
-		proxied[tunnel.ID] = tunnel.Type == domain.TunnelXray
+		// Both run their process inside the namespace, so their own connections to
+		// the provider are forwarded through the main namespace rather than
+		// originating there.
+		proxied[tunnel.ID] = tunnel.Type == domain.TunnelXray || tunnel.Type == domain.TunnelOpenVPN
 	}
 
 	plan := domain.FirewallPlan{

@@ -105,8 +105,9 @@ func (e Egress) Apply(ctx context.Context, specs []domain.EgressSpec) error {
 		}
 		// Stop the proxy first: deleting a namespace out from under a running
 		// process leaves the unit failing in a loop rather than simply gone.
-		_, _ = e.run(ctx, "systemctl", "stop",
-			"vpn-hub-proxy-"+strings.TrimPrefix(namespace, "vpn-hub-")+".service")
+		id := strings.TrimPrefix(namespace, "vpn-hub-")
+		_, _ = e.run(ctx, "systemctl", "stop", "vpn-hub-proxy-"+id+".service")
+		_, _ = e.run(ctx, "systemctl", "stop", "vpn-hub-openvpn-"+id+".service")
 		// Deleting the namespace takes its interfaces, routes and processes with it.
 		if err := e.namespaceLifecycle(ctx, "del", namespace); err != nil {
 			return fmt.Errorf("remove namespace %s: %w", namespace, err)
@@ -221,10 +222,14 @@ func (e Egress) ensureLink(ctx context.Context, spec domain.EgressSpec) error {
 // ensureTunnel brings the upstream interface up inside the namespace, by whichever
 // mechanism the tunnel's protocol needs.
 func (e Egress) ensureTunnel(ctx context.Context, spec domain.EgressSpec) error {
-	if spec.Type == domain.TunnelXray {
+	switch spec.Type {
+	case domain.TunnelXray:
 		return e.ensureProxy(ctx, spec)
+	case domain.TunnelOpenVPN:
+		return e.ensureOpenVPN(ctx, spec)
+	default:
+		return e.ensureWireGuard(ctx, spec)
 	}
-	return e.ensureWireGuard(ctx, spec)
 }
 
 // ensureProxy runs sing-box inside the namespace, presenting a tun device that
