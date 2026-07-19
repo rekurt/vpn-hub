@@ -73,6 +73,8 @@ make stand-down          # удаляет хост
 
 Terraform создаёт дроплет Ubuntu 24.04 без IPv6, SSH-ключ и cloud firewall (открыты только 22/tcp и 51820/udp). cloud-init готовит ОС: `ip_forward`, выключение IPv6, `/run/netns`, SSH без паролей, AmneziaWG через DKMS из Amnezia PPA. Отдельно отключаются `ufw` и `nftables.service` — ruleset принадлежит агенту, и они бы с ним конфликтовали.
 
+**Хаб предполагает, что владеет форвардингом на своей машине.** Netfilter прогоняет все цепочки, зарегистрированные на хуке, поэтому чужой `DROP` в цепочке forward убивает пакет независимо от того, что разрешает таблица `inet vpn_hub`. Практически это значит: не ставьте на хаб Docker (он выставляет `iptables -P FORWARD DROP`) и не включайте `ufw`. Держите хаб выделенным.
+
 Параметры переопределяются через `deploy/terraform/terraform.tfvars` (см. `terraform.tfvars.example`) — регион, размер, дополнительные SSH-ключи, сужение доступа к SSH.
 
 cloud-init выполняется только при первой загрузке, поэтому правка `cloud-init.yaml` пересоздаёт хост — `make stand-plan` покажет это до применения.

@@ -65,6 +65,15 @@ jobs:
       - name: Enable forwarding
         run: sudo sysctl -w net.ipv4.ip_forward=1
 
+      # Runners ship Docker, which sets the iptables filter FORWARD policy to DROP.
+      # Netfilter runs every chain registered on a hook, so that DROP kills forwarded
+      # packets regardless of what the hub's own table accepts. The hub assumes it
+      # owns forwarding on its host; this makes the runner match that assumption.
+      - name: Stand down the competing FORWARD policy
+        run: |
+          sudo iptables -P FORWARD ACCEPT || true
+          sudo ip6tables -P FORWARD ACCEPT || true
+
       - name: Integration tests
         run: sudo -E env "PATH=$PATH" go test -tags=integration -count=1 -timeout 15m ./internal/adapters/linux/
 
