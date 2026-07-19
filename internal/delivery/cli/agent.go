@@ -47,6 +47,7 @@ func (f *agentFlags) reconciler() ports.Reconciler {
 		Firewall:      linux.NFTables{},
 		Ingress:       linux.Ingress{SecretsDir: f.runtimeDir},
 		Egress:        linux.Egress{SecretsDir: f.runtimeDir},
+		DNS:           linux.Dnsmasq{ConfigDir: f.runtimeDir},
 		TunnelConfigs: linux.TunnelConfigFiles{Dir: f.configDir, Secrets: configadapter.SOPSSecretStore{}},
 		Host:          linux.NetConf{},
 		ServerKey:     linux.ServerKeyFile{Path: f.keyPath},

@@ -22,13 +22,33 @@ type FirewallPlan struct {
 	ClientCIDR string `json:"client_cidr"`
 	DNSAddress string `json:"dns_address"`
 
-	// InternalRoutes are destinations reached through private-network tunnels. They
-	// take priority over a profile's default egress.
-	InternalRoutes []string `json:"internal_routes,omitempty"`
+	// Internals are the private networks, each reached through its own tunnel. They
+	// take priority over a device's default egress, which is what lets one
+	// connection reach corporate resources and the internet at the same time.
+	Internals []InternalNetwork `json:"internals,omitempty"`
 
 	// Egresses is ordered deterministically so an unchanged configuration renders
 	// byte-identically.
 	Egresses []EgressGroup `json:"egresses"`
+}
+
+// InternalNetwork is one private network and the tunnel that reaches it.
+//
+// Each gets its own address set rather than sharing one: a shared set can say that a
+// destination is internal but not which tunnel owns it, and that is exactly the
+// question routing has to answer.
+type InternalNetwork struct {
+	TunnelID string `json:"tunnel_id"`
+	Mark     uint32 `json:"mark"`
+	// Interface carries traffic towards this network's namespace.
+	Interface string `json:"interface"`
+	// Routes are known statically from configuration. Addresses learned from DNS are
+	// added to the same set at runtime.
+	Routes []string `json:"routes,omitempty"`
+	// Zones are the private domains resolved through this tunnel.
+	Zones []string `json:"zones,omitempty"`
+	// Resolvers answer for those zones and are themselves reached through the tunnel.
+	Resolvers []string `json:"resolvers,omitempty"`
 }
 
 // EgressGroup binds a set of client addresses to one outbound path.

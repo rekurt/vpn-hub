@@ -1,6 +1,7 @@
 package application
 
 import (
+	"strings"
 	"testing"
 
 	"vpn-hub/internal/domain"
@@ -41,9 +42,26 @@ func TestBuildFirewallPlan(t *testing.T) {
 		t.Fatalf("expected two egress groups, got %d", len(plan.Egresses))
 	}
 
-	// Only private-network routes are internal; an egress tunnel's routes are not.
-	if len(plan.InternalRoutes) != 1 || plan.InternalRoutes[0] != "10.20.0.0/16" {
-		t.Errorf("InternalRoutes = %v, want just the private-network route", plan.InternalRoutes)
+	// Only private-network tunnels become internal networks; an egress tunnel's
+	// routes are not reachable that way.
+	if len(plan.Internals) != 1 || plan.Internals[0].TunnelID != "corp-wg" {
+		t.Fatalf("Internals = %+v, want just the private-network tunnel", plan.Internals)
+	}
+	if got := plan.Internals[0].Routes; len(got) != 1 || got[0] != "10.20.0.0/16" {
+		t.Errorf("Routes = %v, want the configured subnet", got)
+	}
+
+	// Internal marks must not collide with egress marks, or traffic is routed by
+	// whichever table happens to answer for that mark.
+	used := map[uint32]string{}
+	for _, group := range plan.Egresses {
+		used[group.Mark] = group.ID
+	}
+	for _, network := range plan.Internals {
+		if previous, clash := used[network.Mark]; clash {
+			t.Errorf("mark %#x is shared by %s and %s", network.Mark, previous, network.TunnelID)
+		}
+		used[network.Mark] = network.TunnelID
 	}
 }
 
@@ -97,6 +115,33 @@ func TestAddressesAreRenderedWithoutPrefixLength(t *testing.T) {
 				t.Errorf("unexpected address %q", got)
 			}
 		}
+	}
+}
+
+// The resolver for a private zone has to reach that zone's tunnel, so it joins the
+// set -- unless a declared subnet already covers it, since nftables interval sets
+// refuse overlapping entries.
+func TestResolversJoinTheSetOnlyWhenNotAlreadyCovered(t *testing.T) {
+	t.Parallel()
+	state := planState()
+	state.Tunnels[0].DNSServers = []string{"10.20.0.53", "192.168.9.53"}
+	state.Tunnels[0].DNSZones = []string{"corp.internal"}
+
+	plan, err := BuildFirewallPlan(state, "eth0")
+	if err != nil {
+		t.Fatalf("BuildFirewallPlan: %v", err)
+	}
+	if len(plan.Internals) != 1 {
+		t.Fatalf("expected one private network, got %+v", plan.Internals)
+	}
+
+	routes := plan.Internals[0].Routes
+	joined := strings.Join(routes, " ")
+	if !strings.Contains(joined, "192.168.9.53/32") {
+		t.Errorf("a resolver outside the declared subnets must be routed too: %v", routes)
+	}
+	if strings.Contains(joined, "10.20.0.53/32") {
+		t.Errorf("a resolver already inside 10.20.0.0/16 must not be added again: %v", routes)
 	}
 }
 

@@ -18,6 +18,7 @@ type HostReconciler struct {
 	Firewall      ports.Firewall
 	Ingress       ports.Ingress
 	Egress        ports.EgressManager
+	DNS           ports.DNSManager
 	TunnelConfigs ports.TunnelConfigStore
 	Host          ports.HostNetwork
 	ServerKey     ports.ServerKeyStore
@@ -100,6 +101,16 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 			return nil, fmt.Errorf("apply egress: %w", err)
 		}
 	}
+	// Resolvers after the namespaces they live in and forward through.
+	if r.DNS != nil {
+		dns, err := BuildDNSPlan(state, plan, egresses)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.DNS.Apply(ctx, dns); err != nil {
+			return nil, fmt.Errorf("apply dns: %w", err)
+		}
+	}
 	return operations, nil
 }
 
@@ -148,11 +159,11 @@ func (r HostReconciler) compileEgresses(ctx context.Context, state domain.Desire
 		return nil, nil
 	}
 
-	needed := make(map[string]struct{}, len(plan.Egresses))
-	for _, group := range plan.Egresses {
-		if group.ID != domain.EgressDirect {
-			needed[group.ID] = struct{}{}
-		}
+	// Private networks need their upstream configuration just as egresses do: they
+	// are tunnels the hub dials, only reached by destination rather than chosen.
+	needed := make(map[string]struct{})
+	for _, placement := range placements(plan) {
+		needed[placement.id] = struct{}{}
 	}
 	if len(needed) == 0 {
 		return nil, nil

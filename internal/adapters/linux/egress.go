@@ -279,18 +279,20 @@ func (e Egress) ensureTunnel(ctx context.Context, spec domain.EgressSpec) error 
 		return err
 	}
 
-	// Client addresses are translated to the tunnel's own, so the provider sees
-	// traffic from the address it issued.
+	// Everything leaving through the tunnel is translated to the address the provider
+	// issued. Not just the client subnet: the hub itself sends traffic this way too --
+	// the resolver querying a private zone's nameserver arrives from this end of the
+	// veth -- and untranslated it would reach a network with no route back.
 	ruleset := fmt.Sprintf(`table inet vpn_hub_egress
 delete table inet vpn_hub_egress
 
 table inet vpn_hub_egress {
 	chain postrouting {
 		type nat hook postrouting priority srcnat; policy accept;
-		ip saddr %s oifname %q masquerade
+		oifname %q masquerade
 	}
 }
-`, spec.ClientCIDR, spec.Interface)
+`, spec.Interface)
 	return e.applyNamespaceRuleset(ctx, spec.Namespace, ruleset)
 }
 

@@ -6,19 +6,19 @@ table inet vpn_hub
 delete table inet vpn_hub
 
 table inet vpn_hub {
-	comment "vpn-hub:bebff6ef9348359a"
+	comment "vpn-hub:677e9497fd252595"
 
 	set client_direct {
 		type ipv4_addr
 		elements = { 10.80.0.2, 10.80.0.3 }
 	}
 
-	set client_corp_wg {
+	set client_provider_nl {
 		type ipv4_addr
 		elements = { 10.80.0.4 }
 	}
 
-	set internal_v4 {
+	set internal_corp_a {
 		type ipv4_addr
 		flags interval
 		elements = { 10.20.0.0/16 }
@@ -27,9 +27,9 @@ table inet vpn_hub {
 	chain prerouting {
 		type filter hook prerouting priority mangle; policy accept;
 		iifname != "awg0" accept
-		ip daddr @internal_v4 accept
+		ip daddr @internal_corp_a meta mark set 0x00000102 ct mark set meta mark return
 		ip saddr @client_direct meta mark set 0x00000100
-		ip saddr @client_corp_wg meta mark set 0x00000101
+		ip saddr @client_provider_nl meta mark set 0x00000101
 		ct mark set meta mark
 	}
 
@@ -37,9 +37,9 @@ table inet vpn_hub {
 		type filter hook forward priority filter; policy drop;
 		ct state established,related accept
 		iifname "awg0" oifname "awg0" drop
-		iifname "awg0" ip daddr @internal_v4 accept
+		iifname "awg0" ip daddr @internal_corp_a oifname "vh-corp-a" accept
 		iifname "awg0" ip saddr @client_direct oifname "eth0" accept
-		iifname "awg0" ip saddr @client_corp_wg oifname "vh-corp-wg" accept
+		iifname "awg0" ip saddr @client_provider_nl oifname "vh-provider-nl" accept
 	}
 
 	chain input {
@@ -53,13 +53,25 @@ table inet vpn_hub {
 		iifname "awg0" ip daddr 10.80.0.1 tcp dport 53 accept
 	}
 
+	chain output_mark {
+		type route hook output priority mangle; policy accept;
+		ip daddr @internal_corp_a meta mark set 0x00000102
+	}
+
 	chain output {
 		type filter hook output priority filter; policy accept;
 		meta nfproto ipv6 drop
 	}
 
+	chain prerouting_nat {
+		type nat hook prerouting priority dstnat; policy accept;
+		iifname "awg0" udp dport 53 dnat ip to 10.80.0.1:53
+		iifname "awg0" tcp dport 53 dnat ip to 10.80.0.1:53
+	}
+
 	chain postrouting {
 		type nat hook postrouting priority srcnat; policy accept;
 		ip saddr 10.80.0.0/24 oifname "eth0" masquerade
+		ip saddr != 10.80.0.0/24 oifname "vh-corp-a" masquerade
 	}
 }

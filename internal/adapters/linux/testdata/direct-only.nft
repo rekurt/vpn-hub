@@ -43,6 +43,12 @@ table inet vpn_hub {
 		meta nfproto ipv6 drop
 	}
 
+	chain prerouting_nat {
+		type nat hook prerouting priority dstnat; policy accept;
+		iifname "awg0" udp dport 53 dnat ip to 10.80.0.1:53
+		iifname "awg0" tcp dport 53 dnat ip to 10.80.0.1:53
+	}
+
 	chain postrouting {
 		type nat hook postrouting priority srcnat; policy accept;
 		ip saddr 10.80.0.0/24 oifname "eth0" masquerade

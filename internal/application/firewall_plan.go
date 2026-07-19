@@ -57,7 +57,7 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 		ManagementPort:   ManagementPort,
 		ClientCIDR:       state.Hub.ClientCIDR,
 		DNSAddress:       state.Hub.DNSAddress,
-		InternalRoutes:   internalRoutes(state.Tunnels),
+		Internals:        nil, // filled below, once marks are allocated
 		Egresses:         make([]domain.EgressGroup, 0, len(grouped)),
 	}
 
@@ -90,21 +90,77 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 		})
 	}
 
+	// Internal marks continue where the egress marks stopped, so a private network
+	// and an egress can never be confused for one another.
+	nextMark := directEgressMark + 1 + uint32(len(tunnelEgresses))
+	plan.Internals = internalNetworks(state.Tunnels, nextMark)
+
 	return plan, nil
 }
 
-// internalRoutes collects the destinations served by private-network tunnels. They
-// outrank a profile's default egress, so they are matched before it.
-func internalRoutes(tunnels []domain.Tunnel) []string {
-	var routes []string
+// internalNetworks gives every private-network tunnel its own set, mark and route
+// table, continuing the numbering the egress groups started so the two never collide.
+func internalNetworks(tunnels []domain.Tunnel, firstMark uint32) []domain.InternalNetwork {
+	private := make([]domain.Tunnel, 0, len(tunnels))
 	for _, tunnel := range tunnels {
-		if tunnel.Role != domain.RolePrivateNetwork {
+		if tunnel.Role == domain.RolePrivateNetwork {
+			private = append(private, tunnel)
+		}
+	}
+	sort.Slice(private, func(i, j int) bool { return private[i].ID < private[j].ID })
+
+	networks := make([]domain.InternalNetwork, 0, len(private))
+	for index, tunnel := range private {
+		routes := append([]string(nil), tunnel.Routes...)
+		// The resolver for a private zone lives inside that network, so queries to it
+		// must take the same path as the traffic that follows. Skip any already
+		// covered by a declared subnet: an interval set rejects overlapping entries.
+		routes = append(routes, uncoveredResolvers(tunnel.DNSServers, tunnel.Routes)...)
+		sort.Strings(routes)
+
+		zones := append([]string(nil), tunnel.DNSZones...)
+		sort.Strings(zones)
+
+		networks = append(networks, domain.InternalNetwork{
+			TunnelID:  tunnel.ID,
+			Mark:      firstMark + uint32(index),
+			Interface: EgressInterface(tunnel.ID),
+			Routes:    routes,
+			Zones:     zones,
+			Resolvers: append([]string(nil), tunnel.DNSServers...),
+		})
+	}
+	return networks
+}
+
+// uncoveredResolvers turns resolver addresses into host routes, dropping those a
+// declared subnet already contains.
+func uncoveredResolvers(addresses, routes []string) []string {
+	prefixes := make([]netip.Prefix, 0, len(routes))
+	for _, route := range routes {
+		if prefix, err := netip.ParsePrefix(route); err == nil {
+			prefixes = append(prefixes, prefix.Masked())
+		}
+	}
+
+	result := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		parsed, err := netip.ParseAddr(address)
+		if err != nil {
 			continue
 		}
-		routes = append(routes, tunnel.Routes...)
+		covered := false
+		for _, prefix := range prefixes {
+			if prefix.Contains(parsed) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			result = append(result, fmt.Sprintf("%s/%d", parsed, parsed.BitLen()))
+		}
 	}
-	sort.Strings(routes)
-	return routes
+	return result
 }
 
 func hubListenPort(endpoint string) (uint16, error) {

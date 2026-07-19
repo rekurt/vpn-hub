@@ -13,7 +13,11 @@ import (
 	"vpn-hub/internal/domain"
 )
 
-const internalSet = "internal_v4"
+// internalSetName names the address set of one private network. Identifier safety
+// comes from validation, which restricts tunnel IDs to a charset nftables accepts.
+func internalSetName(tunnelID string) string {
+	return "internal_" + strings.ReplaceAll(tunnelID, "-", "_")
+}
 
 // Fingerprint identifies a firewall plan by its content.
 //
@@ -62,12 +66,15 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 		line("")
 	}
 
-	hasInternal := len(plan.InternalRoutes) > 0
-	if hasInternal {
-		line("\tset %s {", internalSet)
+	for _, network := range plan.Internals {
+		line("\tset %s {", internalSetName(network.TunnelID))
 		line("\t\ttype ipv4_addr")
+		// interval so subnets fit, and so dnsmasq can add single addresses it
+		// resolves for this network's zones.
 		line("\t\tflags interval")
-		line("\t\telements = { %s }", strings.Join(plan.InternalRoutes, ", "))
+		if len(network.Routes) > 0 {
+			line("\t\telements = { %s }", strings.Join(network.Routes, ", "))
+		}
 		line("\t}")
 		line("")
 	}
@@ -77,8 +84,13 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\tchain prerouting {")
 	line("\t\ttype filter hook prerouting priority mangle; policy accept;")
 	line("\t\tiifname != %q accept", plan.IngressInterface)
-	if hasInternal {
-		line("\t\tip daddr @%s accept", internalSet)
+	for _, network := range plan.Internals {
+		// `return` ends the chain here so the default-egress rule below cannot
+		// overwrite the mark. Without it a private destination would be marked and
+		// then immediately re-marked for the internet path, since setting a mark does
+		// not stop evaluation.
+		line("\t\tip daddr @%s meta mark set 0x%08x ct mark set meta mark return",
+			internalSetName(network.TunnelID), network.Mark)
 	}
 	for _, group := range plan.Egresses {
 		line("\t\tip saddr @%s meta mark set 0x%08x", setName(group), group.Mark)
@@ -93,8 +105,9 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\t\ttype filter hook forward priority filter; policy drop;")
 	line("\t\tct state established,related accept")
 	line("\t\tiifname %q oifname %q drop", plan.IngressInterface, plan.IngressInterface)
-	if hasInternal {
-		line("\t\tiifname %q ip daddr @%s accept", plan.IngressInterface, internalSet)
+	for _, network := range plan.Internals {
+		line("\t\tiifname %q ip daddr @%s oifname %q accept",
+			plan.IngressInterface, internalSetName(network.TunnelID), network.Interface)
 	}
 	for _, group := range plan.Egresses {
 		line("\t\tiifname %q ip saddr @%s oifname %q accept", plan.IngressInterface, setName(group), group.Interface)
@@ -114,6 +127,20 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\t}")
 	line("")
 
+	// Traffic the hub originates itself -- the resolver querying a private zone's
+	// nameserver -- never passes through prerouting, so it needs marking here. The
+	// chain is `type route` because only that makes the kernel reconsider the route
+	// after the mark is set; a filter chain would mark the packet too late to matter.
+	if len(plan.Internals) > 0 {
+		line("\tchain output_mark {")
+		line("\t\ttype route hook output priority mangle; policy accept;")
+		for _, network := range plan.Internals {
+			line("\t\tip daddr @%s meta mark set 0x%08x", internalSetName(network.TunnelID), network.Mark)
+		}
+		line("\t}")
+		line("")
+	}
+
 	// The host itself must not emit IPv6: there is no IPv6 egress path, so anything
 	// leaving this way would bypass every tunnel.
 	line("\tchain output {")
@@ -126,12 +153,32 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	// namespace does its own translation, to the address its provider issued, and
 	// translating twice would hide the client address from the rule that does it --
 	// the packet would arrive there sourced from this end of the veth instead.
+	// Clients are pointed at the hub resolver, and any that ask elsewhere are brought
+	// back to it. DNS-over-TLS is refused outright: it would carry private names past
+	// split-DNS silently, and silence is the problem.
+	line("\tchain prerouting_nat {")
+	line("\t\ttype nat hook prerouting priority dstnat; policy accept;")
+	// `dnat ip` rather than plain `dnat`: an inet table serves both families and
+	// will not guess which one a rule means.
+	line("\t\tiifname %q udp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
+	line("\t\tiifname %q tcp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
+	line("\t}")
+	line("")
+
 	line("\tchain postrouting {")
 	line("\t\ttype nat hook postrouting priority srcnat; policy accept;")
 	for _, group := range plan.Egresses {
 		if group.Interface == plan.UplinkInterface {
 			line("\t\tip saddr %s oifname %q masquerade", plan.ClientCIDR, group.Interface)
 		}
+	}
+	// Traffic the hub originates towards a tunnel -- the resolver querying a private
+	// zone's nameserver -- carries the uplink address, and the namespace has no route
+	// back to it. Translating it to this end of the veth gives the reply a way home.
+	// Client traffic is excluded: it keeps its address so the tunnel sees who it is
+	// serving, and the namespace translates it once on the way out.
+	for _, network := range plan.Internals {
+		line("\t\tip saddr != %s oifname %q masquerade", plan.ClientCIDR, network.Interface)
 	}
 	line("\t}")
 	line("}")

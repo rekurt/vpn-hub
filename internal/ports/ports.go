@@ -53,6 +53,12 @@ type TunnelConfigStore interface {
 	Load(ctx context.Context, source string) (domain.WireGuardTunnel, error)
 }
 
+// DNSManager installs the resolver policy: private zones into their tunnels,
+// everything else through the default egress.
+type DNSManager interface {
+	Apply(context.Context, domain.DNSPlan) error
+}
+
 // HostNetwork answers questions about the machine the hub runs on, which cannot come
 // from configuration.
 type HostNetwork interface {

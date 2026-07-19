@@ -35,9 +35,9 @@ func newTunnelListCommand(configPath *string) *cobra.Command {
 				return err
 			}
 			writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(writer, "ID\tROLE\tTYPE\tENABLED\tROUTES\tZONES")
+			_, _ = fmt.Fprintln(writer, "ID\tROLE\tTYPE\tENABLED\tROUTES\tZONES")
 			for _, tunnel := range cfg.Tunnels {
-				fmt.Fprintf(writer, "%s\t%s\t%s\t%t\t%s\t%s\n",
+				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%t\t%s\t%s\n",
 					tunnel.ID, tunnel.Role, tunnel.Type, tunnel.IsEnabled(),
 					summarise(tunnel.Routes), summarise(tunnel.DNSZones))
 			}
@@ -117,9 +117,9 @@ func newDeviceListCommand(configPath *string) *cobra.Command {
 				return err
 			}
 			writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(writer, "ID\tADDRESS\tEGRESS")
+			_, _ = fmt.Fprintln(writer, "ID\tADDRESS\tEGRESS")
 			for _, device := range cfg.Devices {
-				fmt.Fprintf(writer, "%s\t%s\t%s\n", device.ID, device.Address, device.Egress)
+				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\n", device.ID, device.Address, device.Egress)
 			}
 			return writer.Flush()
 		},
@@ -181,16 +181,16 @@ func newRoutesCommand(configPath *string) *cobra.Command {
 			}
 
 			writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(writer, "DESTINATION\tVIA\tWHY")
+			_, _ = fmt.Fprintln(writer, "DESTINATION\tVIA\tWHY")
 			for _, tunnel := range state.Tunnels {
 				if tunnel.Role != domain.RolePrivateNetwork {
 					continue
 				}
 				for _, route := range tunnel.Routes {
-					fmt.Fprintf(writer, "%s\t%s\tprivate network\n", route, tunnel.ID)
+					_, _ = fmt.Fprintf(writer, "%s\t%s\tprivate network\n", route, tunnel.ID)
 				}
 				for _, zone := range tunnel.DNSZones {
-					fmt.Fprintf(writer, "*.%s\t%s\tprivate domain\n", zone, tunnel.ID)
+					_, _ = fmt.Fprintf(writer, "*.%s\t%s\tprivate domain\n", zone, tunnel.ID)
 				}
 			}
 
@@ -201,7 +201,7 @@ func newRoutesCommand(configPath *string) *cobra.Command {
 			for _, egress := range sortedKeys(byEgress) {
 				devices := byEgress[egress]
 				sort.Strings(devices)
-				fmt.Fprintf(writer, "everything else\t%s\tdefault for %s\n", egress, strings.Join(devices, ", "))
+				_, _ = fmt.Fprintf(writer, "everything else\t%s\tdefault for %s\n", egress, strings.Join(devices, ", "))
 			}
 			return writer.Flush()
 		},

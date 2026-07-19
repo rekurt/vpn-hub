@@ -22,7 +22,33 @@ const (
 	peerVeth = "uplink0"
 )
 
-// BuildEgressSpecs derives one isolated namespace per egress tunnel.
+// tunnelPlacement pairs a tunnel with the mark and interface the firewall plan gave
+// it, whichever role it plays.
+type tunnelPlacement struct {
+	id     string
+	mark   uint32
+	device string
+}
+
+// placements lists every tunnel that needs a namespace: the egresses devices selected
+// and the private networks, which are reached by destination rather than chosen.
+func placements(plan domain.FirewallPlan) []tunnelPlacement {
+	var result []tunnelPlacement
+	for _, group := range plan.Egresses {
+		if group.ID != domain.EgressDirect {
+			result = append(result, tunnelPlacement{group.ID, group.Mark, group.Interface})
+		}
+	}
+	for _, network := range plan.Internals {
+		result = append(result, tunnelPlacement{network.TunnelID, network.Mark, network.Interface})
+	}
+	return result
+}
+
+// BuildEgressSpecs derives one isolated namespace per tunnel, for private networks as
+// well as egresses. A private network is not selected by a device; it is reached
+// whenever a packet is addressed to it, which is what lets one connection serve the
+// internet and corporate resources at the same time.
 //
 // The layout is derived from the tunnel's position in the plan rather than stored,
 // so it is reproducible: the same revision always yields the same namespaces,
@@ -41,14 +67,10 @@ func BuildEgressSpecs(state domain.DesiredState, plan domain.FirewallPlan, tunne
 	}
 
 	var specs []domain.EgressSpec
-	index := 0
-	for _, group := range plan.Egresses {
-		if group.ID == domain.EgressDirect {
-			continue
-		}
-		tunnel, known := byID[group.ID]
+	for index, placement := range placements(plan) {
+		tunnel, known := byID[placement.id]
 		if !known {
-			return nil, fmt.Errorf("egress %q is selected by a profile but is not a tunnel in this revision", group.ID)
+			return nil, fmt.Errorf("tunnel %q is referenced by the plan but is not in this revision", placement.id)
 		}
 		if tunnel.Type != domain.TunnelWireGuard && tunnel.Type != domain.TunnelAmneziaWG {
 			// Other protocols get their own driver; refusing beats pretending.
@@ -67,17 +89,16 @@ func BuildEgressSpecs(state domain.DesiredState, plan domain.FirewallPlan, tunne
 		specs = append(specs, domain.EgressSpec{
 			TunnelID:    tunnel.ID,
 			Namespace:   "vpn-hub-" + tunnel.ID,
-			HostVeth:    EgressInterface(tunnel.ID),
+			HostVeth:    placement.device,
 			PeerVeth:    peerVeth,
 			HostAddress: hostAddress,
 			PeerAddress: peerAddress,
-			Mark:        group.Mark,
+			Mark:        placement.mark,
 			RouteTable:  routeTableBase + index,
 			ClientCIDR:  state.Hub.ClientCIDR,
 			Interface:   egressInterface,
 			Tunnel:      upstream,
 		})
-		index++
 	}
 	return specs, nil
 }
