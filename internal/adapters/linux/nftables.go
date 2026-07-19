@@ -3,6 +3,9 @@ package linux
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -11,6 +14,21 @@ import (
 )
 
 const internalSet = "internal_v4"
+
+// Fingerprint identifies a firewall plan by its content.
+//
+// It is deliberately computed from the plan rather than from the rendered text: the
+// rendering is what the fingerprint is embedded in, so hashing the output would have
+// to hash around its own marker.
+func Fingerprint(plan domain.FirewallPlan) string {
+	payload, err := json.Marshal(plan)
+	if err != nil {
+		// FirewallPlan holds only strings, numbers and slices of them.
+		panic("firewall plan is not serialisable: " + err.Error())
+	}
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:])[:16]
+}
 
 // RenderRuleset formats a firewall plan as an nftables script.
 //
@@ -30,6 +48,11 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("delete table inet vpn_hub")
 	line("")
 	line("table inet vpn_hub {")
+	// The fingerprint travels with the ruleset itself rather than in a file beside
+	// it, so reading it back cannot disagree with what is actually loaded: if
+	// something flushes the table, the fingerprint goes with it.
+	line("\tcomment %q", "vpn-hub:"+Fingerprint(plan))
+	line("")
 
 	for _, group := range plan.Egresses {
 		line("\tset %s {", setName(group))
@@ -125,14 +148,61 @@ func setName(group domain.EgressGroup) string {
 // line number, neither of which the netlink bindings provide.
 type NFTables struct {
 	Binary string
+	// Run defaults to executing commands for real.
+	Run runner
 }
 
-func (n NFTables) Apply(ctx context.Context, plan domain.FirewallPlan) error {
-	binary := n.Binary
-	if binary == "" {
-		binary = "nft"
+func (n NFTables) binary() string {
+	if n.Binary != "" {
+		return n.Binary
 	}
-	command := exec.CommandContext(ctx, binary, "-f", "-")
+	return "nft"
+}
+
+// Observe reports the fingerprint carried by the live table, or an empty string when
+// the table is absent — which is what drift usually looks like.
+func (n NFTables) Observe(ctx context.Context) (string, error) {
+	run := n.Run
+	if run == nil {
+		run = execRunner
+	}
+	output, err := run(ctx, n.binary(), "-j", "list", "table", "inet", "vpn_hub")
+	if err != nil {
+		// A missing table is the expected state before the first apply, and after
+		// someone flushes the ruleset. Neither is an error.
+		return "", nil //nolint:nilerr
+	}
+	return parseFingerprint(output)
+}
+
+// nftJSON is the slice of `nft -j list table` output that matters here.
+type nftJSON struct {
+	Nftables []struct {
+		Table *struct {
+			Comment string `json:"comment"`
+		} `json:"table"`
+	} `json:"nftables"`
+}
+
+func parseFingerprint(output string) (string, error) {
+	var decoded nftJSON
+	if err := json.Unmarshal([]byte(output), &decoded); err != nil {
+		return "", fmt.Errorf("decode nft output: %w", err)
+	}
+	for _, entry := range decoded.Nftables {
+		if entry.Table != nil {
+			return strings.TrimPrefix(entry.Table.Comment, "vpn-hub:"), nil
+		}
+	}
+	return "", nil
+}
+
+// Fingerprint satisfies the port; the work is a pure function so it can be reused
+// without an adapter.
+func (n NFTables) Fingerprint(plan domain.FirewallPlan) string { return Fingerprint(plan) }
+
+func (n NFTables) Apply(ctx context.Context, plan domain.FirewallPlan) error {
+	command := exec.CommandContext(ctx, n.binary(), "-f", "-")
 	command.Stdin = strings.NewReader(RenderRuleset(plan))
 
 	var stderr bytes.Buffer

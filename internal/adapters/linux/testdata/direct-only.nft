@@ -6,6 +6,8 @@ table inet vpn_hub
 delete table inet vpn_hub
 
 table inet vpn_hub {
+	comment "vpn-hub:98132a1e279c34de"
+
 	set client_direct {
 		type ipv4_addr
 		elements = { 10.80.0.2, 10.80.0.3 }

@@ -73,10 +73,10 @@ func (i Ingress) run(ctx context.Context, name string, args ...string) (string, 
 
 // Observe reports what the host currently has. A missing interface is not an error:
 // it is the state before the first reconcile.
-func (i Ingress) Observe(ctx context.Context, name string) (IngressState, error) {
+func (i Ingress) Observe(ctx context.Context, name string) (domain.IngressObservation, error) {
 	output, err := i.run(ctx, i.tool(), "show", name, "dump")
 	if err != nil {
-		return IngressState{}, nil //nolint:nilerr // absent interface, not a failure
+		return domain.IngressObservation{}, nil //nolint:nilerr // absent interface, not a failure
 	}
 	return ParseDump(output)
 }
@@ -125,7 +125,7 @@ func (i Ingress) Apply(ctx context.Context, spec domain.IngressSpec) error {
 
 // syncPeers adds or updates the configured peers and removes the rest, so a revoked
 // device stops being able to complete a handshake.
-func (i Ingress) syncPeers(ctx context.Context, spec domain.IngressSpec, observed IngressState) error {
+func (i Ingress) syncPeers(ctx context.Context, spec domain.IngressSpec, observed domain.IngressObservation) error {
 	wanted := make(map[string]struct{}, len(spec.Peers))
 	for _, peer := range spec.Peers {
 		wanted[peer.PublicKey] = struct{}{}

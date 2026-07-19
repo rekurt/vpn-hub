@@ -28,11 +28,17 @@ type SecretStore interface {
 // Firewall installs a rendered policy as a single transaction.
 type Firewall interface {
 	Apply(context.Context, domain.FirewallPlan) error
+	// Observe returns the fingerprint carried by the live ruleset, empty when there
+	// is none.
+	Observe(context.Context) (string, error)
+	// Fingerprint is what Observe would return for a plan that is correctly loaded.
+	Fingerprint(domain.FirewallPlan) string
 }
 
 // Ingress manages the interface clients connect to.
 type Ingress interface {
 	Apply(context.Context, domain.IngressSpec) error
+	Observe(ctx context.Context, name string) (domain.IngressObservation, error)
 }
 
 // HostNetwork answers questions about the machine the hub runs on, which cannot come
@@ -47,9 +53,12 @@ type ServerKeyStore interface {
 	PrivateKey(context.Context) (string, error)
 }
 
+// Reconciler converges a host towards a revision. Apply returns the differences it
+// closed, so a caller can report drift without asking twice.
 type Reconciler interface {
+	Observe(context.Context) (domain.ObservedState, error)
 	Plan(context.Context, domain.DesiredState) ([]domain.Operation, error)
-	Apply(context.Context, domain.DesiredState) error
+	Apply(context.Context, domain.DesiredState) ([]domain.Operation, error)
 }
 
 type HealthChecker interface {

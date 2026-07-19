@@ -12,6 +12,8 @@ import (
 type recordingFirewall struct {
 	applied []domain.FirewallPlan
 	err     error
+	// live is the fingerprint the host reports; empty means the table is absent.
+	live string
 }
 
 func (f *recordingFirewall) Apply(_ context.Context, plan domain.FirewallPlan) error {
@@ -19,14 +21,23 @@ func (f *recordingFirewall) Apply(_ context.Context, plan domain.FirewallPlan) e
 	return f.err
 }
 
+func (f *recordingFirewall) Observe(context.Context) (string, error) { return f.live, nil }
+
+func (f *recordingFirewall) Fingerprint(domain.FirewallPlan) string { return "wanted" }
+
 type recordingIngress struct {
-	applied []domain.IngressSpec
-	err     error
+	applied  []domain.IngressSpec
+	err      error
+	observed domain.IngressObservation
 }
 
 func (i *recordingIngress) Apply(_ context.Context, spec domain.IngressSpec) error {
 	i.applied = append(i.applied, spec)
 	return i.err
+}
+
+func (i *recordingIngress) Observe(context.Context, string) (domain.IngressObservation, error) {
+	return i.observed, nil
 }
 
 type staticHost struct{ device string }
@@ -81,7 +92,7 @@ func TestApplyConfiguresFirewallAndIngress(t *testing.T) {
 	key, state := hubKeyPair(t)
 	firewall, ingress := &recordingFirewall{}, &recordingIngress{}
 
-	if err := newReconciler(key, firewall, ingress).Apply(context.Background(), state); err != nil {
+	if _, err := newReconciler(key, firewall, ingress).Apply(context.Background(), state); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(firewall.applied) != 1 || len(ingress.applied) != 1 {
@@ -109,7 +120,7 @@ func TestFirewallIsAppliedBeforeIngress(t *testing.T) {
 	firewall := &recordingFirewall{err: fmt.Errorf("nft failed")}
 	ingress := &recordingIngress{}
 
-	if err := newReconciler(key, firewall, ingress).Apply(context.Background(), state); err == nil {
+	if _, err := newReconciler(key, firewall, ingress).Apply(context.Background(), state); err == nil {
 		t.Fatal("expected the firewall failure to abort the reconcile")
 	}
 	if len(ingress.applied) != 0 {
@@ -128,7 +139,7 @@ func TestMismatchedHubKeyIsRejected(t *testing.T) {
 	}
 	firewall, ingress := &recordingFirewall{}, &recordingIngress{}
 
-	err = newReconciler(otherKey, firewall, ingress).Apply(context.Background(), state)
+	_, err = newReconciler(otherKey, firewall, ingress).Apply(context.Background(), state)
 	if err == nil {
 		t.Fatal("expected a key mismatch to be rejected")
 	}
@@ -160,7 +171,7 @@ func TestPlanDoesNotTouchTheHost(t *testing.T) {
 func TestIncompleteReconcilerFailsBeforeDoingAnything(t *testing.T) {
 	t.Parallel()
 	_, state := hubKeyPair(t)
-	if err := (HostReconciler{}).Apply(context.Background(), state); err == nil {
+	if _, err := (HostReconciler{}).Apply(context.Background(), state); err == nil {
 		t.Fatal("expected an unconfigured reconciler to refuse")
 	}
 }
@@ -173,7 +184,7 @@ func TestRevokedDeviceHasNoPeer(t *testing.T) {
 	state.Devices = nil
 	firewall, ingress := &recordingFirewall{}, &recordingIngress{}
 
-	if err := newReconciler(key, firewall, ingress).Apply(context.Background(), state); err != nil {
+	if _, err := newReconciler(key, firewall, ingress).Apply(context.Background(), state); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(ingress.applied[0].Peers) != 0 {

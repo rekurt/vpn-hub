@@ -97,11 +97,33 @@ type DesiredState struct {
 	Tunnels     []Tunnel         `json:"tunnels"`
 }
 
+type OperationKind string
+
+const (
+	OpCreate OperationKind = "create"
+	OpUpdate OperationKind = "update"
+	OpDelete OperationKind = "delete"
+)
+
+// ResourceRef identifies what an operation acts on.
+type ResourceRef struct {
+	Type string `json:"type"` // "nftables" | "ingress" | "peer"
+	ID   string `json:"id"`
+}
+
+// Operation is one difference between the desired and the observed host.
+//
+// It carries no command string. An earlier version did, describing shell that was
+// never run, which let the agent report work it had not done. Reason states what
+// differs, not what will be typed.
 type Operation struct {
-	Kind        string `json:"kind"`
-	Resource    string `json:"resource"`
-	Description string `json:"description"`
-	Command     string `json:"command"`
+	Kind     OperationKind `json:"kind"`
+	Resource ResourceRef   `json:"resource"`
+	Reason   string        `json:"reason"`
+}
+
+func (o Operation) String() string {
+	return string(o.Kind) + " " + o.Resource.Type + "/" + o.Resource.ID + ": " + o.Reason
 }
 
 type HealthStatus string

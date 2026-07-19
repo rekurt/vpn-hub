@@ -17,7 +17,6 @@ import (
 type Service struct {
 	ConfigRepository    ports.ConfigRepository
 	RevisionStore       ports.RevisionStore
-	Reconciler          ports.Reconciler
 	HealthChecker       ports.HealthChecker
 	SubscriptionFetcher ports.SubscriptionFetcher
 	ProfileRenderer     ports.ProfileRenderer
@@ -90,30 +89,14 @@ func (s Service) BuildDesiredState(cfg domain.Config) (domain.DesiredState, erro
 	return state, nil
 }
 
-func (s Service) Plan(ctx context.Context, state domain.DesiredState) ([]domain.Operation, error) {
-	if s.Reconciler == nil {
-		return nil, fmt.Errorf("reconciler is not configured")
+// Save persists a compiled revision. Converging the host onto it is the agent's job,
+// so nothing here touches the machine: hubctl usually runs on a workstation that has
+// no hub to configure.
+func (s Service) Save(ctx context.Context, state domain.DesiredState) error {
+	if s.RevisionStore == nil {
+		return fmt.Errorf("revision store is not configured")
 	}
-	return s.Reconciler.Plan(ctx, state)
-}
-
-func (s Service) Deploy(ctx context.Context, state domain.DesiredState, apply bool) ([]domain.Operation, error) {
-	operations, err := s.Plan(ctx, state)
-	if err != nil {
-		return nil, err
-	}
-	if !apply {
-		return operations, nil
-	}
-	if err := s.Reconciler.Apply(ctx, state); err != nil {
-		return nil, err
-	}
-	if s.RevisionStore != nil {
-		if err := s.RevisionStore.Save(ctx, state); err != nil {
-			return nil, err
-		}
-	}
-	return operations, nil
+	return s.RevisionStore.Save(ctx, state)
 }
 
 func (s Service) TestTunnel(ctx context.Context, cfg domain.Config, id string) (domain.TunnelHealth, error) {

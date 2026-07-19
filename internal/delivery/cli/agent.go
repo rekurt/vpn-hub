@@ -138,23 +138,30 @@ func (l *loop) reconcile(cmd *cobra.Command, dryRun bool) error {
 	}
 
 	reconciler := l.flags.reconciler()
-	operations, err := reconciler.Plan(ctx, state)
-	if err != nil {
-		return err
-	}
 	if dryRun {
+		operations, err := reconciler.Plan(ctx, state)
+		if err != nil {
+			return err
+		}
 		printOperations(cmd, operations)
 		return nil
 	}
-	if err := reconciler.Apply(ctx, state); err != nil {
+
+	var operations []domain.Operation
+	operations, err = reconciler.Apply(ctx, state)
+	if err != nil {
 		// Forget the revision so the next success reports again rather than staying
 		// silent after an outage.
 		l.applied = ""
 		return err
 	}
-	if l.applied != state.Revision {
+	// Report a difference whenever there was one, and otherwise stay quiet: an
+	// unconditional line per tick buries the ticks that mattered.
+	if len(operations) > 0 {
 		printOperations(cmd, operations)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "applied revision %s\n", state.Revision)
+	}
+	if l.applied != state.Revision {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "converged on revision %s\n", state.Revision)
 		l.applied = state.Revision
 	}
 	return nil
@@ -162,6 +169,6 @@ func (l *loop) reconcile(cmd *cobra.Command, dryRun bool) error {
 
 func printOperations(cmd *cobra.Command, operations []domain.Operation) {
 	for _, operation := range operations {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-10s %-22s %s\n", operation.Kind, operation.Resource, operation.Description)
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), operation)
 	}
 }

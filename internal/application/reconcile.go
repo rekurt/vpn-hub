@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"vpn-hub/internal/domain"
 	"vpn-hub/internal/ports"
@@ -18,42 +19,79 @@ type HostReconciler struct {
 	Ingress   ports.Ingress
 	Host      ports.HostNetwork
 	ServerKey ports.ServerKeyStore
+	Now       func() time.Time
 }
 
+// Observe reads back what the host currently looks like. Without this step the agent
+// cannot tell convergence from repetition, and drift is invisible.
+func (r HostReconciler) Observe(ctx context.Context) (domain.ObservedState, error) {
+	if r.Firewall == nil || r.Ingress == nil {
+		return domain.ObservedState{}, fmt.Errorf("host reconciler is not fully configured")
+	}
+
+	now := r.Now
+	if now == nil {
+		now = time.Now
+	}
+	state := domain.ObservedState{ObservedAt: now().UTC()}
+
+	revision, err := r.Firewall.Observe(ctx)
+	if err != nil {
+		return domain.ObservedState{}, fmt.Errorf("observe firewall: %w", err)
+	}
+	state.FirewallRevision = revision
+
+	ingress, err := r.Ingress.Observe(ctx, IngressInterface)
+	if err != nil {
+		return domain.ObservedState{}, fmt.Errorf("observe ingress: %w", err)
+	}
+	state.Ingress = ingress
+	return state, nil
+}
+
+// Plan reports what differs between the revision and the host, without changing
+// anything.
 func (r HostReconciler) Plan(ctx context.Context, state domain.DesiredState) ([]domain.Operation, error) {
 	plan, spec, err := r.compile(ctx, state)
 	if err != nil {
 		return nil, err
 	}
-
-	operations := []domain.Operation{{
-		Kind:        "nftables",
-		Resource:    "inet vpn_hub",
-		Description: fmt.Sprintf("install policy for %d egress group(s) with a default-drop forward chain", len(plan.Egresses)),
-	}, {
-		Kind:        "ingress",
-		Resource:    spec.Interface,
-		Description: fmt.Sprintf("configure %s on port %d with %d peer(s)", spec.Address, spec.ListenPort, len(spec.Peers)),
-	}}
-	return operations, nil
+	observed, err := r.Observe(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return Diff(spec, r.Firewall.Fingerprint(plan), observed), nil
 }
 
-func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) error {
+// Apply converges the host and returns the differences it closed.
+//
+// It applies unconditionally rather than only when the diff is non-empty. The
+// adapters are idempotent and cheap, and applying regardless is what makes any
+// tampering -- including edits the fingerprint cannot see, such as a single rule
+// changed in place -- disappear on the next tick. The diff decides what is worth
+// reporting, not whether to converge.
+func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([]domain.Operation, error) {
 	plan, spec, err := r.compile(ctx, state)
 	if err != nil {
-		return err
+		return nil, err
 	}
+
+	observed, err := r.Observe(ctx)
+	if err != nil {
+		return nil, err
+	}
+	operations := Diff(spec, r.Firewall.Fingerprint(plan), observed)
 
 	// The packet filter goes in first. Doing it the other way round would leave a
 	// window where the ingress interface is up and forwarding under whatever rules
 	// happened to be loaded.
 	if err := r.Firewall.Apply(ctx, plan); err != nil {
-		return fmt.Errorf("apply firewall: %w", err)
+		return nil, fmt.Errorf("apply firewall: %w", err)
 	}
 	if err := r.Ingress.Apply(ctx, spec); err != nil {
-		return fmt.Errorf("apply ingress: %w", err)
+		return nil, fmt.Errorf("apply ingress: %w", err)
 	}
-	return nil
+	return operations, nil
 }
 
 // compile turns a revision into the two artefacts the host needs. Both are derived

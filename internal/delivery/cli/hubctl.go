@@ -96,16 +96,18 @@ func newDeployCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			operations, err := service.Deploy(cmd.Context(), state, !dryRun)
-			if err != nil {
+			if dryRun {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(),
+					"dry-run: revision %s compiles (%d tunnels, %d devices); nothing was written\n",
+					state.Revision, len(state.Tunnels), len(state.Devices))
 				return err
 			}
-			printOperations(cmd, operations)
-			if dryRun {
-				_, err = fmt.Fprintln(cmd.OutOrStdout(), "dry-run: no desired state was persisted")
-			} else {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "applied desired-state revision %s to %s\n", state.Revision, stateDir)
+			if err := service.Save(cmd.Context(), state); err != nil {
+				return err
 			}
+			// The agent converges the host onto this; hubctl never touches it.
+			_, err = fmt.Fprintf(cmd.OutOrStdout(),
+				"saved revision %s to %s; the agent applies it on its next pass\n", state.Revision, stateDir)
 			return err
 		},
 	}
@@ -261,11 +263,9 @@ func newDeviceCommand(configPath *string) *cobra.Command {
 }
 
 func newService(configPath, stateDir string) application.Service {
-	reconciler := runtimeadapter.FileReconciler{StateDir: stateDir}
 	return application.Service{
 		ConfigRepository:    configadapter.ViperRepository{Path: configPath},
 		RevisionStore:       runtimeadapter.FileRevisionStore{StateDir: stateDir},
-		Reconciler:          reconciler,
 		HealthChecker:       health.ProbeChecker{},
 		SubscriptionFetcher: health.HTTPSSubscriptionFetcher{},
 		ProfileRenderer:     runtimeadapter.AmneziaProfileRenderer{},
