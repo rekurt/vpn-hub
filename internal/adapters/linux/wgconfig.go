@@ -61,6 +61,18 @@ func ParseWireGuardConfig(content string) (domain.WireGuardTunnel, error) {
 					return domain.WireGuardTunnel{}, fmt.Errorf("line %d: invalid MTU %q", number+1, value)
 				}
 				tunnel.MTU = mtu
+			default:
+				// AmneziaWG carries its obfuscation settings in the [Interface]
+				// section alongside the standard keys. They are collected here, under
+				// their canonical spelling, so the egress driver can hand them to
+				// `awg set`. A non-obfuscation key falls through and is ignored, as
+				// any other unknown key is.
+				if canonical, ok := domain.CanonicalAWGParameter(key); ok {
+					if tunnel.Parameters == nil {
+						tunnel.Parameters = make(map[string]string)
+					}
+					tunnel.Parameters[canonical] = value
+				}
 			}
 		case "peer":
 			switch key {

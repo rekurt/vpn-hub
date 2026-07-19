@@ -79,7 +79,14 @@ func (h HealthChecker) Check(ctx context.Context, tunnel domain.Tunnel) (domain.
 		return h.checkOpenVPN(ctx, tunnel, namespace, health), nil
 	}
 
-	output, err := h.run(ctx, "ip", "netns", "exec", namespace, "wg", "show", "wg0", "dump")
+	// awg for an amneziawg device, wg for a plain one -- the module registers its own
+	// netlink family and the wrong tool reads nothing. The dump format is identical,
+	// so ParseDump handles both.
+	tool := "wg"
+	if tunnel.Type == domain.TunnelAmneziaWG {
+		tool = "awg"
+	}
+	output, err := h.run(ctx, "ip", "netns", "exec", namespace, tool, "show", "wg0", "dump")
 	if err != nil {
 		health.Status = domain.HealthUnhealthy
 		health.Reason = "the tunnel namespace or its interface does not exist"

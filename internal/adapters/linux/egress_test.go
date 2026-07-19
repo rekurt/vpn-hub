@@ -295,3 +295,82 @@ func TestRemovingATunnelTakesItsPolicyRoutingWithIt(t *testing.T) {
 		t.Errorf("another tunnel's routing was torn down; commands: %v", host.commands)
 	}
 }
+
+func amneziaSpec() domain.EgressSpec {
+	spec := egressSpec()
+	spec.Type = domain.TunnelAmneziaWG
+	spec.Tunnel.Parameters = map[string]string{
+		"Jc": "4", "Jmin": "40", "Jmax": "70", "S1": "30", "S2": "40",
+		"H1": "1234567", "H2": "2345678", "H3": "3456789", "H4": "4567890",
+	}
+	return spec
+}
+
+// AmneziaWG is obfuscated WireGuard: a different kernel module with its own netlink
+// family, so a different device type and a different tool. Driven as plain WireGuard
+// -- which is what the code did -- the peer waits for obfuscated packets the hub
+// never sends, and the handshake never completes. This asserts the three things that
+// were wrong.
+func TestAmneziaWGEgressUsesTheAmneziaToolAndType(t *testing.T) {
+	t.Parallel()
+	host := workingHost("[]")
+	// The interface is absent, so the creation path runs -- which is where the
+	// device type is chosen.
+	host.failures = map[string]error{"ip -n vpn-hub-corp link show wg0": errNotRunning}
+	// awg, not wg, reports the peer so removeOtherPeers can read it.
+	host.replies["ip netns exec vpn-hub-corp awg show wg0 dump"] =
+		host.replies["ip netns exec vpn-hub-corp wg show wg0 dump"]
+	egress := Egress{Run: host.run, SecretsDir: t.TempDir()}
+
+	if err := egress.Apply(context.Background(), []domain.EgressSpec{amneziaSpec()}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !host.ran("ip link add wg0 type amneziawg") {
+		t.Errorf("the device was not created as amneziawg; commands: %v", host.commands)
+	}
+	if host.ran("ip link add wg0 type wireguard") {
+		t.Error("a plain wireguard device was created for an AmneziaWG tunnel")
+	}
+	var configured bool
+	for _, command := range host.commands {
+		if strings.Contains(command, "awg set wg0 private-key") {
+			configured = true
+			// The obfuscation parameters must reach the tool, and before `peer`,
+			// since they are interface-level settings.
+			for _, want := range []string{"jc 4", "jmin 40", "h1 1234567", "s1 30"} {
+				if !strings.Contains(command, want) {
+					t.Errorf("parameter %q did not reach awg: %s", want, command)
+				}
+			}
+			if strings.Index(command, "peer") < strings.Index(command, "jc 4") {
+				t.Errorf("obfuscation parameters came after peer, where awg ignores them: %s", command)
+			}
+		}
+		if strings.Contains(command, "wg set wg0") && !strings.Contains(command, "awg set wg0") {
+			t.Errorf("the plain wg tool was used for an AmneziaWG tunnel: %s", command)
+		}
+	}
+	if !configured {
+		t.Fatalf("awg set was never called; commands: %v", host.commands)
+	}
+}
+
+// Plain WireGuard must keep using wg and type wireguard, with no obfuscation noise.
+func TestPlainWireGuardEgressIsUnchanged(t *testing.T) {
+	t.Parallel()
+	host := workingHost("[]")
+	host.failures = map[string]error{"ip -n vpn-hub-corp link show wg0": errNotRunning}
+	egress := Egress{Run: host.run, SecretsDir: t.TempDir()}
+
+	if err := egress.Apply(context.Background(), []domain.EgressSpec{egressSpec()}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !host.ran("ip link add wg0 type wireguard") {
+		t.Errorf("plain WireGuard changed device type; commands: %v", host.commands)
+	}
+	for _, command := range host.commands {
+		if strings.Contains(command, "awg") || strings.Contains(command, "jc ") {
+			t.Errorf("obfuscation leaked into a plain WireGuard tunnel: %s", command)
+		}
+	}
+}

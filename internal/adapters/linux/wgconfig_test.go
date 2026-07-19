@@ -119,3 +119,57 @@ func mustMarshal(t *testing.T, value any) string {
 	}
 	return string(data)
 }
+
+// An AmneziaWG config carries its obfuscation settings in [Interface] beside the
+// standard keys. They were dropped entirely, which is why an AmneziaWG provider
+// could not be dialled: without them the tool sends plain WireGuard and the peer,
+// expecting obfuscation, never answers.
+func TestParseAmneziaWGObfuscationParameters(t *testing.T) {
+	t.Parallel()
+	config := `[Interface]
+PrivateKey = cOFA+ItsMPRFpKt4kPsUlqUlkxHnFvJdWuBK5rXqL0Y=
+Address = 10.7.0.5/32
+Jc = 4
+Jmin = 40
+Jmax = 70
+S1 = 30
+S2 = 40
+H1 = 1234567
+H2 = 2345678
+H3 = 3456789
+H4 = 4567890
+
+[Peer]
+PublicKey = TE5crMJPBmCr2bF/uSbHqAlTAHKQwLKMs0RQxfQ0LU4=
+Endpoint = amnezia.example:51820
+AllowedIPs = 0.0.0.0/0
+`
+	tunnel, err := ParseWireGuardConfig(config)
+	if err != nil {
+		t.Fatalf("ParseWireGuardConfig: %v", err)
+	}
+	want := map[string]string{
+		"Jc": "4", "Jmin": "40", "Jmax": "70", "S1": "30", "S2": "40",
+		"H1": "1234567", "H2": "2345678", "H3": "3456789", "H4": "4567890",
+	}
+	for name, value := range want {
+		if tunnel.Parameters[name] != value {
+			t.Errorf("Parameters[%q] = %q, want %q", name, tunnel.Parameters[name], value)
+		}
+	}
+	if len(tunnel.Parameters) != len(want) {
+		t.Errorf("Parameters = %v, want exactly %d entries", tunnel.Parameters, len(want))
+	}
+}
+
+// A plain WireGuard config has no such parameters, and none must be invented.
+func TestPlainWireGuardConfigHasNoParameters(t *testing.T) {
+	t.Parallel()
+	tunnel, err := ParseWireGuardConfig(providerConfig)
+	if err != nil {
+		t.Fatalf("ParseWireGuardConfig: %v", err)
+	}
+	if len(tunnel.Parameters) != 0 {
+		t.Errorf("Parameters = %v, want none for plain WireGuard", tunnel.Parameters)
+	}
+}

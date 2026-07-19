@@ -12,11 +12,17 @@ type WireGuardPeer struct {
 // WireGuardTunnel is an upstream configuration, as imported from a provider's .conf.
 type WireGuardTunnel struct {
 	// PrivateKey is the hub's identity towards the provider and never leaves the host.
-	PrivateKey string        `json:"-"`
-	Addresses  []string      `json:"addresses"`
-	DNS        []string      `json:"dns,omitempty"`
-	MTU        int           `json:"mtu,omitempty"`
-	Peer       WireGuardPeer `json:"peer"`
+	PrivateKey string   `json:"-"`
+	Addresses  []string `json:"addresses"`
+	DNS        []string `json:"dns,omitempty"`
+	MTU        int      `json:"mtu,omitempty"`
+	// Parameters carry AmneziaWG's obfuscation settings (Jc, Jmin, S1, H1 and the
+	// rest). They are the whole point of AmneziaWG -- obfuscated WireGuard that gets
+	// past DPI -- so dropping them, as the plain-WireGuard path did, leaves the peer
+	// waiting for obfuscated packets the hub never sends and the handshake never
+	// completes. Empty for plain WireGuard. Not secret, so kept in the revision.
+	Parameters map[string]string `json:"parameters,omitempty"`
+	Peer       WireGuardPeer     `json:"peer"`
 }
 
 // EgressSpec is everything needed to run one upstream tunnel in isolation.

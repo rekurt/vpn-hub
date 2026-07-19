@@ -341,8 +341,14 @@ func (e Egress) ensureTunnel(ctx context.Context, spec domain.EgressSpec) error 
 		return e.ensureProxy(ctx, spec)
 	case domain.TunnelOpenVPN:
 		return e.ensureOpenVPN(ctx, spec)
+	case domain.TunnelAmneziaWG:
+		// Same protocol, an obfuscation layer aside -- but a different kernel module
+		// with its own netlink family, so a different device type and a different
+		// tool. `wg` answers "Operation not supported" for these, exactly as it does
+		// on the ingress side.
+		return e.ensureWireGuardLike(ctx, spec, "amneziawg", "awg")
 	default:
-		return e.ensureWireGuard(ctx, spec)
+		return e.ensureWireGuardLike(ctx, spec, "wireguard", "wg")
 	}
 }
 
@@ -434,12 +440,12 @@ func (e Egress) ensureProxyRoutes(ctx context.Context, spec domain.EgressSpec) e
 	return e.ensureNamespaceNAT(ctx, spec)
 }
 
-func (e Egress) ensureWireGuard(ctx context.Context, spec domain.EgressSpec) error {
+func (e Egress) ensureWireGuardLike(ctx context.Context, spec domain.EgressSpec, linkType, tool string) error {
 	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "link", "show", spec.Interface); err != nil {
 		// The interface is created in the main namespace and moved: a WireGuard
 		// device keeps its socket in the namespace it was created in, which is how
 		// it can still reach the internet from inside an otherwise isolated one.
-		if _, err := e.run(ctx, "ip", "link", "add", spec.Interface, "type", "wireguard"); err != nil {
+		if _, err := e.run(ctx, "ip", "link", "add", spec.Interface, "type", linkType); err != nil {
 			return err
 		}
 		if _, err := e.run(ctx, "ip", "link", "set", spec.Interface, "netns", spec.Namespace); err != nil {
@@ -451,10 +457,17 @@ func (e Egress) ensureWireGuard(ctx context.Context, spec domain.EgressSpec) err
 	if err != nil {
 		return err
 	}
-	arguments := []string{"wg", "set", spec.Interface, "private-key", keyPath,
+	// Obfuscation parameters are interface-level settings, so they go before `peer`,
+	// exactly where the ingress puts them. On plain WireGuard the map is empty and
+	// this appends nothing.
+	arguments := []string{tool, "set", spec.Interface, "private-key", keyPath}
+	for _, name := range sortedKeys(spec.Tunnel.Parameters) {
+		arguments = append(arguments, strings.ToLower(name), spec.Tunnel.Parameters[name])
+	}
+	arguments = append(arguments,
 		"peer", spec.Tunnel.Peer.PublicKey,
 		"endpoint", spec.Tunnel.Peer.Endpoint,
-		"allowed-ips", strings.Join(allowedOrDefault(spec.Tunnel.Peer.AllowedIPs), ",")}
+		"allowed-ips", strings.Join(allowedOrDefault(spec.Tunnel.Peer.AllowedIPs), ","))
 	if spec.Tunnel.Peer.PresharedKey != "" {
 		pskPath, err := e.writeKey(spec.TunnelID+"-psk", spec.Tunnel.Peer.PresharedKey)
 		if err != nil {
@@ -472,7 +485,7 @@ func (e Egress) ensureWireGuard(ctx context.Context, spec domain.EgressSpec) err
 	// 0.0.0.0/0. A peer left over from an earlier configuration would claim the same
 	// range, making the route ambiguous and sending traffic to whichever matched
 	// first -- possibly an endpoint the operator has since replaced.
-	if err := e.removeOtherPeers(ctx, spec); err != nil {
+	if err := e.removeOtherPeers(ctx, spec, tool); err != nil {
 		return err
 	}
 
@@ -520,8 +533,10 @@ table inet vpn_hub_egress {
 	return e.applyNamespaceRuleset(ctx, spec.Namespace, ruleset)
 }
 
-func (e Egress) removeOtherPeers(ctx context.Context, spec domain.EgressSpec) error {
-	output, err := e.inNS(ctx, spec.Namespace, "wg", "show", spec.Interface, "dump")
+func (e Egress) removeOtherPeers(ctx context.Context, spec domain.EgressSpec, tool string) error {
+	// awg for an amneziawg device, wg for a plain one: the tool has to match the
+	// module, since each answers "Operation not supported" for the other's family.
+	output, err := e.inNS(ctx, spec.Namespace, tool, "show", spec.Interface, "dump")
 	if err != nil {
 		return nil //nolint:nilerr // nothing to prune if the interface cannot be read
 	}
@@ -533,7 +548,7 @@ func (e Egress) removeOtherPeers(ctx context.Context, spec domain.EgressSpec) er
 		if peer.PublicKey == spec.Tunnel.Peer.PublicKey {
 			continue
 		}
-		if _, err := e.inNS(ctx, spec.Namespace, "wg", "set", spec.Interface,
+		if _, err := e.inNS(ctx, spec.Namespace, tool, "set", spec.Interface,
 			"peer", peer.PublicKey, "remove"); err != nil {
 			return err
 		}
