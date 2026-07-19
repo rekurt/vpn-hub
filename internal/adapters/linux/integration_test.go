@@ -260,13 +260,19 @@ func TestDriftIsCorrected(t *testing.T) {
 	testbed := newBed(t)
 	testbed.waitForTraffic(t)
 
+	// Count this table specifically: a host may carry unrelated tables, and on a CI
+	// runner iptables-nft supplies several.
+	hubTables := func() string {
+		return sh(t, "nft list tables | grep -c 'inet vpn_hub' || true")
+	}
+
 	sh(t, "nft delete table inet vpn_hub")
-	if sh(t, "nft list tables | wc -l") != "0" {
+	if hubTables() != "0" {
 		t.Fatal("the table survived deletion")
 	}
 
 	testbed.apply(t)
-	if sh(t, "nft list tables | wc -l") == "0" {
+	if hubTables() == "0" {
 		t.Fatal("the ruleset was not restored")
 	}
 	if result := testbed.probe(); result == "BLOCKED" {
