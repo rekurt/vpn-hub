@@ -42,6 +42,26 @@ type Ingress struct {
 	Run runner
 	// SecretsDir must be on tmpfs; the agent's RuntimeDirectory (/run/vpn-hub) is.
 	SecretsDir string
+	// LinkType and Tool default to amneziawg. They exist so the same adapter can
+	// drive plain WireGuard, which the obfuscation parameters aside is the identical
+	// protocol -- that is what integration tests use, since the AmneziaWG module has
+	// to be built by DKMS and cannot be on an ephemeral CI runner.
+	LinkType string
+	Tool     string
+}
+
+func (i Ingress) linkType() string {
+	if i.LinkType != "" {
+		return i.LinkType
+	}
+	return "amneziawg"
+}
+
+func (i Ingress) tool() string {
+	if i.Tool != "" {
+		return i.Tool
+	}
+	return "awg"
 }
 
 func (i Ingress) run(ctx context.Context, name string, args ...string) (string, error) {
@@ -54,7 +74,7 @@ func (i Ingress) run(ctx context.Context, name string, args ...string) (string, 
 // Observe reports what the host currently has. A missing interface is not an error:
 // it is the state before the first reconcile.
 func (i Ingress) Observe(ctx context.Context, name string) (IngressState, error) {
-	output, err := i.run(ctx, "awg", "show", name, "dump")
+	output, err := i.run(ctx, i.tool(), "show", name, "dump")
 	if err != nil {
 		return IngressState{}, nil //nolint:nilerr // absent interface, not a failure
 	}
@@ -73,7 +93,7 @@ func (i Ingress) Apply(ctx context.Context, spec domain.IngressSpec) error {
 		return err
 	}
 	if !observed.Exists {
-		if _, err := i.run(ctx, "ip", "link", "add", "dev", spec.Interface, "type", "amneziawg"); err != nil {
+		if _, err := i.run(ctx, "ip", "link", "add", "dev", spec.Interface, "type", i.linkType()); err != nil {
 			return err
 		}
 	}
@@ -87,7 +107,7 @@ func (i Ingress) Apply(ctx context.Context, spec domain.IngressSpec) error {
 	for _, name := range sortedKeys(spec.Parameters) {
 		arguments = append(arguments, strings.ToLower(name), spec.Parameters[name])
 	}
-	if _, err := i.run(ctx, "awg", arguments...); err != nil {
+	if _, err := i.run(ctx, i.tool(), arguments...); err != nil {
 		return err
 	}
 
@@ -109,7 +129,7 @@ func (i Ingress) syncPeers(ctx context.Context, spec domain.IngressSpec, observe
 	wanted := make(map[string]struct{}, len(spec.Peers))
 	for _, peer := range spec.Peers {
 		wanted[peer.PublicKey] = struct{}{}
-		if _, err := i.run(ctx, "awg", "set", spec.Interface,
+		if _, err := i.run(ctx, i.tool(), "set", spec.Interface,
 			"peer", peer.PublicKey,
 			"allowed-ips", strings.Join(peer.AllowedIPs, ",")); err != nil {
 			return err
@@ -120,7 +140,7 @@ func (i Ingress) syncPeers(ctx context.Context, spec domain.IngressSpec, observe
 		if _, keep := wanted[peer.PublicKey]; keep {
 			continue
 		}
-		if _, err := i.run(ctx, "awg", "set", spec.Interface, "peer", peer.PublicKey, "remove"); err != nil {
+		if _, err := i.run(ctx, i.tool(), "set", spec.Interface, "peer", peer.PublicKey, "remove"); err != nil {
 			return err
 		}
 	}

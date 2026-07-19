@@ -1,0 +1,90 @@
+name: deploy
+
+# Deployment is deliberately manual. The hub is the gateway for the operator's own
+# traffic, so a push to master must not be able to reconfigure it: an automatic deploy
+# would mean a compromised token is a compromised network path. Running this workflow
+# is an explicit decision, and the `hub` environment is where an approval requirement
+# and the secrets belong.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Release run ID to deploy (blank builds from this ref)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: hub
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        if: inputs.run_id == ''
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build from this ref
+        if: inputs.run_id == ''
+        run: GOOS=linux GOARCH=amd64 go build -trimpath -o bin/linux/ ./cmd/...
+
+      - name: Download a previously built artifact
+        if: inputs.run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: vpn-hub-linux-amd64
+          path: bin/linux/
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Authorise against the hub
+        env:
+          SSH_KEY: ${{ secrets.HUB_SSH_KEY }}
+          HUB_HOST: ${{ secrets.HUB_HOST }}
+        run: |
+          test -n "$SSH_KEY"  || { echo "secret HUB_SSH_KEY is not set"; exit 1; }
+          test -n "$HUB_HOST" || { echo "secret HUB_HOST is not set"; exit 1; }
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$HUB_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Install
+        env:
+          HUB_HOST: ${{ secrets.HUB_HOST }}
+        run: |
+          chmod +x bin/linux/hubctl bin/linux/vpn-hub-agent
+          # Staged first: scp cannot overwrite a running executable (ETXTBSY), while
+          # install replaces the directory entry and leaves the running process alone
+          # until it restarts.
+          ssh root@"$HUB_HOST" 'mkdir -p /run/vpn-hub-stage'
+          scp bin/linux/hubctl bin/linux/vpn-hub-agent root@"$HUB_HOST":/run/vpn-hub-stage/
+          scp deploy/systemd/vpn-hub-agent.service root@"$HUB_HOST":/etc/systemd/system/
+          ssh root@"$HUB_HOST" '
+            set -e
+            install -m 0755 /run/vpn-hub-stage/hubctl /run/vpn-hub-stage/vpn-hub-agent /usr/local/bin/
+            rm -rf /run/vpn-hub-stage
+            systemctl daemon-reload
+            systemctl restart vpn-hub-agent
+          '
+
+      # A deploy that leaves the agent crash-looping is a failed deploy, so say so
+      # here rather than letting it be discovered later.
+      - name: Verify the agent converged
+        env:
+          HUB_HOST: ${{ secrets.HUB_HOST }}
+        run: |
+          sleep 5
+          ssh root@"$HUB_HOST" '
+            systemctl is-active --quiet vpn-hub-agent || {
+              echo "agent is not running:"; journalctl -u vpn-hub-agent -n 30 --no-pager; exit 1; }
+            hubctl --help >/dev/null
+            echo "--- recent agent log ---"
+            journalctl -u vpn-hub-agent -n 10 --no-pager
+          '

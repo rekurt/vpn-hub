@@ -5,6 +5,9 @@ on:
     branches: [master]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -19,7 +22,7 @@ jobs:
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
 
       - name: Vet
-        run: go vet ./...
+        run: go vet ./... && go vet -tags=integration ./...
 
       - name: Test
         run: go test -race ./...
@@ -38,3 +41,41 @@ jobs:
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+
+  # Drives the real production path -- plan builder, ingress adapter, nftables
+  # adapter -- against a live kernel: a client in its own namespace, real rules, real
+  # traffic. Uses plain WireGuard because AmneziaWG needs a DKMS build an ephemeral
+  # runner cannot do; the obfuscation aside the protocol is identical, and none of the
+  # hub machinery under test depends on it.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install network tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wireguard-tools nftables jq conntrack
+
+      - name: Enable forwarding
+        run: sudo sysctl -w net.ipv4.ip_forward=1
+
+      - name: Integration tests
+        run: sudo -E env "PATH=$PATH" go test -tags=integration -count=1 -timeout 15m ./internal/adapters/linux/
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+      - name: Check formatting
+        run: tofu -chdir=deploy/terraform fmt -check -diff
+      - name: Validate
+        # No credentials are needed: validation does not contact the provider API.
+        run: |
+          tofu -chdir=deploy/terraform init -backend=false
+          tofu -chdir=deploy/terraform validate

@@ -30,6 +30,12 @@ lint:
 test:
 	go test -race ./...
 
+## test-integration: drive real interfaces, rules and traffic (Linux, needs root)
+# Stop any running agent first: it reconciles on a timer and will restore its own
+# ruleset over the one under test.
+test-integration:
+	sudo -E env "PATH=$$PATH" go test -tags=integration -count=1 -timeout 15m ./internal/adapters/linux/
+
 ## build: build both binaries for the host platform
 build:
 	go build -o bin/ ./cmd/...
@@ -83,4 +89,4 @@ ssh:
 logs:
 	$(SSH) 'journalctl -u vpn-hub-agent -f'
 
-.PHONY: help fmt lint test build build-linux $(STAND_TARGETS) deploy-lab ssh logs
+.PHONY: help fmt lint test test-integration build build-linux $(STAND_TARGETS) deploy-lab ssh logs
