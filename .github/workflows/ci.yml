@@ -60,7 +60,10 @@ jobs:
       - name: Install network tooling
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq wireguard-tools nftables jq conntrack microsocks
+          sudo apt-get install -y -qq wireguard-tools nftables jq conntrack microsocks dnsmasq dnsutils
+          # The packaged resolver would hold port 53; the hub runs its own as
+          # transient units, in the namespaces they belong in.
+          sudo systemctl disable --now dnsmasq || true
 
       # The proxy path needs sing-box, which is not in the archive. Same release and
       # checksum the hub installs, so CI exercises what the host runs.
@@ -74,7 +77,15 @@ jobs:
           sudo install -m 0755 "sing-box-${version}-linux-amd64/sing-box" /usr/local/bin/sing-box
 
       - name: Enable forwarding
-        run: sudo sysctl -w net.ipv4.ip_forward=1
+        run: |
+          sudo sysctl -w net.ipv4.ip_forward=1
+          # Loose reverse-path filtering, the same setting cloud-init gives a real
+          # hub. Policy routing sends a reply back through an interface the main
+          # table does not name, and strict filtering drops it -- so a runner
+          # without this fails the private-network scenarios for a reason the hub
+          # is not responsible for.
+          sudo sysctl -w net.ipv4.conf.all.rp_filter=2
+          sudo sysctl -w net.ipv4.conf.default.rp_filter=2
 
       # Runners ship Docker, which sets the iptables filter FORWARD policy to DROP.
       # Netfilter runs every chain registered on a hook, so that DROP kills forwarded

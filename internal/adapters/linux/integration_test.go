@@ -279,10 +279,12 @@ func TestDriftIsCorrected(t *testing.T) {
 	testbed := newBed(t)
 	testbed.waitForTraffic(t)
 
-	// Count this table specifically: a host may carry unrelated tables, and on a CI
-	// runner iptables-nft supplies several.
+	// Match the name exactly. A substring also matches `inet vpn_hub_socks_<id>`,
+	// one of which every tunnel now has, so a leftover from another scenario made
+	// this read as "the table survived deletion" -- a failure with nothing to do
+	// with drift.
 	hubTables := func() string {
-		return sh(t, "nft list tables | grep -c 'inet vpn_hub' || true")
+		return sh(t, "nft list tables | grep -cx 'table inet vpn_hub' || true")
 	}
 
 	sh(t, "nft delete table inet vpn_hub")
