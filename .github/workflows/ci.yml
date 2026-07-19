@@ -60,7 +60,7 @@ jobs:
       - name: Install network tooling
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq wireguard-tools nftables jq conntrack microsocks dnsmasq dnsutils
+          sudo apt-get install -y -qq wireguard-tools nftables jq conntrack microsocks dnsmasq dnsutils openvpn openssl
           # The packaged resolver would hold port 53; the hub runs its own as
           # transient units, in the namespaces they belong in.
           sudo systemctl disable --now dnsmasq || true
