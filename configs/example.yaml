@@ -51,9 +51,11 @@ tunnels:
     role: egress
     # Disabled tunnels are dropped from the revision entirely, not built and left idle.
     enabled: false
+    # The link lives in a file the host holds: an inline vless:// carries a UUID,
+    # and a revision is written to disk.
     source:
-      kind: xray-uri
-      value: "vless://replace-me"
+      kind: config
+      value: "secrets/xray-egress.link"
     health:
       https_url: "https://example.com/"
   - id: awg-egress

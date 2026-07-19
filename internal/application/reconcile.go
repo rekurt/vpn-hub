@@ -169,12 +169,12 @@ func (r HostReconciler) compileEgresses(ctx context.Context, state domain.Desire
 		return nil, nil
 	}
 
-	tunnels := make(map[string]domain.WireGuardTunnel, len(needed))
+	tunnels := make(map[string]domain.Upstream, len(needed))
 	for _, tunnel := range state.Tunnels {
 		if _, wanted := needed[tunnel.ID]; !wanted {
 			continue
 		}
-		upstream, err := r.TunnelConfigs.Load(ctx, tunnel.Source.Value)
+		upstream, err := r.TunnelConfigs.Load(ctx, tunnel)
 		if err != nil {
 			return nil, fmt.Errorf("tunnel %q: %w", tunnel.ID, err)
 		}

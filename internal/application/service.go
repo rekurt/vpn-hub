@@ -252,8 +252,16 @@ func validateTunnel(tunnel domain.Tunnel, deviceIDs map[string]struct{}) error {
 		return fmt.Errorf("tunnel %q: source value is required", tunnel.ID)
 	}
 	if tunnel.Type == domain.TunnelXray {
-		if tunnel.Source.Kind != domain.SourceXrayURI && tunnel.Source.Kind != domain.SourceXrayJSON && tunnel.Source.Kind != domain.SourceSubscription {
-			return fmt.Errorf("tunnel %q: Xray source must be xray-uri, xray-json or subscription", tunnel.ID)
+		switch tunnel.Source.Kind {
+		case domain.SourceConfig, domain.SourceSubscription:
+		case domain.SourceXrayURI, domain.SourceXrayJSON:
+			// An inline link carries a UUID, and a revision is written to disk. The
+			// link belongs in a file the host holds, named by the revision.
+			return fmt.Errorf("tunnel %q: put the link in a file and use `kind: config`; "+
+				"an inline %s would carry its credential into every saved revision",
+				tunnel.ID, tunnel.Source.Kind)
+		default:
+			return fmt.Errorf("tunnel %q: an Xray source must be config or subscription", tunnel.ID)
 		}
 	} else if tunnel.Source.Kind != domain.SourceConfig {
 		return fmt.Errorf("tunnel %q: %s source must use kind config", tunnel.ID, tunnel.Type)

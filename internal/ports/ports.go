@@ -50,7 +50,7 @@ type EgressManager interface {
 // TunnelConfigStore holds upstream provider configurations, which stay on the host
 // rather than travelling inside a revision.
 type TunnelConfigStore interface {
-	Load(ctx context.Context, source string) (domain.WireGuardTunnel, error)
+	Load(ctx context.Context, tunnel domain.Tunnel) (domain.Upstream, error)
 }
 
 // DNSManager installs the resolver policy: private zones into their tunnels,

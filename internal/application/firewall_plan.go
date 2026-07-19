@@ -50,7 +50,13 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 		grouped[device.Egress] = append(grouped[device.Egress], address)
 	}
 
+	proxied := make(map[string]bool, len(state.Tunnels))
+	for _, tunnel := range state.Tunnels {
+		proxied[tunnel.ID] = tunnel.Type == domain.TunnelXray
+	}
+
 	plan := domain.FirewallPlan{
+		LinkBase:         egressLinkBase,
 		IngressInterface: IngressInterface,
 		UplinkInterface:  uplink,
 		ListenPort:       listenPort,
@@ -84,6 +90,7 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 		sort.Strings(addresses)
 		plan.Egresses = append(plan.Egresses, domain.EgressGroup{
 			ID:        egress,
+			Proxied:   proxied[egress],
 			Mark:      directEgressMark + 1 + uint32(index),
 			Interface: EgressInterface(egress),
 			Addresses: addresses,

@@ -7,7 +7,7 @@ import (
 	"vpn-hub/internal/domain"
 )
 
-func egressState(t *testing.T) (domain.DesiredState, map[string]domain.WireGuardTunnel) {
+func egressState(t *testing.T) (domain.DesiredState, map[string]domain.Upstream) {
 	t.Helper()
 	privateKey, publicKey, err := domain.GenerateX25519KeyPair()
 	if err != nil {
@@ -37,15 +37,18 @@ func egressState(t *testing.T) (domain.DesiredState, map[string]domain.WireGuard
 		},
 	}
 
-	upstream := domain.WireGuardTunnel{
-		PrivateKey: privateKey,
-		Addresses:  []string{"10.7.0.5/32"},
-		Peer: domain.WireGuardPeer{
-			PublicKey: publicKey, Endpoint: "provider.example:51820",
-			AllowedIPs: []string{"0.0.0.0/0"},
+	upstream := domain.Upstream{
+		Type: domain.TunnelWireGuard,
+		WireGuard: domain.WireGuardTunnel{
+			PrivateKey: privateKey,
+			Addresses:  []string{"10.7.0.5/32"},
+			Peer: domain.WireGuardPeer{
+				PublicKey: publicKey, Endpoint: "provider.example:51820",
+				AllowedIPs: []string{"0.0.0.0/0"},
+			},
 		},
 	}
-	return state, map[string]domain.WireGuardTunnel{"corp-wg": upstream, "alt-wg": upstream}
+	return state, map[string]domain.Upstream{"corp-wg": upstream, "alt-wg": upstream}
 }
 
 func buildEgress(t *testing.T) []domain.EgressSpec {
@@ -170,7 +173,7 @@ func TestDirectIsNotAnEgressNamespace(t *testing.T) {
 func TestBuildEgressSpecsRejectsProtocolsWithoutADriver(t *testing.T) {
 	t.Parallel()
 	state, tunnels := egressState(t)
-	state.Tunnels[0].Type = domain.TunnelXray
+	state.Tunnels[0].Type = domain.TunnelOpenVPN
 	plan, err := BuildFirewallPlan(state, "eth0")
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +181,44 @@ func TestBuildEgressSpecsRejectsProtocolsWithoutADriver(t *testing.T) {
 	if _, err := BuildEgressSpecs(state, plan, tunnels); err == nil {
 		t.Fatal("expected a tunnel type with no driver to be refused rather than pretended")
 	}
+}
+
+// A proxy tunnel gets a namespace like any other, but its device is the one sing-box
+// creates rather than a kernel interface.
+func TestProxyTunnelsGetTheirOwnDevice(t *testing.T) {
+	t.Parallel()
+	state, tunnels := egressState(t)
+	state.Tunnels[0].Type = domain.TunnelXray
+	state.Tunnels[0].Source = domain.TunnelSource{Kind: domain.SourceConfig, Value: "corp.txt"}
+	tunnels["corp-wg"] = domain.Upstream{
+		Type:  domain.TunnelXray,
+		Proxy: domain.ProxyTunnel{Protocol: "vless", Server: "node.example", Port: 443, UUID: "u"},
+	}
+
+	plan, err := BuildFirewallPlan(state, "eth0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	specs, err := BuildEgressSpecs(state, plan, tunnels)
+	if err != nil {
+		t.Fatalf("BuildEgressSpecs: %v", err)
+	}
+	for _, spec := range specs {
+		if spec.TunnelID != "corp-wg" {
+			continue
+		}
+		if spec.Type != domain.TunnelXray {
+			t.Errorf("Type = %q", spec.Type)
+		}
+		if spec.Interface != "sb0" {
+			t.Errorf("Interface = %q, want the proxy device", spec.Interface)
+		}
+		if spec.Proxy.Server != "node.example" {
+			t.Errorf("the proxy configuration did not reach the spec: %+v", spec.Proxy)
+		}
+		return
+	}
+	t.Fatal("the proxy tunnel produced no spec")
 }
 
 func TestBuildEgressSpecsRequiresAnUpstreamConfiguration(t *testing.T) {

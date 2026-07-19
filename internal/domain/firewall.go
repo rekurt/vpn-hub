@@ -22,6 +22,11 @@ type FirewallPlan struct {
 	ClientCIDR string `json:"client_cidr"`
 	DNSAddress string `json:"dns_address"`
 
+	// LinkBase is the range the veth links to tunnel namespaces are carved from.
+	// Traffic a proxy originates arrives from it and has to be translated on the way
+	// out, since the internet cannot answer a link address.
+	LinkBase string `json:"link_base,omitempty"`
+
 	// Internals are the private networks, each reached through its own tunnel. They
 	// take priority over a device's default egress, which is what lets one
 	// connection reach corporate resources and the internet at the same time.
@@ -55,6 +60,11 @@ type InternalNetwork struct {
 type EgressGroup struct {
 	// ID is a tunnel ID, or EgressDirect.
 	ID string `json:"id"`
+	// Proxied marks a tunnel whose process runs inside its namespace, so its own
+	// connections to the provider are forwarded through the main namespace rather
+	// than originating there. A kernel tunnel keeps its socket in the main namespace
+	// and needs no such rule.
+	Proxied bool `json:"proxied,omitempty"`
 	// Mark labels packets in the mangle hook so policy routing can act on them.
 	Mark uint32 `json:"mark"`
 	// Interface is where traffic for this group leaves the main namespace.

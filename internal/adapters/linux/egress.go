@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"vpn-hub/internal/domain"
 )
@@ -102,6 +103,10 @@ func (e Egress) Apply(ctx context.Context, specs []domain.EgressSpec) error {
 		if _, keep := wanted[namespace]; keep {
 			continue
 		}
+		// Stop the proxy first: deleting a namespace out from under a running
+		// process leaves the unit failing in a loop rather than simply gone.
+		_, _ = e.run(ctx, "systemctl", "stop",
+			"vpn-hub-proxy-"+strings.TrimPrefix(namespace, "vpn-hub-")+".service")
 		// Deleting the namespace takes its interfaces, routes and processes with it.
 		if err := e.namespaceLifecycle(ctx, "del", namespace); err != nil {
 			return fmt.Errorf("remove namespace %s: %w", namespace, err)
@@ -213,8 +218,106 @@ func (e Egress) ensureLink(ctx context.Context, spec domain.EgressSpec) error {
 	return err
 }
 
-// ensureTunnel brings the upstream interface up inside the namespace.
+// ensureTunnel brings the upstream interface up inside the namespace, by whichever
+// mechanism the tunnel's protocol needs.
 func (e Egress) ensureTunnel(ctx context.Context, spec domain.EgressSpec) error {
+	if spec.Type == domain.TunnelXray {
+		return e.ensureProxy(ctx, spec)
+	}
+	return e.ensureWireGuard(ctx, spec)
+}
+
+// ensureProxy runs sing-box inside the namespace, presenting a tun device that
+// ordinary routing can send packets to.
+func (e Egress) ensureProxy(ctx context.Context, spec domain.EgressSpec) error {
+	// sing-box's own connections to the provider must leave through the veth, not
+	// through the tun device it serves. They carry a mark; this rule acts on it.
+	if err := e.ensureProxyEscapeRoute(ctx, spec); err != nil {
+		return err
+	}
+
+	config, err := RenderSingBoxConfig(spec.Proxy)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(e.secretsDir(), spec.TunnelID+"-singbox.json")
+	// 0600: the file holds the UUID that authenticates the hub to the provider.
+	changed, err := writeIfChanged(path, config, 0o600)
+	if err != nil {
+		return err
+	}
+
+	unit := "vpn-hub-proxy-" + spec.TunnelID
+	if !changed {
+		if _, err := e.run(ctx, "systemctl", "is-active", "--quiet", unit+".service"); err == nil {
+			return e.ensureProxyRoutes(ctx, spec)
+		}
+	}
+	_, _ = e.run(ctx, "systemctl", "stop", unit+".service")
+	if _, err := e.run(ctx, "systemd-run", "--quiet", "--collect", "--unit="+unit,
+		"--property=Restart=on-failure", "--property=RestartSec=5s",
+		"ip", "netns", "exec", spec.Namespace,
+		"sing-box", "run", "-c", path); err != nil {
+		return err
+	}
+	return e.ensureProxyRoutes(ctx, spec)
+}
+
+// ensureProxyEscapeRoute gives sing-box's marked connections a way out of the
+// namespace that does not pass through its own tun device.
+func (e Egress) ensureProxyEscapeRoute(ctx context.Context, spec domain.EgressSpec) error {
+	table := strconv.Itoa(SingBoxOutboundTable)
+	mark := fmt.Sprintf("0x%x", SingBoxOutboundMark)
+
+	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "route", "replace", "default",
+		"via", hostOf(spec.HostAddress), "dev", spec.PeerVeth, "table", table); err != nil {
+		return err
+	}
+	// `ip rule add` is not idempotent and would stack duplicates on every reconcile.
+	existing, err := e.inNS(ctx, spec.Namespace, "ip", "rule", "show", "fwmark", mark)
+	if err == nil && strings.Contains(existing, "lookup "+table) {
+		return nil
+	}
+	_, err = e.inNS(ctx, spec.Namespace, "ip", "rule", "add", "fwmark", mark,
+		"lookup", table, "priority", "100")
+	return err
+}
+
+// ensureProxyRoutes waits for the tun device sing-box creates and routes through it.
+// The device only exists once the process is up, so this is retried rather than
+// assumed.
+func (e Egress) ensureProxyRoutes(ctx context.Context, spec domain.EgressSpec) error {
+	var lastErr error
+	for attempt := 0; attempt < 10; attempt++ {
+		if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "link", "show", spec.Interface); err == nil {
+			lastErr = nil
+			break
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	if lastErr != nil {
+		return fmt.Errorf("sing-box did not create %s in %s: %w", spec.Interface, spec.Namespace, lastErr)
+	}
+
+	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "link", "set", spec.Interface, "up"); err != nil {
+		return err
+	}
+	// As with WireGuard, the only way out of this namespace is the tunnel: if
+	// sing-box stops, its device goes and packets are discarded here.
+	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "route", "replace",
+		"default", "dev", spec.Interface); err != nil {
+		return err
+	}
+	return e.ensureNamespaceNAT(ctx, spec)
+}
+
+func (e Egress) ensureWireGuard(ctx context.Context, spec domain.EgressSpec) error {
 	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "link", "show", spec.Interface); err != nil {
 		// The interface is created in the main namespace and moved: a WireGuard
 		// device keeps its socket in the namespace it was created in, which is how
@@ -279,10 +382,14 @@ func (e Egress) ensureTunnel(ctx context.Context, spec domain.EgressSpec) error 
 		return err
 	}
 
-	// Everything leaving through the tunnel is translated to the address the provider
-	// issued. Not just the client subnet: the hub itself sends traffic this way too --
-	// the resolver querying a private zone's nameserver arrives from this end of the
-	// veth -- and untranslated it would reach a network with no route back.
+	return e.ensureNamespaceNAT(ctx, spec)
+}
+
+// ensureNamespaceNAT translates everything leaving through the tunnel to the address
+// the provider issued. Not just the client subnet: the hub itself sends traffic this
+// way too -- the resolver querying a private zone's nameserver arrives from this end
+// of the veth -- and untranslated it would reach a network with no route back.
+func (e Egress) ensureNamespaceNAT(ctx context.Context, spec domain.EgressSpec) error {
 	ruleset := fmt.Sprintf(`table inet vpn_hub_egress
 delete table inet vpn_hub_egress
 
@@ -361,19 +468,34 @@ func (e Egress) applyNamespaceRuleset(ctx context.Context, namespace, ruleset st
 	return nil
 }
 
+func (e Egress) secretsDir() string {
+	if e.SecretsDir != "" {
+		return e.SecretsDir
+	}
+	return "/run/vpn-hub"
+}
+
 func (e Egress) writeKey(name, value string) (string, error) {
-	directory := e.SecretsDir
-	if directory == "" {
-		directory = "/run/vpn-hub"
-	}
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return "", fmt.Errorf("create secrets directory: %w", err)
-	}
-	path := filepath.Join(directory, name+".key")
-	if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
-		return "", fmt.Errorf("write key: %w", err)
+	path := filepath.Join(e.secretsDir(), name+".key")
+	if _, err := writeIfChanged(path, value+"\n", 0o600); err != nil {
+		return "", err
 	}
 	return path, nil
+}
+
+// writeIfChanged reports whether the file's contents changed, so a process reading it
+// is only restarted when there is a reason to.
+func writeIfChanged(path, content string, mode os.FileMode) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false, fmt.Errorf("create directory for %s: %w", path, err)
+	}
+	if existing, err := os.ReadFile(path); err == nil && string(existing) == content {
+		return false, nil
+	}
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		return false, fmt.Errorf("write %s: %w", path, err)
+	}
+	return true, nil
 }
 
 // allowedOrDefault treats an unset AllowedIPs as "everything", which is what an

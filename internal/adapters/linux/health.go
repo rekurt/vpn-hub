@@ -60,6 +60,13 @@ func (h HealthChecker) Check(ctx context.Context, tunnel domain.Tunnel) (domain.
 	}
 	namespace := "vpn-hub-" + tunnel.ID
 
+	// A proxy has no handshake to read: liveness is the process running plus a probe
+	// that actually goes through it. Without a probe the honest answer is unknown,
+	// because a running process proves only that it started.
+	if tunnel.Type == domain.TunnelXray {
+		return h.checkProxy(ctx, tunnel, namespace, health), nil
+	}
+
 	output, err := h.run(ctx, "ip", "netns", "exec", namespace, "wg", "show", "wg0", "dump")
 	if err != nil {
 		health.Status = domain.HealthUnhealthy
@@ -104,6 +111,28 @@ func (h HealthChecker) Check(ctx context.Context, tunnel domain.Tunnel) (domain.
 	health.Status = domain.HealthHealthy
 	health.Reason = fmt.Sprintf("%d probe(s) succeeded inside the tunnel", ran)
 	return health, nil
+}
+
+// checkProxy judges a proxy tunnel, which reports no handshake of its own.
+func (h HealthChecker) checkProxy(ctx context.Context, tunnel domain.Tunnel, namespace string, health domain.TunnelHealth) domain.TunnelHealth {
+	if _, err := h.run(ctx, "systemctl", "is-active", "--quiet", "vpn-hub-proxy-"+tunnel.ID+".service"); err != nil {
+		health.Status = domain.HealthUnhealthy
+		health.Reason = "the proxy process is not running"
+		return health
+	}
+
+	reasons, ran := h.probe(ctx, namespace, tunnel.Health)
+	switch {
+	case ran == 0:
+		health.Reason = "the proxy is running, but nothing was measured: configure a health probe to know whether traffic passes"
+	case len(reasons) > 0:
+		health.Status = domain.HealthUnhealthy
+		health.Reason = strings.Join(reasons, "; ")
+	default:
+		health.Status = domain.HealthHealthy
+		health.Reason = fmt.Sprintf("%d probe(s) succeeded through the proxy", ran)
+	}
+	return health
 }
 
 // probe runs each configured check inside the namespace and returns the failures.

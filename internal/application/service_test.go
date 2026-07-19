@@ -87,7 +87,7 @@ func validConfig(privateKey string) domain.Config {
 		}},
 		Tunnels: []domain.Tunnel{
 			{ID: "corp", Type: domain.TunnelWireGuard, Role: domain.RolePrivateNetwork, Source: domain.TunnelSource{Kind: domain.SourceConfig, Value: "secrets/corp.conf"}, Routes: []string{"10.20.0.0/16"}, DNSZones: []string{"corp.internal"}},
-			{ID: "xray", Type: domain.TunnelXray, Role: domain.RoleEgress, Source: domain.TunnelSource{Kind: domain.SourceXrayURI, Value: "vless://example"}, AllowedDevices: []string{"macbook"}},
+			{ID: "xray", Type: domain.TunnelXray, Role: domain.RoleEgress, Source: domain.TunnelSource{Kind: domain.SourceConfig, Value: "secrets/xray.link"}, AllowedDevices: []string{"macbook"}},
 		},
 	}
 }

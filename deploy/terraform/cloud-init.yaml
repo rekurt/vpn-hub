@@ -77,6 +77,25 @@ write_files:
       modprobe amneziawg
       echo amneziawg > /etc/modules-load.d/amneziawg.conf
 
+      echo "==> sing-box for proxy egress"
+      # Not in the Ubuntu archive, so it comes from a GitHub release -- with its
+      # checksum verified. Installing an unverified binary on the machine that
+      # carries all of a person's traffic is not a shortcut worth taking.
+      SINGBOX_VERSION="1.11.15"
+      SINGBOX_SHA256="950af37eb2d7e55dddae34a18411cd617303fd99d2dc75bc76b6dd9fcd97d9c5"
+      SINGBOX_TGZ="sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz"
+      cd /tmp
+      curl -fsSLO "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/${SINGBOX_TGZ}"
+      if ! echo "${SINGBOX_SHA256}  ${SINGBOX_TGZ}" | sha256sum -c -; then
+        echo "sing-box checksum mismatch; refusing to install" >&2
+        rm -f "${SINGBOX_TGZ}"
+        exit 1
+      fi
+      tar xzf "${SINGBOX_TGZ}"
+      install -m 0755 "sing-box-${SINGBOX_VERSION}-linux-amd64/sing-box" /usr/local/bin/sing-box
+      rm -rf "${SINGBOX_TGZ}" "sing-box-${SINGBOX_VERSION}-linux-amd64"
+      sing-box version | head -1
+
       echo "==> hand the firewall to the agent"
       # ufw and the distro nftables unit both install their own rulesets and would
       # fight the agent, which owns the `inet vpn_hub` table and reinstalls it on

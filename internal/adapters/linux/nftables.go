@@ -112,6 +112,14 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	for _, group := range plan.Egresses {
 		line("\t\tiifname %q ip saddr @%s oifname %q accept", plan.IngressInterface, setName(group), group.Interface)
 	}
+	// A proxy runs inside its namespace, so the connections it makes to its provider
+	// are forwarded through here. A kernel tunnel keeps its socket in this namespace
+	// and never appears in this chain at all.
+	for _, group := range plan.Egresses {
+		if group.Proxied {
+			line("\t\tiifname %q oifname %q accept", group.Interface, plan.UplinkInterface)
+		}
+	}
 	line("\t}")
 	line("")
 
@@ -180,10 +188,24 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	for _, network := range plan.Internals {
 		line("\t\tip saddr != %s oifname %q masquerade", plan.ClientCIDR, network.Interface)
 	}
+	// A proxy's own connections leave from its side of the veth, an address the
+	// internet cannot answer.
+	if plan.LinkBase != "" && anyProxied(plan.Egresses) {
+		line("\t\tip saddr %s oifname %q masquerade", plan.LinkBase, plan.UplinkInterface)
+	}
 	line("\t}")
 	line("}")
 
 	return out.String()
+}
+
+func anyProxied(groups []domain.EgressGroup) bool {
+	for _, group := range groups {
+		if group.Proxied {
+			return true
+		}
+	}
+	return false
 }
 
 // setName derives the nftables set holding one egress group's client addresses.

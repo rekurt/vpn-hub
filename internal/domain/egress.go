@@ -43,6 +43,17 @@ type EgressSpec struct {
 	// ClientCIDR is routed back through HostVeth from inside the namespace.
 	ClientCIDR string `json:"client_cidr"`
 
-	Interface string          `json:"interface"`
-	Tunnel    WireGuardTunnel `json:"tunnel"`
+	Interface string `json:"interface"`
+
+	// Type selects which upstream below is meaningful.
+	Type   TunnelType      `json:"type"`
+	Tunnel WireGuardTunnel `json:"tunnel,omitempty"`
+	Proxy  ProxyTunnel     `json:"proxy,omitempty"`
+}
+
+// Upstream is a tunnel's provider-side configuration, whichever form it takes.
+type Upstream struct {
+	Type      TunnelType
+	WireGuard WireGuardTunnel
+	Proxy     ProxyTunnel
 }

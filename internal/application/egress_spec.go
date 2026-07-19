@@ -15,9 +15,12 @@ const (
 	// routeTableBase is the first policy routing table. Tables below 100 are where
 	// the well-known ones live.
 	routeTableBase = 100
-	// egressInterface is the upstream interface inside each namespace. It can repeat
+	// egressInterface is the WireGuard interface inside each namespace. It can repeat
 	// across tunnels precisely because they are isolated.
 	egressInterface = "wg0"
+	// proxyInterface is the tun device sing-box creates, named separately so a glance
+	// at a namespace says which kind of tunnel it holds.
+	proxyInterface = "sb0"
 	// peerVeth is the namespace end of the link. Same reasoning.
 	peerVeth = "uplink0"
 )
@@ -55,7 +58,7 @@ func placements(plan domain.FirewallPlan) []tunnelPlacement {
 // addresses, marks and tables, and an agent restart does not renumber a running hub.
 //
 // tunnels maps a tunnel ID to its already-parsed upstream configuration.
-func BuildEgressSpecs(state domain.DesiredState, plan domain.FirewallPlan, tunnels map[string]domain.WireGuardTunnel) ([]domain.EgressSpec, error) {
+func BuildEgressSpecs(state domain.DesiredState, plan domain.FirewallPlan, tunnels map[string]domain.Upstream) ([]domain.EgressSpec, error) {
 	base, err := netip.ParsePrefix(egressLinkBase)
 	if err != nil {
 		return nil, fmt.Errorf("invalid egress link base: %w", err)
@@ -72,8 +75,10 @@ func BuildEgressSpecs(state domain.DesiredState, plan domain.FirewallPlan, tunne
 		if !known {
 			return nil, fmt.Errorf("tunnel %q is referenced by the plan but is not in this revision", placement.id)
 		}
-		if tunnel.Type != domain.TunnelWireGuard && tunnel.Type != domain.TunnelAmneziaWG {
-			// Other protocols get their own driver; refusing beats pretending.
+		switch tunnel.Type {
+		case domain.TunnelWireGuard, domain.TunnelAmneziaWG, domain.TunnelXray:
+		default:
+			// OpenVPN has no driver yet; refusing beats pretending.
 			return nil, fmt.Errorf("tunnel %q is of type %s, which has no egress driver yet", tunnel.ID, tunnel.Type)
 		}
 		upstream, loaded := tunnels[tunnel.ID]
@@ -96,11 +101,21 @@ func BuildEgressSpecs(state domain.DesiredState, plan domain.FirewallPlan, tunne
 			Mark:        placement.mark,
 			RouteTable:  routeTableBase + index,
 			ClientCIDR:  state.Hub.ClientCIDR,
-			Interface:   egressInterface,
-			Tunnel:      upstream,
+			Interface:   upstreamInterface(tunnel.Type),
+			Type:        tunnel.Type,
+			Tunnel:      upstream.WireGuard,
+			Proxy:       upstream.Proxy,
 		})
 	}
 	return specs, nil
+}
+
+// upstreamInterface names the device that carries traffic out of a namespace.
+func upstreamInterface(kind domain.TunnelType) string {
+	if kind == domain.TunnelXray {
+		return proxyInterface
+	}
+	return egressInterface
 }
 
 // linkAddresses carves the index-th /30 out of the link base, giving .1 to the main
