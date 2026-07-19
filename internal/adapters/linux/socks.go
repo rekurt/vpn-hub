@@ -3,6 +3,7 @@ package linux
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"vpn-hub/internal/domain"
 )
@@ -23,9 +24,18 @@ func (e Egress) ensureSocks(ctx context.Context, spec domain.EgressSpec) error {
 	// veth from the hub, where the firewall admits the client subnet alone.
 	listen := hostOf(spec.PeerAddress)
 
-	if _, err := e.run(ctx, "systemctl", "is-active", "--quiet", unit+".service"); err == nil {
-		return nil
+	// Running is not enough: it has to be running on the address and port this
+	// revision expects. Both are derived from the tunnel's position in the plan, so
+	// removing another tunnel renumbers this one, and `ip addr replace` leaves the
+	// old address in place -- the proxy would go on serving happily at an address
+	// nothing forwards to any more, and no later reconcile would notice.
+	if current, err := e.run(ctx, "systemctl", "show", "--property=ExecStart", "--value", unit+".service"); err == nil {
+		if _, active := e.run(ctx, "systemctl", "is-active", "--quiet", unit+".service"); active == nil &&
+			strings.Contains(current, "-i "+listen) && strings.Contains(current, "-p "+fmt.Sprint(spec.SocksPort)) {
+			return nil
+		}
 	}
+
 	_, _ = e.run(ctx, "systemctl", "stop", unit+".service")
 	_, err := e.run(ctx, "systemd-run", "--quiet", "--collect", "--unit="+unit,
 		"--property=Restart=on-failure", "--property=RestartSec=5s",

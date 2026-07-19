@@ -2,6 +2,7 @@ package linux
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -35,7 +36,9 @@ func TestSocksRunsInsideTheNamespace(t *testing.T) {
 // minute.
 func TestSocksIsLeftAloneWhenAlreadyRunning(t *testing.T) {
 	t.Parallel()
-	host := &fakeHost{}
+	host := &fakeHost{replies: map[string]string{
+		"systemctl show --property=ExecStart --value vpn-hub-socks-corp.service": execStartOf("10.90.0.2", 11080),
+	}}
 	egress := Egress{Run: host.run, SecretsDir: t.TempDir()}
 
 	if err := egress.ensureSocks(context.Background(), socksSpec()); err != nil {
@@ -82,5 +85,31 @@ func TestSocksIsReachableFromTheHubSideOfTheLink(t *testing.T) {
 	// Its own table, so removing one tunnel's endpoint cannot disturb another's.
 	if !strings.Contains(ruleset, "table inet vpn_hub_socks_corp") {
 		t.Errorf("the endpoint should own its table:\n%s", ruleset)
+	}
+}
+
+// execStartOf is the shape systemctl reports a transient unit's command in.
+func execStartOf(address string, port int) string {
+	return "{ path=/usr/sbin/ip ; argv[]=/usr/sbin/ip netns exec vpn-hub-corp microsocks -i " +
+		address + " -p " + fmt.Sprint(port) + " ; ignore_errors=no }"
+}
+
+// Removing a tunnel renumbers the ones after it, and the link's addresses move with
+// it. A proxy judged only by "is it running" went on serving at the old address,
+// which nothing forwards to any more -- and no later reconcile disturbed it, so the
+// endpoint stayed refused until someone restarted the unit by hand.
+func TestSocksFollowsARenumbering(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{replies: map[string]string{
+		// Still where the previous revision put it.
+		"systemctl show --property=ExecStart --value vpn-hub-socks-corp.service": execStartOf("10.90.0.6", 11081),
+	}}
+	egress := Egress{Run: host.run, SecretsDir: t.TempDir()}
+
+	if err := egress.ensureSocks(context.Background(), socksSpec()); err != nil {
+		t.Fatalf("ensureSocks: %v", err)
+	}
+	if !host.ran("microsocks -i 10.90.0.2 -p 11080") {
+		t.Fatalf("the proxy was not moved to its new address; commands: %v", host.commands)
 	}
 }

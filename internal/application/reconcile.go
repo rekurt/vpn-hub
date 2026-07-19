@@ -81,7 +81,7 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 
 	// Completed before the fingerprint is taken: a plan that is fingerprinted in one
 	// shape and rendered in another reports drift against itself forever.
-	plan.Socks = socksEndpoints(egresses)
+	plan.Socks = socksEndpoints(egresses, plan)
 
 	observed, err := r.Observe(ctx)
 	if err != nil {
@@ -122,7 +122,17 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 // socksEndpoints exposes each tunnel namespace as a proxy on the hub's end of its
 // link. A laptop can then send one application through a chosen provider without
 // moving its whole connection.
-func socksEndpoints(specs []domain.EgressSpec) []domain.SocksEndpoint {
+func socksEndpoints(specs []domain.EgressSpec, plan domain.FirewallPlan) []domain.SocksEndpoint {
+	// The devices allowed to reach a tunnel are already worked out for the egress
+	// groups and the private networks; an endpoint answers to the same list.
+	permitted := make(map[string][]string, len(plan.Egresses)+len(plan.Internals))
+	for _, group := range plan.Egresses {
+		permitted[group.ID] = group.Clients
+	}
+	for _, network := range plan.Internals {
+		permitted[network.TunnelID] = network.Clients
+	}
+
 	endpoints := make([]domain.SocksEndpoint, 0, len(specs))
 	for _, spec := range specs {
 		if spec.SocksPort == 0 {
@@ -133,6 +143,7 @@ func socksEndpoints(specs []domain.EgressSpec) []domain.SocksEndpoint {
 			Address:   hostOf(spec.HostAddress),
 			Interface: spec.HostVeth,
 			Port:      spec.SocksPort,
+			Clients:   permitted[spec.TunnelID],
 		})
 	}
 	return endpoints

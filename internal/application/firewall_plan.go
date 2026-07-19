@@ -50,6 +50,11 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 		grouped[device.Egress] = append(grouped[device.Egress], address)
 	}
 
+	permitted, err := permittedClients(state)
+	if err != nil {
+		return domain.FirewallPlan{}, err
+	}
+
 	proxied := make(map[string]bool, len(state.Tunnels))
 	for _, tunnel := range state.Tunnels {
 		// Both run their process inside the namespace, so their own connections to
@@ -111,20 +116,60 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 			Mark:      directEgressMark + 1 + uint32(index),
 			Interface: EgressInterface(egress),
 			Addresses: addresses,
+			Clients:   permitted[egress],
 		})
 	}
 
 	// Internal marks continue where the egress marks stopped, so a private network
 	// and an egress can never be confused for one another.
 	nextMark := directEgressMark + 1 + uint32(len(tunnelEgresses))
-	plan.Internals = internalNetworks(state.Tunnels, nextMark)
+	plan.Internals = internalNetworks(state.Tunnels, nextMark, permitted, proxied)
 
 	return plan, nil
 }
 
+// permittedClients maps a tunnel to the client addresses allowed to use it.
+//
+// allowed_devices was previously read only while validating a device's default
+// egress, which meant that on a private-network tunnel it validated, read as a
+// restriction, and restricted nothing. Resolving it here puts it where the packet
+// filter can act on it.
+func permittedClients(state domain.DesiredState) (map[string][]string, error) {
+	addresses := make(map[string]string, len(state.Devices))
+	var all []string
+	for _, device := range state.Devices {
+		address, err := hostAddress(device.Address)
+		if err != nil {
+			return nil, fmt.Errorf("device %q: %w", device.ID, err)
+		}
+		addresses[device.ID] = address
+		all = append(all, address)
+	}
+	sort.Strings(all)
+
+	permitted := make(map[string][]string, len(state.Tunnels))
+	for _, tunnel := range state.Tunnels {
+		// An empty allowed_devices means every device, which is the documented
+		// default and the one most configurations rely on.
+		if len(tunnel.AllowedDevices) == 0 {
+			permitted[tunnel.ID] = all
+			continue
+		}
+		var allowed []string
+		for _, id := range tunnel.AllowedDevices {
+			if address, known := addresses[id]; known {
+				allowed = append(allowed, address)
+			}
+		}
+		sort.Strings(allowed)
+		permitted[tunnel.ID] = allowed
+	}
+	return permitted, nil
+}
+
 // internalNetworks gives every private-network tunnel its own set, mark and route
 // table, continuing the numbering the egress groups started so the two never collide.
-func internalNetworks(tunnels []domain.Tunnel, firstMark uint32) []domain.InternalNetwork {
+func internalNetworks(tunnels []domain.Tunnel, firstMark uint32, permitted map[string][]string, proxied map[string]bool) []domain.InternalNetwork {
 	private := make([]domain.Tunnel, 0, len(tunnels))
 	for _, tunnel := range tunnels {
 		if tunnel.Role == domain.RolePrivateNetwork {
@@ -158,6 +203,8 @@ func internalNetworks(tunnels []domain.Tunnel, firstMark uint32) []domain.Intern
 			Routes:    routes,
 			Zones:     zones,
 			Resolvers: append([]string(nil), tunnel.DNSServers...),
+			Clients:   permitted[tunnel.ID],
+			Proxied:   proxied[tunnel.ID],
 		})
 	}
 	return networks

@@ -194,7 +194,7 @@ func TestRenderSocksEndpoint(t *testing.T) {
 	}
 	ruleset := goldenTest(t, "socks-endpoint", plan)
 
-	rule := `iifname "awg0" ip saddr 10.80.0.0/24 oifname "vh-corp" tcp dport 11080 accept`
+	rule := `iifname "awg0" ip saddr @allowed_corp oifname "vh-corp" tcp dport 11080 accept`
 	if !strings.Contains(ruleset, rule) {
 		t.Fatalf("no forward rule for the endpoint:\n%s", ruleset)
 	}
@@ -271,5 +271,99 @@ func TestTheFingerprintSurvivesTheRoundTrip(t *testing.T) {
 	}
 	if parsed != Fingerprint(plan) {
 		t.Errorf("parsed %q, want %q", parsed, Fingerprint(plan))
+	}
+}
+
+// The endpoint is a second door into a tunnel, so it has to honour the same guest
+// list as the first. Admitting the whole client subnet made it a way around the very
+// choice it exists to offer: a device left on `direct`, or excluded from the tunnel
+// by allowed_devices, could point one application at the port and leave through it.
+func TestSocksAdmitsOnlyThePermittedDevices(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.Socks = []domain.SocksEndpoint{{
+		TunnelID:  "corp",
+		Address:   "10.90.0.1",
+		Interface: "vh-corp",
+		Port:      11080,
+		Clients:   []string{"10.80.0.2"},
+	}}
+	ruleset := RenderRuleset(plan)
+
+	if !strings.Contains(ruleset, "elements = { 10.80.0.2 }") {
+		t.Fatalf("the permitted device is not in a set:\n%s", ruleset)
+	}
+	if strings.Contains(ruleset, `ip saddr `+plan.ClientCIDR+` oifname "vh-corp"`) {
+		t.Errorf("the endpoint still admits the whole client subnet:\n%s", ruleset)
+	}
+	if !strings.Contains(ruleset, `ip saddr @allowed_corp oifname "vh-corp" tcp dport 11080 accept`) {
+		t.Errorf("the endpoint does not match the permitted set:\n%s", ruleset)
+	}
+}
+
+// An empty set is the right rendering of "nobody is allowed": nftables matches
+// nothing against it, so the rule exists and admits no one. Omitting the set would
+// make the rule fail to load and take the whole ruleset down with it.
+func TestATunnelNobodyMayUseRendersAnEmptySet(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.Socks = []domain.SocksEndpoint{
+		{TunnelID: "corp", Address: "10.90.0.1", Interface: "vh-corp", Port: 11080},
+	}
+	ruleset := RenderRuleset(plan)
+
+	if !strings.Contains(ruleset, "set allowed_corp {") {
+		t.Fatalf("the set is missing, so the rule referencing it cannot load:\n%s", ruleset)
+	}
+	if strings.Contains(ruleset, "elements = { }") {
+		t.Errorf("an empty elements line is not valid nftables syntax:\n%s", ruleset)
+	}
+}
+
+// A private network carried by sing-box or OpenVPN needs the same two rules an
+// egress does, because the process reaching the provider runs inside the namespace
+// either way. Without them the tunnel never connects at all -- and the ruleset looks
+// perfectly correct while it fails.
+func TestAProxiedPrivateNetworkCanReachItsProvider(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.LinkBase = "10.90.0.0/16"
+	plan.Internals = []domain.InternalNetwork{{
+		TunnelID:  "corp",
+		Mark:      0x102,
+		Interface: "vh-corp",
+		Routes:    []string{"10.20.0.0/16"},
+		Proxied:   true,
+	}}
+	ruleset := RenderRuleset(plan)
+
+	// Its own connections out to the provider are forwarded, not originated here.
+	if !strings.Contains(ruleset, `iifname "vh-corp" oifname "eth0" accept`) {
+		t.Errorf("the namespace cannot reach the provider:\n%s", ruleset)
+	}
+	// And they leave translated, since the internet cannot answer a link address.
+	if !strings.Contains(ruleset, `ip saddr 10.90.0.0/16 oifname "eth0" masquerade`) {
+		t.Errorf("the provider would see an unroutable source address:\n%s", ruleset)
+	}
+}
+
+// The comment claimed for a long time that DoT was refused outright while no rule
+// existed. A client with DoT on resolves private names past split-DNS, their
+// addresses never enter the set, and the traffic that follows leaves through the
+// internet provider.
+func TestDNSOverTLSIsRefused(t *testing.T) {
+	t.Parallel()
+	ruleset := RenderRuleset(directOnlyPlan())
+
+	rule := `iifname "awg0" tcp dport 853 reject with tcp reset`
+	if !strings.Contains(ruleset, rule) {
+		t.Fatalf("DoT is not refused:\n%s", ruleset)
+	}
+	// Before any rule that would accept it: order decides which one matches.
+	forward := ruleset[strings.Index(ruleset, "chain forward"):strings.Index(ruleset, "chain input")]
+	if strings.Index(forward, rule) > strings.Index(forward, "accept\n\t\tiifname") && strings.Contains(forward, "oifname \"eth0\" accept") {
+		if strings.Index(forward, rule) > strings.Index(forward, "oifname \"eth0\" accept") {
+			t.Errorf("an egress rule accepts DoT before it is refused:\n%s", forward)
+		}
 	}
 }

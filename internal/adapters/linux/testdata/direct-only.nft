@@ -24,6 +24,7 @@ table inet vpn_hub {
 		type filter hook forward priority filter; policy drop;
 		ct state established,related accept
 		iifname "awg0" oifname "awg0" drop
+		iifname "awg0" tcp dport 853 reject with tcp reset
 		iifname "awg0" ip saddr @client_direct oifname "eth0" accept
 	}
 

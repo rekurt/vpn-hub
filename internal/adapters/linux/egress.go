@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -74,27 +75,40 @@ func (e Egress) rulePriority() int {
 }
 
 // Observe lists the namespaces the hub currently owns.
+//
+// A failure is reported rather than read as "there are none". This list is the only
+// basis for collecting namespaces the revision dropped, so treating an error as an
+// empty host meant a withdrawn provider quietly kept its namespace, its tunnel and
+// its live session -- while Apply returned success. On a host with no namespaces at
+// all, `ip netns list` exits zero with no output, so absence never needed the
+// error branch to begin with.
 func (e Egress) Observe(ctx context.Context) ([]string, error) {
 	output, err := e.run(ctx, "ip", "-j", "netns", "list")
 	if err != nil {
-		return nil, nil //nolint:nilerr // no namespaces yet is not a failure
+		return nil, fmt.Errorf("list namespaces: %w", err)
 	}
 	return parseNamespaces(output)
 }
 
 // Apply converges every egress namespace and removes any the revision dropped.
 func (e Egress) Apply(ctx context.Context, specs []domain.EgressSpec) error {
+	// Every tunnel is attempted and the failures are gathered, rather than returning
+	// at the first one. Returning early skipped the collection below, so a single
+	// unreachable provider meant a tunnel removed from the revision kept its
+	// namespace, its running process and its session to the provider indefinitely --
+	// decommissioning one tunnel silently depended on every other one being healthy.
+	var failures []error
 	wanted := make(map[string]struct{}, len(specs))
 	for _, spec := range specs {
 		wanted[spec.Namespace] = struct{}{}
 		if err := e.applyOne(ctx, spec); err != nil {
-			return fmt.Errorf("egress %s: %w", spec.TunnelID, err)
+			failures = append(failures, fmt.Errorf("egress %s: %w", spec.TunnelID, err))
 		}
 	}
 
 	existing, err := e.Observe(ctx)
 	if err != nil {
-		return err
+		return errors.Join(append(failures, err)...)
 	}
 	for _, namespace := range existing {
 		if !strings.HasPrefix(namespace, "vpn-hub-") {
@@ -109,13 +123,19 @@ func (e Egress) Apply(ctx context.Context, specs []domain.EgressSpec) error {
 		_, _ = e.run(ctx, "systemctl", "stop", "vpn-hub-proxy-"+id+".service")
 		_, _ = e.run(ctx, "systemctl", "stop", "vpn-hub-openvpn-"+id+".service")
 		_, _ = e.run(ctx, "systemctl", "stop", "vpn-hub-socks-"+id+".service")
+		// The upstream resolver lives in whichever namespace carries the internet for
+		// most devices, which may well be this one. `ip netns del` unmounts the
+		// handle but does not kill what runs inside, so a resolver left behind stays
+		// active in a namespace that no longer exists -- and the hub resolver keeps
+		// forwarding to an address that now leads somewhere else entirely.
+		_, _ = e.run(ctx, "systemctl", "stop", upstreamResolverUnit+".service")
 		_, _ = e.run(ctx, "nft", "delete", "table", "inet", "vpn_hub_socks_"+safeTableName(id))
 		// Deleting the namespace takes its interfaces, routes and processes with it.
 		if err := e.namespaceLifecycle(ctx, "del", namespace); err != nil {
-			return fmt.Errorf("remove namespace %s: %w", namespace, err)
+			failures = append(failures, fmt.Errorf("remove namespace %s: %w", namespace, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (e Egress) applyOne(ctx context.Context, spec domain.EgressSpec) error {
@@ -125,10 +145,18 @@ func (e Egress) applyOne(ctx context.Context, spec domain.EgressSpec) error {
 	if err := e.ensureLink(ctx, spec); err != nil {
 		return err
 	}
-	if err := e.ensureTunnel(ctx, spec); err != nil {
+	// Policy routing goes in before the tunnel, not after. The mark that steers
+	// traffic here is installed by the packet filter regardless; if the rule and
+	// table it names do not exist yet, the lookup fails and the packet falls back to
+	// the main routing table -- out of the hub's own uplink. For traffic the hub
+	// originates, which the output chain accepts, that means a query for a private
+	// zone leaving in clear over the internet. With the route in place first, a
+	// tunnel that has not come up yet swallows the packet inside the namespace,
+	// which is what the second kill switch is supposed to do.
+	if err := e.ensurePolicyRouting(ctx, spec); err != nil {
 		return err
 	}
-	if err := e.ensurePolicyRouting(ctx, spec); err != nil {
+	if err := e.ensureTunnel(ctx, spec); err != nil {
 		return err
 	}
 	if err := e.ensureSocks(ctx, spec); err != nil {
@@ -204,10 +232,20 @@ func (e Egress) ensureLink(ctx context.Context, spec domain.EgressSpec) error {
 		}
 	}
 
+	// Flushed before assignment, not merely replaced. `addr replace` only replaces an
+	// address with the same prefix; after a renumbering it adds the new one and
+	// leaves the old alongside it, so the link answers at two addresses and whatever
+	// bound to the old one keeps working while nothing routes to it any more.
+	if _, err := e.run(ctx, "ip", "addr", "flush", "dev", spec.HostVeth); err != nil {
+		return err
+	}
 	if _, err := e.run(ctx, "ip", "addr", "replace", spec.HostAddress, "dev", spec.HostVeth); err != nil {
 		return err
 	}
 	if _, err := e.run(ctx, "ip", "link", "set", spec.HostVeth, "up"); err != nil {
+		return err
+	}
+	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "addr", "flush", "dev", spec.PeerVeth); err != nil {
 		return err
 	}
 	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "addr", "replace", spec.PeerAddress, "dev", spec.PeerVeth); err != nil {

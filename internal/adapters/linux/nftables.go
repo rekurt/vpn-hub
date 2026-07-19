@@ -18,6 +18,45 @@ func internalSetName(tunnelID string) string {
 	return "internal_" + strings.ReplaceAll(tunnelID, "-", "_")
 }
 
+// allowedSetName names the set of client addresses permitted to use one tunnel.
+func allowedSetName(tunnelID string) string {
+	return "allowed_" + strings.ReplaceAll(tunnelID, "-", "_")
+}
+
+// allowedSets collects the tunnels that need such a set, in a stable order.
+//
+// A tunnel can appear as an egress group, as a private network, or as a SOCKS
+// endpoint -- often as more than one -- and they all answer to the same list, so the
+// set is rendered once per tunnel rather than once per role.
+func allowedSets(plan domain.FirewallPlan) []struct {
+	id      string
+	clients []string
+} {
+	type entry = struct {
+		id      string
+		clients []string
+	}
+	var result []entry
+	seen := map[string]bool{}
+	add := func(id string, clients []string) {
+		if id == "" || id == domain.EgressDirect || seen[id] {
+			return
+		}
+		seen[id] = true
+		result = append(result, entry{id: id, clients: clients})
+	}
+	for _, group := range plan.Egresses {
+		add(group.ID, group.Clients)
+	}
+	for _, network := range plan.Internals {
+		add(network.TunnelID, network.Clients)
+	}
+	for _, endpoint := range plan.Socks {
+		add(endpoint.TunnelID, endpoint.Clients)
+	}
+	return result
+}
+
 // Fingerprint identifies a firewall plan by its content.
 //
 // It is deliberately computed from the plan rather than from the rendered text: the
@@ -65,6 +104,16 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 		line("")
 	}
 
+	for _, tunnel := range allowedSets(plan) {
+		line("\tset %s {", allowedSetName(tunnel.id))
+		line("\t\ttype ipv4_addr")
+		if len(tunnel.clients) > 0 {
+			line("\t\telements = { %s }", strings.Join(tunnel.clients, ", "))
+		}
+		line("\t}")
+		line("")
+	}
+
 	for _, network := range plan.Internals {
 		line("\tset %s {", internalSetName(network.TunnelID))
 		line("\t\ttype ipv4_addr")
@@ -104,9 +153,21 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\t\ttype filter hook forward priority filter; policy drop;")
 	line("\t\tct state established,related accept")
 	line("\t\tiifname %q oifname %q drop", plan.IngressInterface, plan.IngressInterface)
+	// DNS-over-TLS is refused before any egress rule can accept it. A client that
+	// resolves a private name through a public resolver gets an answer the hub never
+	// saw, so the address never enters the private network's set and the packet that
+	// follows leaves through the internet provider instead. Reset rather than drop:
+	// a client whose DoT connection is refused falls back to plain DNS at once,
+	// where split-DNS can answer it, instead of waiting out a timeout first.
+	//
+	// DNS-over-HTTPS is not blocked and cannot usefully be: it is indistinguishable
+	// from the rest of port 443. Split-DNS therefore depends on clients not having
+	// DoH forced on, which is a real limit and not a solved problem.
+	line("\t\tiifname %q tcp dport 853 reject with tcp reset", plan.IngressInterface)
 	for _, network := range plan.Internals {
-		line("\t\tiifname %q ip daddr @%s oifname %q accept",
-			plan.IngressInterface, internalSetName(network.TunnelID), network.Interface)
+		line("\t\tiifname %q ip saddr @%s ip daddr @%s oifname %q accept",
+			plan.IngressInterface, allowedSetName(network.TunnelID),
+			internalSetName(network.TunnelID), network.Interface)
 	}
 	for _, group := range plan.Egresses {
 		line("\t\tiifname %q ip saddr @%s oifname %q accept", plan.IngressInterface, setName(group), group.Interface)
@@ -119,12 +180,20 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 			line("\t\tiifname %q oifname %q accept", group.Interface, plan.UplinkInterface)
 		}
 	}
+	// The same is true of a private network carried by sing-box or OpenVPN. Without
+	// this the process inside the namespace cannot reach its provider at all, so the
+	// tunnel never comes up -- and nothing says why.
+	for _, network := range plan.Internals {
+		if network.Proxied {
+			line("\t\tiifname %q oifname %q accept", network.Interface, plan.UplinkInterface)
+		}
+	}
 	// A client aiming at a SOCKS endpoint is forwarded into that tunnel's namespace,
 	// so the hole is bounded by the link it goes out of and by the client subnet:
 	// nothing else on the host may reach a proxy that bypasses its own egress choice.
 	for _, endpoint := range plan.Socks {
-		line("\t\tiifname %q ip saddr %s oifname %q tcp dport %d accept",
-			plan.IngressInterface, plan.ClientCIDR, endpoint.Interface, endpoint.Port)
+		line("\t\tiifname %q ip saddr @%s oifname %q tcp dport %d accept",
+			plan.IngressInterface, allowedSetName(endpoint.TunnelID), endpoint.Interface, endpoint.Port)
 	}
 	line("\t}")
 	line("")
@@ -168,8 +237,7 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	// translating twice would hide the client address from the rule that does it --
 	// the packet would arrive there sourced from this end of the veth instead.
 	// Clients are pointed at the hub resolver, and any that ask elsewhere are brought
-	// back to it. DNS-over-TLS is refused outright: it would carry private names past
-	// split-DNS silently, and silence is the problem.
+	// back to it; DNS-over-TLS is refused in the forward chain above.
 	line("\tchain prerouting_nat {")
 	line("\t\ttype nat hook prerouting priority dstnat; policy accept;")
 	// `dnat ip` rather than plain `dnat`: an inet table serves both families and
@@ -196,7 +264,7 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	}
 	// A proxy's own connections leave from its side of the veth, an address the
 	// internet cannot answer.
-	if plan.LinkBase != "" && anyProxied(plan.Egresses) {
+	if plan.LinkBase != "" && anyProxied(plan) {
 		line("\t\tip saddr %s oifname %q masquerade", plan.LinkBase, plan.UplinkInterface)
 	}
 	line("\t}")
@@ -205,9 +273,14 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	return out.String()
 }
 
-func anyProxied(groups []domain.EgressGroup) bool {
-	for _, group := range groups {
+func anyProxied(plan domain.FirewallPlan) bool {
+	for _, group := range plan.Egresses {
 		if group.Proxied {
+			return true
+		}
+	}
+	for _, network := range plan.Internals {
+		if network.Proxied {
 			return true
 		}
 	}

@@ -48,6 +48,11 @@ type FirewallPlan struct {
 type InternalNetwork struct {
 	TunnelID string `json:"tunnel_id"`
 	Mark     uint32 `json:"mark"`
+	// Proxied means the same here as on an egress group: the process reaching the
+	// provider runs inside the namespace, so its own connections are forwarded
+	// through the main namespace and need a rule saying so. A private network can be
+	// carried by sing-box or OpenVPN just as an egress can.
+	Proxied bool `json:"proxied,omitempty"`
 	// Interface carries traffic towards this network's namespace.
 	Interface string `json:"interface"`
 	// Routes are known statically from configuration. Addresses learned from DNS are
@@ -57,6 +62,11 @@ type InternalNetwork struct {
 	Zones []string `json:"zones,omitempty"`
 	// Resolvers answer for those zones and are themselves reached through the tunnel.
 	Resolvers []string `json:"resolvers,omitempty"`
+	// Clients are the device addresses allowed to reach this network. The tunnel's
+	// allowed_devices decides it; with none set, every device is allowed. It is a
+	// list of addresses rather than a subnet because the restriction is per device,
+	// which is the only form the configuration can express.
+	Clients []string `json:"clients,omitempty"`
 }
 
 // SocksEndpoint is one egress offered as a SOCKS5 proxy.
@@ -71,6 +81,11 @@ type SocksEndpoint struct {
 	// namespace, so the address above no longer identifies it.
 	Interface string `json:"interface"`
 	Port      uint16 `json:"port"`
+	// Clients are the device addresses allowed to use this endpoint. Without it the
+	// proxy would be a way around the very choice it exists to offer: a device left
+	// on `direct`, or excluded from this tunnel by allowed_devices, could point an
+	// application at the port and leave through it anyway.
+	Clients []string `json:"clients,omitempty"`
 }
 
 // EgressGroup binds a set of client addresses to one outbound path.
@@ -88,4 +103,8 @@ type EgressGroup struct {
 	Interface string `json:"interface"`
 	// Addresses are bare client host addresses, without a prefix length.
 	Addresses []string `json:"addresses"`
+	// Clients are the devices allowed to use this tunnel at all, which is a wider
+	// list than Addresses: a device may reach a provider through its SOCKS endpoint
+	// without having chosen it as the default that Addresses records.
+	Clients []string `json:"clients,omitempty"`
 }
