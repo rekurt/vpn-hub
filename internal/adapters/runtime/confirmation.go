@@ -44,21 +44,25 @@ func (c ConfirmationStore) path(name string) string { return filepath.Join(c.Sta
 
 // Arm snapshots the current revision and records a deadline. Called before the new
 // revision is written, so the snapshot is what to return to.
-func (c ConfirmationStore) Arm(ctx context.Context, within time.Duration, revision string) error {
+// Arm reports whether a rollback was actually armed.
+//
+// It cannot be on the first deploy: there is no earlier revision to return to. That
+// is not a failure -- a hub not yet carrying traffic cannot lock anyone out of
+// itself -- but the caller has to know, because telling an operator that an
+// automatic rollback is watching a remote hub when none is, is worse than saying
+// nothing.
+func (c ConfirmationStore) Arm(ctx context.Context, within time.Duration, revision string) (bool, error) {
 	current, err := (FileRevisionStore{StateDir: c.StateDir}).Load(ctx)
 	if err != nil {
-		// Nothing deployed yet means there is nothing to roll back to, and that is
-		// not a failure: the first deploy cannot lock anyone out of a hub that was
-		// not carrying traffic.
-		return nil
+		return false, nil //nolint:nilerr // no previous revision is not a failure
 	}
 
 	data, err := json.MarshalIndent(current, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal previous state: %w", err)
+		return false, fmt.Errorf("marshal previous state: %w", err)
 	}
 	if err := atomicWrite(c.path(previousStateFile), data, 0o600); err != nil {
-		return err
+		return false, err
 	}
 
 	pending, err := json.MarshalIndent(Pending{
@@ -66,9 +70,9 @@ func (c ConfirmationStore) Arm(ctx context.Context, within time.Duration, revisi
 		Deadline: c.now().Add(within).UTC(),
 	}, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal pending confirmation: %w", err)
+		return false, fmt.Errorf("marshal pending confirmation: %w", err)
 	}
-	return atomicWrite(c.path(pendingFile), pending, 0o600)
+	return true, atomicWrite(c.path(pendingFile), pending, 0o600)
 }
 
 // Load reports the pending confirmation, if any.

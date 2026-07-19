@@ -25,7 +25,7 @@ func TestUnconfirmedDeployRollsBack(t *testing.T) {
 	if err := revisions.Save(ctx, domain.DesiredState{Revision: "good"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Arm(ctx, 5*time.Minute, "risky"); err != nil {
+	if _, err := store.Arm(ctx, 5*time.Minute, "risky"); err != nil {
 		t.Fatal(err)
 	}
 	if err := revisions.Save(ctx, domain.DesiredState{Revision: "risky"}); err != nil {
@@ -73,7 +73,7 @@ func TestConfirmingDropsTheTimer(t *testing.T) {
 	if err := revisions.Save(ctx, domain.DesiredState{Revision: "good"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Arm(ctx, time.Minute, "new"); err != nil {
+	if _, err := store.Arm(ctx, time.Minute, "new"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Confirm(); err != nil {
@@ -95,7 +95,7 @@ func TestConfirmingDropsTheTimer(t *testing.T) {
 func TestArmingWithoutAPreviousRevisionIsHarmless(t *testing.T) {
 	t.Parallel()
 	store, _, _ := armed(t)
-	if err := store.Arm(context.Background(), time.Minute, "first"); err != nil {
+	if _, err := store.Arm(context.Background(), time.Minute, "first"); err != nil {
 		t.Fatalf("Arm: %v", err)
 	}
 	if _, armedNow, err := store.Load(); err != nil || armedNow {
@@ -108,5 +108,34 @@ func TestRollbackWithoutASnapshotIsAnError(t *testing.T) {
 	store, _, _ := armed(t)
 	if _, err := store.Rollback(context.Background()); err == nil {
 		t.Fatal("expected an error when there is nothing to return to")
+	}
+}
+
+// Arming has to report whether it happened. With no earlier revision there is
+// nothing to return to, and a caller that assumes otherwise tells the operator a
+// remote hub is covered by a rollback that does not exist.
+func TestArmingReportsWhetherThereWasAnythingToArm(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stateDir := t.TempDir()
+	store := ConfirmationStore{StateDir: stateDir}
+
+	armed, err := store.Arm(ctx, time.Minute, "first")
+	if err != nil {
+		t.Fatalf("Arm: %v", err)
+	}
+	if armed {
+		t.Fatal("a rollback was reported for a hub with no earlier revision")
+	}
+
+	if err := (FileRevisionStore{StateDir: stateDir}).Save(ctx, domain.DesiredState{Revision: "first"}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	armed, err = store.Arm(ctx, time.Minute, "second")
+	if err != nil {
+		t.Fatalf("Arm: %v", err)
+	}
+	if !armed {
+		t.Error("no rollback was armed although there was a revision to return to")
 	}
 }

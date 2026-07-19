@@ -189,6 +189,13 @@ func Validate(cfg domain.Config) error {
 			return fmt.Errorf("tunnel %q: %w", tunnel.ID, err)
 		}
 		tunnelIDs[tunnel.ID] = tunnel
+		// Caught here rather than on the host: a zone with no resolver cannot be
+		// answered, and the reconcile that discovers it does so on every tick.
+		if len(tunnel.DNSZones) > 0 && len(tunnel.DNSServers) == 0 {
+			return fmt.Errorf(
+				"tunnel %q declares dns_zones but no dns_servers, so its names have nowhere to resolve",
+				tunnel.ID)
+		}
 		for _, resolver := range tunnel.DNSServers {
 			if _, err := netip.ParseAddr(resolver); err != nil {
 				return fmt.Errorf("tunnel %q: dns_servers entry %q is not an IP address", tunnel.ID, resolver)

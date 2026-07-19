@@ -63,7 +63,7 @@ func TestValidateRejectsConflictingDNSZones(t *testing.T) {
 	cfg.Tunnels = append(cfg.Tunnels, domain.Tunnel{
 		ID: "corp-b", Type: domain.TunnelOpenVPN, Role: domain.RolePrivateNetwork,
 		Source: domain.TunnelSource{Kind: domain.SourceConfig, Value: "secrets/corp-b.ovpn"},
-		Routes: []string{"10.50.0.0/16"}, DNSZones: []string{"dev.corp.internal"},
+		Routes: []string{"10.50.0.0/16"}, DNSZones: []string{"dev.corp.internal"}, DNSServers: []string{"10.50.0.53"},
 	})
 
 	err = Validate(cfg)
@@ -86,7 +86,7 @@ func validConfig(privateKey string) domain.Config {
 			PublicKey: mustPublic(privateKey), Egress: "xray",
 		}},
 		Tunnels: []domain.Tunnel{
-			{ID: "corp", Type: domain.TunnelWireGuard, Role: domain.RolePrivateNetwork, Source: domain.TunnelSource{Kind: domain.SourceConfig, Value: "secrets/corp.conf"}, Routes: []string{"10.20.0.0/16"}, DNSZones: []string{"corp.internal"}},
+			{ID: "corp", Type: domain.TunnelWireGuard, Role: domain.RolePrivateNetwork, Source: domain.TunnelSource{Kind: domain.SourceConfig, Value: "secrets/corp.conf"}, Routes: []string{"10.20.0.0/16"}, DNSZones: []string{"corp.internal"}, DNSServers: []string{"10.20.0.53"}},
 			{ID: "xray", Type: domain.TunnelXray, Role: domain.RoleEgress, Source: domain.TunnelSource{Kind: domain.SourceConfig, Value: "secrets/xray.link"}, AllowedDevices: []string{"macbook"}},
 		},
 	}

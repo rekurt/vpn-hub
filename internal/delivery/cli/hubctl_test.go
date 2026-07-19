@@ -123,3 +123,81 @@ func TestServeRejectsNonPositiveInterval(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// `deploy` used to default to a rehearsal, so the documented invocation reported a
+// revision that compiled and wrote nothing at all. Worse for a remote hub:
+// `--confirm-within` armed no timer either, so the operator believed a bad revision
+// would roll itself back when nothing had been deployed to roll back from.
+func TestDeployWritesTheRevision(t *testing.T) {
+	t.Parallel()
+	config := writeConfig(t)
+	stateDir := t.TempDir()
+
+	output, err := run(t, "--config", config, "deploy", "--state-dir", stateDir)
+	if err != nil {
+		t.Fatalf("deploy: %v (%s)", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "desired-state.json")); err != nil {
+		t.Fatalf("deploy wrote no revision: %v; output: %s", err, output)
+	}
+}
+
+func TestDeployWithConfirmationArmsTheRollback(t *testing.T) {
+	t.Parallel()
+	config := writeConfig(t)
+	stateDir := t.TempDir()
+
+	// The first deploy has nothing to roll back to, so the rollback only becomes
+	// meaningful from the second onwards.
+	if output, err := run(t, "--config", config, "deploy", "--state-dir", stateDir); err != nil {
+		t.Fatalf("first deploy: %v (%s)", err, output)
+	}
+	output, err := run(t, "--config", config, "deploy", "--state-dir", stateDir, "--confirm-within", "5m")
+	if err != nil {
+		t.Fatalf("deploy: %v (%s)", err, output)
+	}
+	// The proof that the timer exists is that confirming it succeeds.
+	if output, err := run(t, "confirm", "--state-dir", stateDir); err != nil {
+		t.Fatalf("nothing was awaiting confirmation: %v (%s)", err, output)
+	}
+}
+
+// A revoked device must not reach the revision the agent converges on. The exclusion
+// itself is well tested as a pure function; that `deploy` calls it was not, and
+// removing the call left the suite green.
+func TestDeployExcludesRevokedDevices(t *testing.T) {
+	t.Parallel()
+	config := writeConfig(t)
+	stateDir := t.TempDir()
+
+	if output, err := run(t, "--config", config, "device", "revoke", "macbook", "--state-dir", stateDir); err != nil {
+		t.Fatalf("revoke: %v (%s)", err, output)
+	}
+	if output, err := run(t, "--config", config, "deploy", "--state-dir", stateDir); err != nil {
+		t.Fatalf("deploy: %v (%s)", err, output)
+	}
+
+	revision, err := os.ReadFile(filepath.Join(stateDir, "desired-state.json"))
+	if err != nil {
+		t.Fatalf("read revision: %v", err)
+	}
+	if strings.Contains(string(revision), "macbook") {
+		t.Fatalf("the revoked device is still in the revision:\n%s", revision)
+	}
+}
+
+// The first deploy cannot arm a rollback, and must not claim to. An operator who
+// reads the usual line trusts a safety net that is not there -- on exactly the hub
+// where a bad revision cuts the session it would be repaired from.
+func TestTheFirstDeploySaysNoRollbackWasArmed(t *testing.T) {
+	t.Parallel()
+	config := writeConfig(t)
+
+	output, err := run(t, "--config", config, "deploy", "--state-dir", t.TempDir(), "--confirm-within", "5m")
+	if err != nil {
+		t.Fatalf("deploy: %v (%s)", err, output)
+	}
+	if !strings.Contains(output, "no rollback was armed") {
+		t.Errorf("the output promises a rollback that was not armed:\n%s", output)
+	}
+}

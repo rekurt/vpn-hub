@@ -66,7 +66,10 @@ func newReconcileCommand() *cobra.Command {
 		},
 	}
 	flags.bind(command)
-	command.Flags().BoolVar(&dryRun, "dry-run", true, "print operations without touching the host")
+	// `reconcile` is the one-shot form of what `serve` does continuously, and serve
+	// applies. Reading a clean report from a command that never intended to act is
+	// how a half-configured host looks healthy.
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "print operations without touching the host")
 	return command
 }
 

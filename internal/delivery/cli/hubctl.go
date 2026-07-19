@@ -109,8 +109,9 @@ func newDeployCommand(configPath *string) *cobra.Command {
 				return err
 			}
 			confirmations := runtimeadapter.ConfirmationStore{StateDir: stateDir}
+			var armed bool
 			if confirmWithin > 0 {
-				if err := confirmations.Arm(cmd.Context(), confirmWithin, state.Revision); err != nil {
+				if armed, err = confirmations.Arm(cmd.Context(), confirmWithin, state.Revision); err != nil {
 					return err
 				}
 			}
@@ -118,6 +119,14 @@ func newDeployCommand(configPath *string) *cobra.Command {
 				return err
 			}
 			if confirmWithin > 0 {
+				if !armed {
+					// Said plainly rather than implied: an operator who reads the
+					// usual message trusts a rollback that is not there.
+					_, err = fmt.Fprintf(cmd.OutOrStdout(),
+						"saved revision %s; no rollback was armed because there is no earlier revision to return to\n",
+						state.Revision)
+					return err
+				}
 				_, err = fmt.Fprintf(cmd.OutOrStdout(),
 					"saved revision %s; run `hubctl confirm` within %s or the agent restores the previous one\n",
 					state.Revision, confirmWithin)
@@ -130,7 +139,12 @@ func newDeployCommand(configPath *string) *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&stateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
-	command.Flags().BoolVar(&dryRun, "dry-run", true, "print the plan without persisting state")
+	// Defaulting this to true made `deploy` a command that reported success and did
+	// nothing -- including `deploy --confirm-within 5m`, which armed no timer, so an
+	// operator believed a remote hub was covered by an automatic rollback that did
+	// not exist. A verb does what it says; asking for a rehearsal is the thing that
+	// takes a flag.
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "print the plan without persisting state")
 	command.Flags().DurationVar(&confirmWithin, "confirm-within", 0,
 		"restore the previous revision unless `hubctl confirm` runs within this time")
 	return command

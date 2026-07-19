@@ -55,7 +55,7 @@ func (r HostReconciler) Observe(ctx context.Context) (domain.ObservedState, erro
 // Plan reports what differs between the revision and the host, without changing
 // anything.
 func (r HostReconciler) Plan(ctx context.Context, state domain.DesiredState) ([]domain.Operation, error) {
-	plan, spec, _, err := r.compile(ctx, state)
+	compiled, err := r.compile(ctx, state)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func (r HostReconciler) Plan(ctx context.Context, state domain.DesiredState) ([]
 	if err != nil {
 		return nil, err
 	}
-	return Diff(spec, r.Firewall.Fingerprint(plan), observed), nil
+	return Diff(compiled.ingress, r.Firewall.Fingerprint(compiled.firewall), observed), nil
 }
 
 // Apply converges the host and returns the differences it closed.
@@ -74,14 +74,11 @@ func (r HostReconciler) Plan(ctx context.Context, state domain.DesiredState) ([]
 // changed in place -- disappear on the next tick. The diff decides what is worth
 // reporting, not whether to converge.
 func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([]domain.Operation, error) {
-	plan, spec, egresses, err := r.compile(ctx, state)
+	compiled, err := r.compile(ctx, state)
 	if err != nil {
 		return nil, err
 	}
-
-	// Completed before the fingerprint is taken: a plan that is fingerprinted in one
-	// shape and rendered in another reports drift against itself forever.
-	plan.Socks = socksEndpoints(egresses, plan)
+	plan, spec, egresses := compiled.firewall, compiled.ingress, compiled.egresses
 
 	observed, err := r.Observe(ctx)
 	if err != nil {
@@ -106,13 +103,10 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 			return nil, fmt.Errorf("apply egress: %w", err)
 		}
 	}
-	// Resolvers after the namespaces they live in and forward through.
+	// Resolvers after the namespaces they live in and forward through. The plan
+	// itself was derived by compile, before any of the above ran.
 	if r.DNS != nil {
-		dns, err := BuildDNSPlan(state, plan, egresses)
-		if err != nil {
-			return nil, err
-		}
-		if err := r.DNS.Apply(ctx, dns, rebuilt); err != nil {
+		if err := r.DNS.Apply(ctx, compiled.dns, rebuilt); err != nil {
 			return nil, fmt.Errorf("apply dns: %w", err)
 		}
 	}
@@ -149,41 +143,58 @@ func socksEndpoints(specs []domain.EgressSpec, plan domain.FirewallPlan) []domai
 	return endpoints
 }
 
-// compile turns a revision into the two artefacts the host needs. Both are derived
-// before anything is applied, so a configuration error fails before the machine has
-// been touched.
-func (r HostReconciler) compile(ctx context.Context, state domain.DesiredState) (domain.FirewallPlan, domain.IngressSpec, []domain.EgressSpec, error) {
-	var (
-		noPlan domain.FirewallPlan
-		noSpec domain.IngressSpec
-	)
+// compiled holds everything a revision turns into before any of it is applied.
+type compiled struct {
+	firewall domain.FirewallPlan
+	ingress  domain.IngressSpec
+	egresses []domain.EgressSpec
+	dns      domain.DNSPlan
+}
+
+// compile turns a revision into the artefacts the host needs. All of them are
+// derived before anything is applied, so a configuration error fails before the
+// machine has been touched -- and `reconcile --dry-run` sees the same errors a real
+// pass would. The DNS plan used to be built after the packet filter, the ingress and
+// the namespaces were already in place, so a revision declaring dns_zones with no
+// dns_servers passed validation, reported cleanly in a dry run, and then failed on
+// every tick with the host half-configured and no resolver at all.
+func (r HostReconciler) compile(ctx context.Context, state domain.DesiredState) (compiled, error) {
 	if r.Firewall == nil || r.Ingress == nil || r.Host == nil || r.ServerKey == nil {
-		return noPlan, noSpec, nil, fmt.Errorf("host reconciler is not fully configured")
+		return compiled{}, fmt.Errorf("host reconciler is not fully configured")
 	}
 
 	uplink, err := r.Host.UplinkInterface(ctx)
 	if err != nil {
-		return noPlan, noSpec, nil, fmt.Errorf("find uplink interface: %w", err)
+		return compiled{}, fmt.Errorf("find uplink interface: %w", err)
 	}
 	plan, err := BuildFirewallPlan(state, uplink)
 	if err != nil {
-		return noPlan, noSpec, nil, err
+		return compiled{}, err
 	}
 
 	privateKey, err := r.ServerKey.PrivateKey(ctx)
 	if err != nil {
-		return noPlan, noSpec, nil, err
+		return compiled{}, err
 	}
 	spec, err := BuildIngressSpec(state, privateKey)
 	if err != nil {
-		return noPlan, noSpec, nil, err
+		return compiled{}, err
 	}
 
 	egresses, err := r.compileEgresses(ctx, state, plan)
 	if err != nil {
-		return noPlan, noSpec, nil, err
+		return compiled{}, err
 	}
-	return plan, spec, egresses, nil
+
+	// Completed before the fingerprint is taken anywhere: a plan fingerprinted in one
+	// shape and rendered in another reports drift against itself forever.
+	plan.Socks = socksEndpoints(egresses, plan)
+
+	dns, err := BuildDNSPlan(state, plan, egresses)
+	if err != nil {
+		return compiled{}, err
+	}
+	return compiled{firewall: plan, ingress: spec, egresses: egresses, dns: dns}, nil
 }
 
 // compileEgresses loads each upstream configuration and derives its namespace. The
