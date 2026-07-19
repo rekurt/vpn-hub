@@ -16,12 +16,10 @@ import (
 )
 
 type Service struct {
-	ConfigRepository    ports.ConfigRepository
-	RevisionStore       ports.RevisionStore
-	HealthChecker       ports.HealthChecker
-	SubscriptionFetcher ports.SubscriptionFetcher
-	ProfileRenderer     ports.ProfileRenderer
-	Now                 func() time.Time
+	ConfigRepository ports.ConfigRepository
+	RevisionStore    ports.RevisionStore
+	HealthChecker    ports.HealthChecker
+	Now              func() time.Time
 }
 
 func (s Service) LoadAndValidate(ctx context.Context) (domain.Config, error) {
@@ -104,22 +102,6 @@ func (s Service) TestTunnel(ctx context.Context, cfg domain.Config, id string) (
 		}
 	}
 	return domain.TunnelHealth{}, fmt.Errorf("tunnel %q was not found", id)
-}
-
-func (s Service) RefreshSubscription(ctx context.Context, cfg domain.Config, id string) ([]byte, error) {
-	if s.SubscriptionFetcher == nil {
-		return nil, fmt.Errorf("subscription fetcher is not configured")
-	}
-	for _, tunnel := range cfg.Tunnels {
-		if tunnel.ID != id {
-			continue
-		}
-		if tunnel.Type != domain.TunnelXray || tunnel.Source.Kind != domain.SourceSubscription {
-			return nil, fmt.Errorf("tunnel %q is not an Xray subscription", id)
-		}
-		return s.SubscriptionFetcher.Fetch(ctx, tunnel.Source.Value)
-	}
-	return nil, fmt.Errorf("tunnel %q was not found", id)
 }
 
 func Validate(cfg domain.Config) error {

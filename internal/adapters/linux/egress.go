@@ -134,8 +134,26 @@ func (e Egress) Apply(ctx context.Context, specs []domain.EgressSpec) error {
 		if err := e.namespaceLifecycle(ctx, "del", namespace); err != nil {
 			failures = append(failures, fmt.Errorf("remove namespace %s: %w", namespace, err))
 		}
+		// The provider's key material goes with it. A secret should not outlive the
+		// configuration that justified it: withdrawing a provider, or merely
+		// disabling its tunnel, left its private key, its pre-shared key, its
+		// sing-box UUID and its OpenVPN inline certificates on disk until the next
+		// reboot cleared the tmpfs.
+		e.forgetSecrets(id)
 	}
 	return errors.Join(failures...)
+}
+
+// forgetSecrets removes the files a tunnel's upstream needed. Failures are ignored:
+// the file may never have existed, and a tunnel that is already gone must not be
+// held up by the tidying that follows it.
+func (e Egress) forgetSecrets(id string) {
+	for _, name := range []string{
+		id + "-private.key", id + "-psk.key",
+		id + "-singbox.json", id + "-openvpn.conf",
+	} {
+		_ = os.Remove(filepath.Join(e.secretsDir(), name))
+	}
 }
 
 func (e Egress) applyOne(ctx context.Context, spec domain.EgressSpec) error {

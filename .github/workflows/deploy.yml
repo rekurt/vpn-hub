@@ -47,13 +47,22 @@ jobs:
         env:
           SSH_KEY: ${{ secrets.HUB_SSH_KEY }}
           HUB_HOST: ${{ secrets.HUB_HOST }}
+          HUB_HOST_KEY: ${{ secrets.HUB_HOST_KEY }}
         run: |
           test -n "$SSH_KEY"  || { echo "secret HUB_SSH_KEY is not set"; exit 1; }
           test -n "$HUB_HOST" || { echo "secret HUB_HOST is not set"; exit 1; }
           install -d -m 0700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "$HUB_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          # The host key is pinned, not learned at deploy time. `ssh-keyscan` accepts
+          # whatever answers, so a hijacked name or a MITM on the runner's path would
+          # be handed this root key -- and the binaries. That defeats the reason this
+          # workflow is manual in the first place: a stolen token should not amount to
+          # a stolen network path.
+          test -n "$HUB_HOST_KEY" || {
+            echo "secret HUB_HOST_KEY is not set; get it with: ssh-keyscan <host>"; exit 1; }
+          printf '%s\n' "$HUB_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Install
         env:

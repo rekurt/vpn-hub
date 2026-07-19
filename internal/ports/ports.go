@@ -21,10 +21,6 @@ type RevisionStore interface {
 	Load(context.Context) (domain.DesiredState, error)
 }
 
-type SecretStore interface {
-	Decrypt(context.Context, string) ([]byte, error)
-}
-
 // Firewall installs a rendered policy as a single transaction.
 type Firewall interface {
 	// Apply reports whether it replaced the live ruleset. The answer matters to the
@@ -96,10 +92,4 @@ type HealthChecker interface {
 
 type SubscriptionFetcher interface {
 	Fetch(context.Context, string) ([]byte, error)
-}
-
-// ProfileRenderer builds a client configuration. It is given the private key rather
-// than a stored profile, because the hub keeps only public keys.
-type ProfileRenderer interface {
-	Render(hub domain.Hub, address, privateKey string) (string, error)
 }

@@ -21,6 +21,8 @@ packages:
   - qrencode
   - openvpn
   - microsocks
+  # The agent starts a resolver on every pass; without this it fails on every pass.
+  - dnsmasq
 
 write_files:
   - path: /etc/sysctl.d/99-vpn-hub.conf
@@ -104,6 +106,10 @@ write_files:
       # every start. Persistence across reboots is the agent's job, not theirs.
       systemctl disable --now ufw          2>/dev/null || true
       systemctl disable --now nftables     2>/dev/null || true
+      # The packaged dnsmasq would take port 53 and the agent's own instances could
+      # not bind. The agent runs its resolvers as transient units, in the namespaces
+      # they belong in; the package is here for the binary alone.
+      systemctl disable --now dnsmasq      2>/dev/null || true
 
       echo "==> directories owned by the hub"
       install -d -m 0700 /var/lib/vpn-hub

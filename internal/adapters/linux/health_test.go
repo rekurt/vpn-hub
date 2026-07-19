@@ -3,6 +3,8 @@ package linux
 import (
 	"context"
 	"fmt"
+	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -178,4 +180,87 @@ func TestTheTCPProbeUsesNoShell(t *testing.T) {
 	if !host.ran("ip netns exec vpn-hub-corp curl") {
 		t.Fatalf("the probe did not run; commands: %v", host.commands)
 	}
+}
+
+// Both of these branches could be replaced by an unconditional "healthy" with the
+// suite still green, which for a health check is the failure that matters most.
+func TestAProxyWithNoProcessIsUnhealthy(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{failures: map[string]error{
+		"systemctl is-active --quiet vpn-hub-proxy-corp.service": errNotRunning,
+	}}
+	tunnel := domain.Tunnel{ID: "corp", Type: domain.TunnelXray}
+
+	health, err := checker(host).Check(context.Background(), tunnel)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if health.Status != domain.HealthUnhealthy {
+		t.Errorf("Status = %s, want unhealthy: the proxy is not running", health.Status)
+	}
+}
+
+// A running process is not evidence that traffic passes, so with no probe the
+// honest answer is that nothing was measured.
+func TestARunningProxyWithNoProbeIsUnknown(t *testing.T) {
+	t.Parallel()
+	tunnel := domain.Tunnel{ID: "corp", Type: domain.TunnelXray}
+
+	health, err := checker(&fakeHost{}).Check(context.Background(), tunnel)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if health.Status != domain.HealthUnknown {
+		t.Errorf("Status = %s, want unknown: nothing was measured", health.Status)
+	}
+}
+
+// OpenVPN used to answer this same situation with "healthy", on the strength of its
+// management channel alone. CONNECTED describes the control channel, which stays up
+// through plenty of failures that stop data passing.
+func TestConnectedWithoutAProbeIsUnknownNotHealthy(t *testing.T) {
+	t.Parallel()
+	// A unix socket path is limited to about a hundred characters, and the usual
+	// temp directory name for a test this long already exceeds it.
+	runtimeDir, err := os.MkdirTemp("", "vh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+	openvpnStub(t, OpenVPNManagementSocket(runtimeDir, "corp"),
+		">INFO:OpenVPN Management Interface\r\n1700000000,CONNECTED,SUCCESS,10.8.0.2,,\r\nEND\r\n")
+
+	checker := HealthChecker{Run: (&fakeHost{}).run, RuntimeDir: runtimeDir, Now: func() time.Time { return frozen }}
+	health, err := checker.Check(context.Background(), domain.Tunnel{ID: "corp", Type: domain.TunnelOpenVPN})
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if health.Status == domain.HealthHealthy {
+		t.Errorf("Status = healthy on the control channel alone; reason: %s", health.Reason)
+	}
+	if health.Status != domain.HealthUnknown {
+		t.Errorf("Status = %s, want unknown", health.Status)
+	}
+}
+
+// openvpnStub answers one connection on a management socket with a canned reply, so
+// the OpenVPN health path can be exercised without OpenVPN.
+func openvpnStub(t *testing.T, path, reply string) {
+	t.Helper()
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Skipf("unix sockets unavailable here: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = connection.Write([]byte(reply))
+			_ = connection.Close()
+		}
+	}()
 }

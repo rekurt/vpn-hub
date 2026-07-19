@@ -161,7 +161,7 @@ func newBed(t *testing.T) bed {
 		spec.ListenPort = listenPort
 		spec.Parameters = nil // plain WireGuard has no obfuscation knobs
 
-		if err := (linux.NFTables{}).Apply(context.Background(), plan); err != nil {
+		if _, err := (linux.NFTables{RuntimeDir: secrets}).Apply(context.Background(), plan); err != nil {
 			t.Fatalf("apply ruleset: %v", err)
 		}
 		ingress := linux.Ingress{SecretsDir: secrets, LinkType: "wireguard", Tool: "wg"}

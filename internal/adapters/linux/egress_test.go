@@ -3,6 +3,8 @@ package linux
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -234,5 +236,31 @@ func TestAFailedObservationIsNotAnEmptyHost(t *testing.T) {
 
 	if _, err := egress.Observe(context.Background()); err == nil {
 		t.Fatal("a failed listing was reported as an empty host")
+	}
+}
+
+// A secret must not outlive the configuration that justified it. Withdrawing a
+// provider — or merely disabling its tunnel, which drops it from the revision —
+// used to leave its private key, its pre-shared key, its sing-box UUID and its
+// OpenVPN inline certificates on disk until a reboot cleared the tmpfs.
+func TestRemovingATunnelRemovesItsSecrets(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, name := range []string{"gone-private.key", "gone-psk.key", "gone-singbox.json", "gone-openvpn.conf"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	host := workingHost(`[{"name":"vpn-hub-gone"}]`)
+
+	if err := (Egress{Run: host.run, SecretsDir: dir}).Apply(context.Background(), nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	left, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range left {
+		t.Errorf("%s outlived the tunnel it belonged to", entry.Name())
 	}
 }

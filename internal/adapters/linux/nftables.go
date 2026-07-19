@@ -326,7 +326,14 @@ func (n NFTables) binary() string {
 }
 
 // Observe reports the fingerprint carried by the live table, or an empty string when
-// the table is absent — which is what drift usually looks like.
+// the table is absent -- which is what drift usually looks like.
+//
+// Absence and ignorance are told apart. nft exits 1 with "No such file or directory"
+// for a table that is not there, which is the expected state before the first apply
+// and after someone flushes the ruleset. Anything else -- nft missing, permission
+// denied, unreadable output -- used to produce the same answer, so a hub that could
+// not look at its own ruleset reported that the ruleset had been flushed, and the
+// agent set about rebuilding a table that may have been perfectly correct.
 func (n NFTables) Observe(ctx context.Context) (string, error) {
 	run := n.Run
 	if run == nil {
@@ -334,11 +341,19 @@ func (n NFTables) Observe(ctx context.Context) (string, error) {
 	}
 	output, err := run(ctx, n.binary(), "-j", "list", "table", "inet", "vpn_hub")
 	if err != nil {
-		// A missing table is the expected state before the first apply, and after
-		// someone flushes the ruleset. Neither is an error.
-		return "", nil //nolint:nilerr
+		if isMissingTable(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read the loaded ruleset: %w", err)
 	}
 	return parseFingerprint(output)
+}
+
+// isMissingTable recognises nft's way of saying the table does not exist.
+func isMissingTable(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no such file or directory") ||
+		strings.Contains(message, "does not exist")
 }
 
 // nftJSON is the slice of `nft -j list table` output that matters here.

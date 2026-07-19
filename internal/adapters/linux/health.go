@@ -166,8 +166,13 @@ func (h HealthChecker) checkOpenVPN(ctx context.Context, tunnel domain.Tunnel, n
 	reasons, ran := h.probe(ctx, namespace, tunnel.Health)
 	switch {
 	case ran == 0:
-		health.Status = domain.HealthHealthy
-		health.Reason = "the provider reports CONNECTED"
+		// Unknown, not healthy. CONNECTED describes the control channel, which
+		// stays connected through plenty of failures that stop data passing --
+		// a dead route inside the namespace, a provider dropping the payload.
+		// The proxy check answers the same situation the same way; answering it
+		// differently here was the dangerous half of an inconsistency.
+		health.Reason = "the provider reports CONNECTED, but nothing was measured: " +
+			"configure a health probe to know whether traffic passes"
 	case len(reasons) > 0:
 		health.Status = domain.HealthUnhealthy
 		health.Reason = strings.Join(reasons, "; ")

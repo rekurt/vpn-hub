@@ -2,6 +2,7 @@ package linux
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -365,5 +366,35 @@ func TestDNSOverTLSIsRefused(t *testing.T) {
 		if strings.Index(forward, rule) > strings.Index(forward, "oifname \"eth0\" accept") {
 			t.Errorf("an egress rule accepts DoT before it is refused:\n%s", forward)
 		}
+	}
+}
+
+// A hub that cannot read its own ruleset must not report that the ruleset is gone.
+// Both answers used to be the empty string, so a permission error or a missing nft
+// binary read as "someone flushed the table" and the agent set about rebuilding
+// something that may have been perfectly correct.
+func TestAFailedReadIsNotAnAbsentTable(t *testing.T) {
+	t.Parallel()
+
+	// The message nft actually prints for a table that is not there, checked
+	// against nft 1.0.9 on the host.
+	absent := &fakeHost{failures: map[string]error{
+		"nft -j list table inet vpn_hub": errors.New(
+			"nft -j list table inet vpn_hub: exit status 1: Error: No such file or directory"),
+	}}
+	fingerprint, err := (NFTables{Run: absent.run}).Observe(context.Background())
+	if err != nil {
+		t.Fatalf("a missing table should not be an error: %v", err)
+	}
+	if fingerprint != "" {
+		t.Errorf("fingerprint = %q, want empty for an absent table", fingerprint)
+	}
+
+	refused := &fakeHost{failures: map[string]error{
+		"nft -j list table inet vpn_hub": errors.New(
+			"nft -j list table inet vpn_hub: exit status 1: Error: Could not open: Permission denied"),
+	}}
+	if _, err := (NFTables{Run: refused.run}).Observe(context.Background()); err == nil {
+		t.Error("a failed read was reported as an absent table")
 	}
 }

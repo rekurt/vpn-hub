@@ -76,7 +76,8 @@ deploy-lab: build-linux
 	@test -n "$(LAB_IP)" || { echo "no lab host; run make stand-up"; exit 1; }
 	$(SSH) 'mkdir -p /run/vpn-hub-stage'
 	scp bin/linux/hubctl bin/linux/vpn-hub-agent root@$(LAB_IP):/run/vpn-hub-stage/
-	scp deploy/systemd/vpn-hub-agent.service root@$(LAB_IP):/etc/systemd/system/
+	scp deploy/systemd/vpn-hub-agent.service deploy/systemd/vpn-hub-subscription@.service \
+		deploy/systemd/vpn-hub-subscription@.timer root@$(LAB_IP):/etc/systemd/system/
 	$(SSH) 'install -m 0755 /run/vpn-hub-stage/hubctl /run/vpn-hub-stage/vpn-hub-agent /usr/local/bin/ \
 		&& rm -rf /run/vpn-hub-stage \
 		&& systemctl daemon-reload \
