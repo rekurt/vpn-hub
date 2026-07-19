@@ -151,12 +151,31 @@ func OpenVPNState(socket string, timeout time.Duration) (string, error) {
 		return "", fmt.Errorf("ask for state: %w", err)
 	}
 
+	// Read until the state reply arrives, not once. On connect OpenVPN sends a
+	// greeting banner (">INFO: ...") before anything is asked of it, so a single read
+	// can return the banner alone and nothing else -- which parses as "no state"
+	// while the tunnel is perfectly up. Accumulate until a state line or END shows,
+	// or the deadline set above ends the read.
+	var accumulated strings.Builder
 	buffer := make([]byte, 4096)
-	read, err := connection.Read(buffer)
-	if err != nil {
-		return "", fmt.Errorf("read state: %w", err)
+	for {
+		read, err := connection.Read(buffer)
+		if read > 0 {
+			accumulated.Write(buffer[:read])
+			if state, perr := parseOpenVPNState(accumulated.String()); perr == nil {
+				return state, nil
+			}
+			if strings.Contains(accumulated.String(), "\nEND") || strings.HasPrefix(accumulated.String(), "END") {
+				return parseOpenVPNState(accumulated.String())
+			}
+		}
+		if err != nil {
+			if accumulated.Len() > 0 {
+				return parseOpenVPNState(accumulated.String())
+			}
+			return "", fmt.Errorf("read state: %w", err)
+		}
 	}
-	return parseOpenVPNState(string(buffer[:read]))
 }
 
 // parseOpenVPNState reads the state line, whose second field is the stage.
