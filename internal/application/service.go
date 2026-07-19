@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -184,11 +185,26 @@ func Validate(cfg domain.Config) error {
 		if err := validateTunnel(tunnel, deviceIDs); err != nil {
 			return err
 		}
+		if err := tunnel.Health.Validate(); err != nil {
+			return fmt.Errorf("tunnel %q: %w", tunnel.ID, err)
+		}
 		tunnelIDs[tunnel.ID] = tunnel
+		for _, resolver := range tunnel.DNSServers {
+			if _, err := netip.ParseAddr(resolver); err != nil {
+				return fmt.Errorf("tunnel %q: dns_servers entry %q is not an IP address", tunnel.ID, resolver)
+			}
+		}
 		for _, rawZone := range tunnel.DNSZones {
 			zone := normalizeZone(rawZone)
 			if zone == "" {
 				return fmt.Errorf("tunnel %q: empty DNS zone", tunnel.ID)
+			}
+			// A zone becomes a line in the resolver's configuration file, so a value
+			// carrying a newline would write a directive of its own -- `address=/#/`
+			// alone is enough to point every client's every lookup wherever the
+			// author of that string chose.
+			if err := domain.ValidateDNSZone(zone); err != nil {
+				return fmt.Errorf("tunnel %q: %w", tunnel.ID, err)
 			}
 			for existing, existingTunnel := range zones {
 				if zonesOverlap(zone, existing) {

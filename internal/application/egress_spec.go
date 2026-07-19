@@ -23,6 +23,10 @@ const (
 	proxyInterface = "sb0"
 	// openvpnInterface is the tun device OpenVPN creates. Same reasoning.
 	openvpnInterface = "ovpn0"
+	// socksPortBase is the first SOCKS5 port. Derived from position like everything
+	// else in the layout, so the same revision always yields the same ports and a
+	// client's configuration does not go stale when a tunnel is added.
+	socksPortBase = 11080
 	// peerVeth is the namespace end of the link. Same reasoning.
 	peerVeth = "uplink0"
 )
@@ -101,6 +105,7 @@ func BuildEgressSpecs(state domain.DesiredState, plan domain.FirewallPlan, tunne
 			PeerAddress: peerAddress,
 			Mark:        placement.mark,
 			RouteTable:  routeTableBase + index,
+			SocksPort:   uint16(socksPortBase + index),
 			ClientCIDR:  state.Hub.ClientCIDR,
 			Interface:   upstreamInterface(tunnel.Type),
 			Type:        tunnel.Type,

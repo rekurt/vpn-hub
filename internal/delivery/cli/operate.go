@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/cobra"
 
 	configadapter "vpn-hub/internal/adapters/config"
+	"vpn-hub/internal/adapters/linux"
+	"vpn-hub/internal/application"
 	"vpn-hub/internal/domain"
 )
 
@@ -203,9 +205,48 @@ func newRoutesCommand(configPath *string) *cobra.Command {
 				sort.Strings(devices)
 				_, _ = fmt.Fprintf(writer, "everything else\t%s\tdefault for %s\n", egress, strings.Join(devices, ", "))
 			}
+
+			// The SOCKS endpoints are the other way traffic can be steered, so they
+			// belong in the same picture rather than in a separate command.
+			uplink, err := linux.NetConf{}.UplinkInterface(cmd.Context())
+			if err != nil {
+				return writer.Flush()
+			}
+			plan, err := application.BuildFirewallPlan(state, uplink)
+			if err != nil {
+				return writer.Flush()
+			}
+			specs, err := application.BuildEgressSpecs(state, plan, upstreamsFor(state))
+			if err != nil {
+				return writer.Flush()
+			}
+			for _, spec := range specs {
+				if spec.SocksPort == 0 {
+					continue
+				}
+				_, _ = fmt.Fprintf(writer, "socks5://%s:%d\t%s\ta single application\n",
+					hostOf(spec.HostAddress), spec.SocksPort, spec.TunnelID)
+			}
 			return writer.Flush()
 		},
 	}
+}
+
+// upstreamsFor supplies placeholders: the layout does not depend on a provider's
+// contents, and `routes` must work on a workstation where those files do not exist.
+func upstreamsFor(state domain.DesiredState) map[string]domain.Upstream {
+	upstreams := make(map[string]domain.Upstream, len(state.Tunnels))
+	for _, tunnel := range state.Tunnels {
+		upstreams[tunnel.ID] = domain.Upstream{Type: tunnel.Type}
+	}
+	return upstreams
+}
+
+func hostOf(address string) string {
+	if index := strings.IndexByte(address, '/'); index >= 0 {
+		return address[:index]
+	}
+	return address
 }
 
 func summarise(values []string) string {

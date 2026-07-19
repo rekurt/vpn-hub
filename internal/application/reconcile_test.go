@@ -14,11 +14,13 @@ type recordingFirewall struct {
 	err     error
 	// live is the fingerprint the host reports; empty means the table is absent.
 	live string
+	// rebuilt is what Apply reports back: whether it replaced the live ruleset.
+	rebuilt bool
 }
 
-func (f *recordingFirewall) Apply(_ context.Context, plan domain.FirewallPlan) error {
+func (f *recordingFirewall) Apply(_ context.Context, plan domain.FirewallPlan) (bool, error) {
 	f.applied = append(f.applied, plan)
-	return f.err
+	return f.rebuilt, f.err
 }
 
 func (f *recordingFirewall) Observe(context.Context) (string, error) { return f.live, nil }

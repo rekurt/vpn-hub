@@ -2,6 +2,7 @@ package linux
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -82,3 +83,6 @@ func TestStaleNamespacesAreRemovedThroughTheSameRoute(t *testing.T) {
 		t.Fatal("a namespace outside the hub's prefix was touched")
 	}
 }
+
+// errNotRunning stands in for systemctl reporting an inactive unit.
+var errNotRunning = errors.New("inactive")

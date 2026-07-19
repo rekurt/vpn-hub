@@ -1,7 +1,9 @@
 package linux
 
 import (
+	"context"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,5 +180,96 @@ func TestRulesetReplacesOnlyItsOwnTable(t *testing.T) {
 	}
 	if strings.Contains(rendered, "flush ruleset") {
 		t.Fatal("flushing the whole ruleset would destroy unrelated tables")
+	}
+}
+
+// A SOCKS endpoint is a second way into a tunnel, so it needs its own hole in a
+// chain whose policy is drop. The rule is easy to lose -- it once was -- and losing
+// it is silent: the proxy still listens, the connection just never arrives.
+func TestRenderSocksEndpoint(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.Socks = []domain.SocksEndpoint{
+		{TunnelID: "corp", Address: "10.90.0.1", Interface: "vh-corp", Port: 11080},
+	}
+	ruleset := goldenTest(t, "socks-endpoint", plan)
+
+	rule := `iifname "awg0" ip saddr 10.80.0.0/24 oifname "vh-corp" tcp dport 11080 accept`
+	if !strings.Contains(ruleset, rule) {
+		t.Fatalf("no forward rule for the endpoint:\n%s", ruleset)
+	}
+	// In the forward chain, not input: the destination is rewritten to the namespace
+	// before the routing decision, so these packets are forwarded, never delivered
+	// locally. An input rule would look right and pass nothing.
+	forward := ruleset[strings.Index(ruleset, "chain forward"):strings.Index(ruleset, "chain input")]
+	if !strings.Contains(forward, rule) {
+		t.Errorf("the rule is outside the forward chain:\n%s", ruleset)
+	}
+}
+
+// The sets in this table are not derived from the plan alone: dnsmasq adds the
+// addresses it resolves for a private zone. Replacing the table throws those away,
+// so replacing it on a timer meant a private address forgotten mid-session matched
+// the default egress rule instead and left through the internet provider.
+func TestAnUnchangedRulesetIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	host := &fakeHost{replies: map[string]string{
+		"nft -j list table inet vpn_hub": fmt.Sprintf(
+			`{"nftables":[{"table":{"comment":"vpn-hub:%s"}}]}`, Fingerprint(plan)),
+	}}
+
+	rebuilt, err := (NFTables{Run: host.run, RuntimeDir: t.TempDir()}).Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if rebuilt {
+		t.Error("Apply reported a rebuild it did not need to do")
+	}
+}
+
+// When the ruleset genuinely changed it must still be replaced, and the caller has
+// to learn that the sets are now empty.
+func TestAChangedRulesetIsReplacedAndReported(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{replies: map[string]string{
+		"nft -j list table inet vpn_hub": `{"nftables":[{"table":{"comment":"vpn-hub:something-else"}}]}`,
+	}}
+
+	rebuilt, err := (NFTables{Run: host.run, RuntimeDir: t.TempDir()}).Apply(context.Background(), directOnlyPlan())
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !rebuilt {
+		t.Error("a differing ruleset was not replaced, or the replacement went unreported")
+	}
+	if !host.ran("nft -f ") {
+		t.Errorf("the ruleset was never loaded; commands: %v", host.commands)
+	}
+}
+
+// The round trip that drift detection rests on: what the renderer embeds is what
+// the parser reads back. Nothing tested it, so a change to either side would have
+// broken drift detection silently -- and a hub that cannot see drift reports
+// convergence either way.
+func TestTheFingerprintSurvivesTheRoundTrip(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	ruleset := RenderRuleset(plan)
+
+	marker := `comment "vpn-hub:` + Fingerprint(plan) + `"`
+	if !strings.Contains(ruleset, marker) {
+		t.Fatalf("the rendered table does not carry its own fingerprint:\n%s", ruleset)
+	}
+
+	// The shape nft actually reports it back in.
+	parsed, err := parseFingerprint(fmt.Sprintf(
+		`{"nftables":[{"metainfo":{"version":"1.0.9"}},{"table":{"family":"inet","name":"vpn_hub","handle":1,"comment":"vpn-hub:%s"}}]}`,
+		Fingerprint(plan)))
+	if err != nil {
+		t.Fatalf("parseFingerprint: %v", err)
+	}
+	if parsed != Fingerprint(plan) {
+		t.Errorf("parsed %q, want %q", parsed, Fingerprint(plan))
 	}
 }

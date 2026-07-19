@@ -96,12 +96,16 @@ func (d Dnsmasq) configDir() string {
 	return "/run/vpn-hub"
 }
 
-func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan) error {
+func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan, repopulate bool) error {
 	hubConfig := filepath.Join(d.configDir(), "dnsmasq-hub.conf")
 	hubChanged, err := d.write(hubConfig, RenderHubResolver(plan))
 	if err != nil {
 		return err
 	}
+	// The packet filter was rebuilt, so the sets this resolver fills are empty and
+	// its cache would answer from memory without refilling them. Starting over is
+	// what makes the next lookup route correctly.
+	hubChanged = hubChanged || repopulate
 
 	if plan.UpstreamNamespace != "" {
 		upstreamConfig := filepath.Join(d.configDir(), "dnsmasq-upstream.conf")
@@ -109,7 +113,7 @@ func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan) error {
 		if err != nil {
 			return err
 		}
-		if err := d.ensureRunning(ctx, upstreamResolverUnit, plan.UpstreamNamespace, upstreamConfig, changed); err != nil {
+		if err := d.ensureRunning(ctx, upstreamResolverUnit, plan.UpstreamNamespace, upstreamConfig, changed || repopulate); err != nil {
 			return err
 		}
 	} else {

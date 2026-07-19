@@ -45,6 +45,11 @@ type EgressSpec struct {
 
 	Interface string `json:"interface"`
 
+	// SocksPort exposes this egress as a SOCKS5 endpoint on the hub, so a laptop can
+	// send one application through a specific provider without moving its whole
+	// connection. Zero means none.
+	SocksPort uint16 `json:"socks_port,omitempty"`
+
 	// Type selects which upstream below is meaningful.
 	Type    TunnelType      `json:"type"`
 	Tunnel  WireGuardTunnel `json:"tunnel,omitempty"`

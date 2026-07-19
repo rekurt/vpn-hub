@@ -44,7 +44,7 @@ func (f *agentFlags) bind(command *cobra.Command) {
 // executes; the decisions live in the application layer.
 func (f *agentFlags) reconciler() ports.Reconciler {
 	return application.HostReconciler{
-		Firewall:      linux.NFTables{},
+		Firewall:      linux.NFTables{RuntimeDir: f.runtimeDir},
 		Ingress:       linux.Ingress{SecretsDir: f.runtimeDir},
 		Egress:        linux.Egress{SecretsDir: f.runtimeDir},
 		DNS:           linux.Dnsmasq{ConfigDir: f.runtimeDir},

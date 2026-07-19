@@ -138,3 +138,44 @@ func TestAPassingProbeRescuesAStaleHandshake(t *testing.T) {
 		t.Fatalf("Status = %q (%s), want healthy", health.Status, health.Reason)
 	}
 }
+
+// The adapter is the last place that could still run the value, so it refuses
+// rather than trusting that validation happened earlier. A revision on disk may
+// predate the rule that would have rejected it.
+func TestAnUnsafeProbeTargetIsRefusedNotRun(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{replies: map[string]string{dumpCommand: dumpWithHandshake(frozen.Add(-time.Minute))}}
+	tunnel := domain.Tunnel{ID: "corp", Health: domain.HealthCheck{TCPAddress: "[; id ;]:443"}}
+
+	health, err := checker(host).Check(context.Background(), tunnel)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	for _, command := range host.commands {
+		if strings.Contains(command, "id") && strings.Contains(command, "netns exec") {
+			t.Fatalf("the payload reached a command: %q", command)
+		}
+	}
+	if health.Status != domain.HealthUnhealthy {
+		t.Errorf("Status = %s, want unhealthy: a probe that cannot be run has not passed", health.Status)
+	}
+}
+
+// No shell is involved any more, so no shell can be talked into anything.
+func TestTheTCPProbeUsesNoShell(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{replies: map[string]string{dumpCommand: dumpWithHandshake(frozen.Add(-time.Minute))}}
+	tunnel := domain.Tunnel{ID: "corp", Health: domain.HealthCheck{TCPAddress: "10.20.0.53:53"}}
+
+	if _, err := checker(host).Check(context.Background(), tunnel); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	for _, command := range host.commands {
+		if strings.Contains(command, "bash") || strings.Contains(command, "sh -c") {
+			t.Fatalf("a shell was used to open a socket: %q", command)
+		}
+	}
+	if !host.ran("ip netns exec vpn-hub-corp curl") {
+		t.Fatalf("the probe did not run; commands: %v", host.commands)
+	}
+}

@@ -20,6 +20,7 @@ packages:
   - jq
   - qrencode
   - openvpn
+  - microsocks
 
 write_files:
   - path: /etc/sysctl.d/99-vpn-hub.conf

@@ -27,7 +27,9 @@ type SecretStore interface {
 
 // Firewall installs a rendered policy as a single transaction.
 type Firewall interface {
-	Apply(context.Context, domain.FirewallPlan) error
+	// Apply reports whether it replaced the live ruleset. The answer matters to the
+	// resolver: replacement empties the sets it had been filling from DNS answers.
+	Apply(context.Context, domain.FirewallPlan) (bool, error)
 	// Observe returns the fingerprint carried by the live ruleset, empty when there
 	// is none.
 	Observe(context.Context) (string, error)
@@ -56,7 +58,10 @@ type TunnelConfigStore interface {
 // DNSManager installs the resolver policy: private zones into their tunnels,
 // everything else through the default egress.
 type DNSManager interface {
-	Apply(context.Context, domain.DNSPlan) error
+	// repopulate asks for the resolver to be replaced even when its configuration is
+	// unchanged, so that the addresses it had learned are answered -- and added to
+	// the packet filter's sets -- again.
+	Apply(ctx context.Context, plan domain.DNSPlan, repopulate bool) error
 }
 
 // UpstreamWriter persists a tunnel's chosen upstream where the reconciler will find

@@ -80,10 +80,24 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 		})
 	}
 
-	tunnelEgresses := make([]string, 0, len(grouped))
+	// Every egress tunnel in the revision gets a group, not only those some device
+	// chose as its default. An unchosen provider still has to be reachable: that is
+	// what a SOCKS endpoint is for, and what makes `device set-egress` switch to a
+	// tunnel that is already up rather than one that must first be built. A group
+	// with no addresses in its set steers nothing by itself, so the cost is a
+	// namespace that is idle until something asks for it.
+	tunnelEgresses := make([]string, 0, len(grouped)+len(state.Tunnels))
+	seen := make(map[string]bool, len(grouped))
 	for egress := range grouped {
 		if egress != domain.EgressDirect {
 			tunnelEgresses = append(tunnelEgresses, egress)
+			seen[egress] = true
+		}
+	}
+	for _, tunnel := range state.Tunnels {
+		if tunnel.Role == domain.RoleEgress && !seen[tunnel.ID] {
+			tunnelEgresses = append(tunnelEgresses, tunnel.ID)
+			seen[tunnel.ID] = true
 		}
 	}
 	sort.Strings(tunnelEgresses)
@@ -128,7 +142,13 @@ func internalNetworks(tunnels []domain.Tunnel, firstMark uint32) []domain.Intern
 		routes = append(routes, uncoveredResolvers(tunnel.DNSServers, tunnel.Routes)...)
 		sort.Strings(routes)
 
-		zones := append([]string(nil), tunnel.DNSZones...)
+		// Normalised here rather than only during validation: the plan is what gets
+		// rendered into the resolver's configuration, so it must carry the form that
+		// was checked, not the form that was typed.
+		zones := make([]string, 0, len(tunnel.DNSZones))
+		for _, zone := range tunnel.DNSZones {
+			zones = append(zones, normalizeZone(zone))
+		}
 		sort.Strings(zones)
 
 		networks = append(networks, domain.InternalNetwork{

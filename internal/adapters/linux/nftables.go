@@ -1,13 +1,12 @@
 package linux
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"vpn-hub/internal/domain"
@@ -120,6 +119,13 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 			line("\t\tiifname %q oifname %q accept", group.Interface, plan.UplinkInterface)
 		}
 	}
+	// A client aiming at a SOCKS endpoint is forwarded into that tunnel's namespace,
+	// so the hole is bounded by the link it goes out of and by the client subnet:
+	// nothing else on the host may reach a proxy that bypasses its own egress choice.
+	for _, endpoint := range plan.Socks {
+		line("\t\tiifname %q ip saddr %s oifname %q tcp dport %d accept",
+			plan.IngressInterface, plan.ClientCIDR, endpoint.Interface, endpoint.Port)
+	}
 	line("\t}")
 	line("")
 
@@ -225,6 +231,18 @@ type NFTables struct {
 	Binary string
 	// Run defaults to executing commands for real.
 	Run runner
+	// RuntimeDir is where the ruleset is written before being loaded. Writing it
+	// out rather than piping it in costs nothing -- the ruleset holds no secrets,
+	// `nft list ruleset` shows the same thing -- and it means the file nft rejected
+	// is still there to look at, with the line number nft named.
+	RuntimeDir string
+}
+
+func (n NFTables) runtimeDir() string {
+	if n.RuntimeDir != "" {
+		return n.RuntimeDir
+	}
+	return "/run/vpn-hub"
 }
 
 func (n NFTables) binary() string {
@@ -276,17 +294,39 @@ func parseFingerprint(output string) (string, error) {
 // without an adapter.
 func (n NFTables) Fingerprint(plan domain.FirewallPlan) string { return Fingerprint(plan) }
 
-func (n NFTables) Apply(ctx context.Context, plan domain.FirewallPlan) error {
-	command := exec.CommandContext(ctx, n.binary(), "-f", "-")
-	command.Stdin = strings.NewReader(RenderRuleset(plan))
-
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		if message := strings.TrimSpace(stderr.String()); message != "" {
-			return fmt.Errorf("apply nftables ruleset: %w: %s", err, message)
-		}
-		return fmt.Errorf("apply nftables ruleset: %w", err)
+// Apply loads the ruleset, and reports whether it actually replaced the live one.
+//
+// It replaces the table only when the fingerprints differ, which is a deliberate
+// narrowing of what this corrects. Replacement is atomic because it deletes the
+// table and builds it again -- and that also empties the `internal_*` sets, which
+// are not entirely derived from the plan: dnsmasq adds every address it resolves
+// for a private zone as the answer goes past. Rebuilding on a timer therefore threw
+// those addresses away every minute, and a packet to a private host whose address
+// had just been forgotten did not fail -- it matched the default egress rule
+// instead and left through the internet provider. Silent misrouting of exactly the
+// traffic that must not take that path.
+//
+// The cost is that a rule edited in place, leaving the table comment intact, is no
+// longer overwritten on the next tick. That is a deliberate act by someone who is
+// already root on the hub, whereas the addresses were being lost continuously and
+// by design.
+func (n NFTables) Apply(ctx context.Context, plan domain.FirewallPlan) (bool, error) {
+	loaded, err := n.Observe(ctx)
+	if err == nil && loaded == Fingerprint(plan) {
+		return false, nil
 	}
-	return nil
+
+	path := filepath.Join(n.runtimeDir(), "ruleset.nft")
+	if _, err := writeIfChanged(path, RenderRuleset(plan), 0o600); err != nil {
+		return false, fmt.Errorf("write nftables ruleset: %w", err)
+	}
+
+	run := n.Run
+	if run == nil {
+		run = execRunner
+	}
+	if _, err := run(ctx, n.binary(), "-f", path); err != nil {
+		return false, fmt.Errorf("apply nftables ruleset: %w", err)
+	}
+	return true, nil
 }

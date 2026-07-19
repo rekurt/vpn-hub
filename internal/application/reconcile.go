@@ -79,6 +79,10 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 		return nil, err
 	}
 
+	// Completed before the fingerprint is taken: a plan that is fingerprinted in one
+	// shape and rendered in another reports drift against itself forever.
+	plan.Socks = socksEndpoints(egresses)
+
 	observed, err := r.Observe(ctx)
 	if err != nil {
 		return nil, err
@@ -88,7 +92,8 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 	// The packet filter goes in first. Doing it the other way round would leave a
 	// window where the ingress interface is up and forwarding under whatever rules
 	// happened to be loaded.
-	if err := r.Firewall.Apply(ctx, plan); err != nil {
+	rebuilt, err := r.Firewall.Apply(ctx, plan)
+	if err != nil {
 		return nil, fmt.Errorf("apply firewall: %w", err)
 	}
 	if err := r.Ingress.Apply(ctx, spec); err != nil {
@@ -107,11 +112,30 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 		if err != nil {
 			return nil, err
 		}
-		if err := r.DNS.Apply(ctx, dns); err != nil {
+		if err := r.DNS.Apply(ctx, dns, rebuilt); err != nil {
 			return nil, fmt.Errorf("apply dns: %w", err)
 		}
 	}
 	return operations, nil
+}
+
+// socksEndpoints exposes each tunnel namespace as a proxy on the hub's end of its
+// link. A laptop can then send one application through a chosen provider without
+// moving its whole connection.
+func socksEndpoints(specs []domain.EgressSpec) []domain.SocksEndpoint {
+	endpoints := make([]domain.SocksEndpoint, 0, len(specs))
+	for _, spec := range specs {
+		if spec.SocksPort == 0 {
+			continue
+		}
+		endpoints = append(endpoints, domain.SocksEndpoint{
+			TunnelID:  spec.TunnelID,
+			Address:   hostOf(spec.HostAddress),
+			Interface: spec.HostVeth,
+			Port:      spec.SocksPort,
+		})
+	}
+	return endpoints
 }
 
 // compile turns a revision into the two artefacts the host needs. Both are derived

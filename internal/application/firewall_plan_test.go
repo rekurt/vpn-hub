@@ -38,8 +38,9 @@ func TestBuildFirewallPlan(t *testing.T) {
 	if plan.ManagementPort == 0 {
 		t.Error("ManagementPort must be set or the ruleset locks the operator out")
 	}
-	if len(plan.Egresses) != 2 {
-		t.Fatalf("expected two egress groups, got %d", len(plan.Egresses))
+	// direct, corp-wg (chosen by a device) and vpn-out (chosen by nobody).
+	if len(plan.Egresses) != 3 {
+		t.Fatalf("expected three egress groups, got %d", len(plan.Egresses))
 	}
 
 	// Only private-network tunnels become internal networks; an egress tunnel's
@@ -180,4 +181,60 @@ func markOf(t *testing.T, plan domain.FirewallPlan, id string) uint32 {
 	}
 	t.Fatalf("egress %q not found in plan", id)
 	return 0
+}
+
+// An egress tunnel nobody has chosen as their default still has to be built. It is
+// what a SOCKS endpoint offers, and what `device set-egress` switches onto; if it
+// only appeared once someone selected it, the tunnel would be configured, enabled,
+// valid -- and silently absent from the host.
+func TestUnchosenEgressStillGetsAGroup(t *testing.T) {
+	t.Parallel()
+	state := planState()
+	state.Devices = []domain.DeployedDevice{
+		{ID: "macbook", Address: "10.80.0.2/32", Egress: domain.EgressDirect},
+	}
+
+	plan, err := BuildFirewallPlan(state, "eth0")
+	if err != nil {
+		t.Fatalf("BuildFirewallPlan: %v", err)
+	}
+
+	var found *domain.EgressGroup
+	for index, group := range plan.Egresses {
+		if group.ID == "vpn-out" {
+			found = &plan.Egresses[index]
+		}
+	}
+	if found == nil {
+		t.Fatalf("the unchosen egress is missing; groups: %+v", plan.Egresses)
+	}
+	// No device sends its default traffic there, so its set stays empty: the tunnel
+	// exists and steers nothing until something asks for it by name.
+	if len(found.Addresses) != 0 {
+		t.Errorf("Addresses = %v, want none until a device chooses it", found.Addresses)
+	}
+	if found.Mark == 0 {
+		t.Error("the group needs a mark, or its namespace cannot be routed to")
+	}
+}
+
+// A disabled tunnel is excluded from the revision entirely, so it must not reappear
+// here -- otherwise "disabled" would mean "built but unused".
+func TestDisabledEgressGetsNoGroup(t *testing.T) {
+	t.Parallel()
+	state := planState()
+	state.Devices = []domain.DeployedDevice{
+		{ID: "macbook", Address: "10.80.0.2/32", Egress: domain.EgressDirect},
+	}
+	state.Tunnels = []domain.Tunnel{state.Tunnels[0]}
+
+	plan, err := BuildFirewallPlan(state, "eth0")
+	if err != nil {
+		t.Fatalf("BuildFirewallPlan: %v", err)
+	}
+	for _, group := range plan.Egresses {
+		if group.ID == "vpn-out" {
+			t.Fatalf("a tunnel outside the revision was built anyway: %+v", group)
+		}
+	}
 }

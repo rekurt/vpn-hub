@@ -32,6 +32,9 @@ type FirewallPlan struct {
 	// connection reach corporate resources and the internet at the same time.
 	Internals []InternalNetwork `json:"internals,omitempty"`
 
+	// Socks lists the SOCKS5 endpoints clients may reach.
+	Socks []SocksEndpoint `json:"socks,omitempty"`
+
 	// Egresses is ordered deterministically so an unchanged configuration renders
 	// byte-identically.
 	Egresses []EgressGroup `json:"egresses"`
@@ -54,6 +57,20 @@ type InternalNetwork struct {
 	Zones []string `json:"zones,omitempty"`
 	// Resolvers answer for those zones and are themselves reached through the tunnel.
 	Resolvers []string `json:"resolvers,omitempty"`
+}
+
+// SocksEndpoint is one egress offered as a SOCKS5 proxy.
+type SocksEndpoint struct {
+	TunnelID string `json:"tunnel_id"`
+	// Address is the hub's end of that tunnel's link, which is where a client aims.
+	// The proxy itself listens on the other end; the hub's end forwards to it.
+	Address string `json:"address"`
+	// Interface is that link's host side. Traffic to the proxy is forwarded out of
+	// it, which is what the packet filter matches on -- by the time the forward
+	// chain sees the packet its destination has already been rewritten to the
+	// namespace, so the address above no longer identifies it.
+	Interface string `json:"interface"`
+	Port      uint16 `json:"port"`
 }
 
 // EgressGroup binds a set of client addresses to one outbound path.

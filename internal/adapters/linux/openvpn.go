@@ -142,7 +142,7 @@ func OpenVPNState(socket string, timeout time.Duration) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("the management socket is not answering: %w", err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	if err := connection.SetDeadline(time.Now().Add(timeout)); err != nil {
 		return "", err

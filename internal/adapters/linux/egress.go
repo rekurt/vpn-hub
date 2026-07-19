@@ -108,6 +108,8 @@ func (e Egress) Apply(ctx context.Context, specs []domain.EgressSpec) error {
 		id := strings.TrimPrefix(namespace, "vpn-hub-")
 		_, _ = e.run(ctx, "systemctl", "stop", "vpn-hub-proxy-"+id+".service")
 		_, _ = e.run(ctx, "systemctl", "stop", "vpn-hub-openvpn-"+id+".service")
+		_, _ = e.run(ctx, "systemctl", "stop", "vpn-hub-socks-"+id+".service")
+		_, _ = e.run(ctx, "nft", "delete", "table", "inet", "vpn_hub_socks_"+safeTableName(id))
 		// Deleting the namespace takes its interfaces, routes and processes with it.
 		if err := e.namespaceLifecycle(ctx, "del", namespace); err != nil {
 			return fmt.Errorf("remove namespace %s: %w", namespace, err)
@@ -126,7 +128,13 @@ func (e Egress) applyOne(ctx context.Context, spec domain.EgressSpec) error {
 	if err := e.ensureTunnel(ctx, spec); err != nil {
 		return err
 	}
-	return e.ensurePolicyRouting(ctx, spec)
+	if err := e.ensurePolicyRouting(ctx, spec); err != nil {
+		return err
+	}
+	if err := e.ensureSocks(ctx, spec); err != nil {
+		return err
+	}
+	return e.forwardSocks(ctx, spec)
 }
 
 func (e Egress) ensureNamespace(ctx context.Context, spec domain.EgressSpec) error {
@@ -448,6 +456,25 @@ func (e Egress) ensurePolicyRouting(ctx context.Context, spec domain.EgressSpec)
 	_, err = e.run(ctx, "ip", "rule", "add", "fwmark", mark,
 		"lookup", table, "priority", strconv.Itoa(e.rulePriority()))
 	return err
+}
+
+// applyRuleset feeds a ruleset to nft in the main namespace.
+func (e Egress) applyRuleset(ctx context.Context, ruleset string) error {
+	if e.Run != nil {
+		_, err := e.Run(ctx, "nft-main", ruleset)
+		return err
+	}
+	command := exec.CommandContext(ctx, "nft", "-f", "-")
+	command.Stdin = strings.NewReader(ruleset)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		if message := strings.TrimSpace(stderr.String()); message != "" {
+			return fmt.Errorf("apply ruleset: %w: %s", err, message)
+		}
+		return fmt.Errorf("apply ruleset: %w", err)
+	}
+	return nil
 }
 
 // applyNamespaceRuleset feeds a ruleset to nft inside a namespace. It bypasses the

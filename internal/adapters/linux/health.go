@@ -182,14 +182,23 @@ func (h HealthChecker) checkOpenVPN(ctx context.Context, tunnel domain.Tunnel, n
 func (h HealthChecker) probe(ctx context.Context, namespace string, checks domain.HealthCheck) (reasons []string, ran int) {
 	seconds := fmt.Sprintf("%d", int(h.timeout().Seconds()))
 
+	// Refused rather than run: a probe target that failed validation is the one case
+	// where doing nothing is safer than trying, because these values become the
+	// arguments of a command this process runs as root.
+	if err := checks.Validate(); err != nil {
+		return []string{"probe configuration: " + err.Error()}, 1
+	}
+
 	if checks.TCPAddress != "" {
 		ran++
-		host, port, err := net.SplitHostPort(checks.TCPAddress)
-		if err != nil {
-			reasons = append(reasons, "tcp probe: "+err.Error())
-		} else if _, err := h.run(ctx, "ip", "netns", "exec", namespace,
-			"timeout", seconds, "bash", "-c",
-			fmt.Sprintf("exec 3<>/dev/tcp/%s/%s", host, port)); err != nil {
+		host, port, _ := net.SplitHostPort(checks.TCPAddress)
+		// curl opens the connection and reports whether it succeeded, which is the
+		// whole probe. Bash's /dev/tcp would do the same, but only by way of a shell
+		// interpreting a string built from configuration -- and no probe is worth a
+		// shell.
+		if _, err := h.run(ctx, "ip", "netns", "exec", namespace,
+			"curl", "-sS", "--max-time", seconds, "-o", "/dev/null",
+			fmt.Sprintf("telnet://%s:%s", host, port)); err != nil {
 			reasons = append(reasons, "tcp probe: "+checks.TCPAddress+" is unreachable through the tunnel")
 		}
 	}
