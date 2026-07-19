@@ -60,7 +60,7 @@ jobs:
       - name: Install network tooling
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq wireguard-tools nftables jq conntrack
+          sudo apt-get install -y -qq wireguard-tools nftables jq conntrack microsocks
 
       # The proxy path needs sing-box, which is not in the archive. Same release and
       # checksum the hub installs, so CI exercises what the host runs.
@@ -85,8 +85,30 @@ jobs:
           sudo iptables -P FORWARD ACCEPT || true
           sudo ip6tables -P FORWARD ACCEPT || true
 
+      # -v so a scenario that skipped itself is visible. A skip reads as a pass in
+      # the summary, and a test skipped for a missing binary is a test that has never
+      # run at all.
       - name: Integration tests
-        run: sudo -E env "PATH=$PATH" go test -tags=integration -count=1 -timeout 15m ./internal/adapters/linux/
+        run: |
+          # pipefail, or tee's exit status hides a failing test behind a successful
+          # copy of its output.
+          set -o pipefail
+          sudo -E env "PATH=$PATH" go test -tags=integration -count=1 -timeout 15m -v \
+            ./internal/adapters/linux/ 2>&1 | tee /tmp/integration.log
+
+      # A scenario that skips because a package is missing has never run, and a skip
+      # reads as a pass in the summary -- so the runner not having what the tests need
+      # is a build failure, not a quiet note. Skips for an unreachable network are
+      # left alone: those say something about the runner's connectivity, not about
+      # whether the hub works, and failing on them would only make CI flap.
+      - name: Fail if a scenario skipped for a missing package
+        run: |
+          if grep -q "is not installed" /tmp/integration.log; then
+            echo "the runner is missing something the tests need:"
+            grep "is not installed" /tmp/integration.log
+            exit 1
+          fi
+          grep -- "--- SKIP" /tmp/integration.log || echo "no scenario skipped itself"
 
   terraform:
     runs-on: ubuntu-latest
