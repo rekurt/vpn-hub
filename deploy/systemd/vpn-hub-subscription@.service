@@ -1,0 +1,16 @@
+[Unit]
+Description=Refresh vpn-hub provider subscriptions
+After=network-online.target vpn-hub-agent.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+# One tunnel per invocation; %i is the tunnel ID. A candidate is proven in an
+# isolated namespace before anything depends on it, so a failure here leaves the
+# active upstream untouched.
+ExecStart=/usr/local/bin/hubctl subscription refresh %i --config /etc/vpn-hub/hub.yaml
+# The refresh builds a namespace of its own, so it needs the same latitude the agent
+# has and cannot run under mount isolation.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN

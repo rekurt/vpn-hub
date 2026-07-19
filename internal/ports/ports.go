@@ -59,6 +59,12 @@ type DNSManager interface {
 	Apply(context.Context, domain.DNSPlan) error
 }
 
+// UpstreamWriter persists a tunnel's chosen upstream where the reconciler will find
+// it, keeping the previous one as the fallback.
+type UpstreamWriter interface {
+	Write(ctx context.Context, tunnel domain.Tunnel, chosen domain.ProxyTunnel) error
+}
+
 // HostNetwork answers questions about the machine the hub runs on, which cannot come
 // from configuration.
 type HostNetwork interface {

@@ -1,10 +1,9 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -248,36 +247,57 @@ func newTestCommand(configPath *string) *cobra.Command {
 }
 
 func newSubscriptionCommand(configPath *string) *cobra.Command {
-	var output string
-	command := newParentCommand("subscription", "Manage Xray subscriptions")
+	var configDir string
+	command := newParentCommand("subscription", "Manage provider subscriptions")
 	refresh := &cobra.Command{
 		Use:   "refresh <id>",
-		Short: "Fetch and persist one Xray subscription candidate",
-		Args:  cobra.ExactArgs(1),
+		Short: "Fetch a subscription, prove a candidate, and promote it",
+		Long: "The candidate is brought up in an isolated namespace and has to carry " +
+			"traffic before anything depends on it. A subscription that offers nothing " +
+			"working leaves the active upstream exactly as it was.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if output == "" {
-				return fmt.Errorf("--output is required")
-			}
-			service := newService(*configPath, "")
-			cfg, err := service.LoadAndValidate(cmd.Context())
+			cfg, err := newService(*configPath, "").LoadAndValidate(cmd.Context())
 			if err != nil {
 				return err
 			}
-			payload, err := service.RefreshSubscription(cmd.Context(), cfg, args[0])
+			var subject domain.Tunnel
+			for _, tunnel := range cfg.Tunnels {
+				if tunnel.ID == args[0] {
+					subject = tunnel
+				}
+			}
+			if subject.ID == "" {
+				return fmt.Errorf("tunnel %q was not found", args[0])
+			}
+
+			uplink, err := linux.NetConf{}.UplinkInterface(cmd.Context())
 			if err != nil {
 				return err
 			}
-			if err := os.MkdirAll(filepath.Dir(output), 0o700); err != nil {
+			canary := linux.Canary{Egress: linux.Egress{SecretsDir: "/run/vpn-hub"}}
+
+			chosen, rejected, err := application.SubscriptionRefresher{
+				Fetch: health.HTTPSSubscriptionFetcher{},
+				Parse: linux.ParseSubscription,
+				Prove: func(ctx context.Context, list []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
+					return canary.SelectCandidate(ctx, list, uplink)
+				},
+				Store: linux.UpstreamFile{Dir: configDir},
+			}.Refresh(cmd.Context(), subject)
+
+			for _, reason := range rejected {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "rejected %s\n", reason)
+			}
+			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(output, payload, 0o600); err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "subscription candidate written to %s (%d bytes)\n", output, len(payload))
+			_, err = fmt.Fprintf(cmd.OutOrStdout(),
+				"promoted %s:%d for %s; run `hubctl deploy` to apply\n", chosen.Server, chosen.Port, subject.ID)
 			return err
 		},
 	}
-	refresh.Flags().StringVar(&output, "output", "", "candidate output path")
+	refresh.Flags().StringVar(&configDir, "config-dir", "/etc/vpn-hub", "directory holding upstream configurations")
 	command.AddCommand(refresh)
 	return command
 }

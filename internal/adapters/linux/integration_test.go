@@ -342,3 +342,53 @@ func TestPrivateNetworkIsReachedAlongsideTheInternet(t *testing.T) {
 		t.Fatal("reaching the private network cost the client its internet")
 	}
 }
+
+// A candidate must be proven before anything depends on it, and a failed one must
+// leave nothing behind. Both are checked against a real kernel: the canary builds a
+// namespace, and a namespace left over would break the next attempt.
+func TestCanaryRejectsAnUnreachableCandidateAndCleansUp(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("the canary builds a namespace and needs root")
+	}
+	if _, err := exec.LookPath("sing-box"); err != nil {
+		t.Skip("sing-box is not installed")
+	}
+	uplink := sh(t, "ip -j route show default | jq -r '.[0].dev'")
+	if uplink == "" || uplink == "null" {
+		t.Skip("no default route on this machine")
+	}
+
+	canary := linux.Canary{
+		Egress:  linux.Egress{SecretsDir: t.TempDir(), DirectNamespaces: true},
+		Timeout: 8 * time.Second,
+	}
+	t.Cleanup(func() {
+		try("ip netns del vpn-hub-canary")
+		try("ip link del vh-canary")
+		try("nft delete table inet vpn_hub_canary")
+		try("systemctl stop vpn-hub-proxy-canary.service")
+	})
+
+	// RFC 5737 documentation addresses: reserved for exactly this, and routed
+	// nowhere.
+	dead := []domain.ProxyTunnel{
+		{Protocol: "vless", Server: "192.0.2.10", Port: 443, UUID: "00000000-0000-4000-8000-000000000001"},
+		{Protocol: "vless", Server: "192.0.2.11", Port: 443, UUID: "00000000-0000-4000-8000-000000000002"},
+	}
+
+	chosen, reasons, err := canary.SelectCandidate(context.Background(), dead, uplink)
+	if err == nil {
+		t.Fatalf("an unreachable candidate must not be promoted, got %+v", chosen)
+	}
+	if len(reasons) != len(dead) {
+		t.Errorf("every candidate should be reported on, got %v", reasons)
+	}
+
+	// A namespace left behind would make the next refresh trip over it.
+	if out := sh(t, "ip netns list | grep -c canary || true"); strings.TrimSpace(out) != "0" {
+		t.Errorf("the canary namespace was left behind: %s", out)
+	}
+	if err := exec.Command("nft", "list", "table", "inet", "vpn_hub_canary").Run(); err == nil {
+		t.Error("the temporary ruleset was left behind")
+	}
+}

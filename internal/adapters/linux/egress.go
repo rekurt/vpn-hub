@@ -288,12 +288,10 @@ func (e Egress) ensureProxyEscapeRoute(ctx context.Context, spec domain.EgressSp
 // assumed.
 func (e Egress) ensureProxyRoutes(ctx context.Context, spec domain.EgressSpec) error {
 	var lastErr error
-	for attempt := 0; attempt < 10; attempt++ {
-		if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "link", "show", spec.Interface); err == nil {
-			lastErr = nil
+	for range 10 {
+		_, lastErr = e.run(ctx, "ip", "-n", spec.Namespace, "link", "show", spec.Interface)
+		if lastErr == nil {
 			break
-		} else {
-			lastErr = err
 		}
 		select {
 		case <-ctx.Done():

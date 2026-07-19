@@ -62,6 +62,17 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq wireguard-tools nftables jq conntrack
 
+      # The proxy path needs sing-box, which is not in the archive. Same release and
+      # checksum the hub installs, so CI exercises what the host runs.
+      - name: Install sing-box
+        run: |
+          version=1.11.15
+          archive="sing-box-${version}-linux-amd64.tar.gz"
+          curl -fsSLO "https://github.com/SagerNet/sing-box/releases/download/v${version}/${archive}"
+          echo "950af37eb2d7e55dddae34a18411cd617303fd99d2dc75bc76b6dd9fcd97d9c5  ${archive}" | sha256sum -c -
+          tar xzf "${archive}"
+          sudo install -m 0755 "sing-box-${version}-linux-amd64/sing-box" /usr/local/bin/sing-box
+
       - name: Enable forwarding
         run: sudo sysctl -w net.ipv4.ip_forward=1
 

@@ -1,0 +1,153 @@
+package linux
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"vpn-hub/internal/domain"
+)
+
+// canaryNamespace is where a candidate is tried. One at a time, so the name is fixed.
+const canaryNamespace = "vpn-hub-canary"
+
+// Canary tries a candidate upstream in a namespace of its own before anything is
+// allowed to depend on it.
+//
+// A subscription changes at the provider without warning, so applying whatever
+// arrives and finding out afterwards is the worst available order: the tunnel it
+// replaces is the one carrying traffic. A candidate is proven first, and the active
+// configuration is only replaced by one that worked.
+type Canary struct {
+	Egress Egress
+	Run    runner
+	// Probe is the URL fetched through the candidate. Reaching it is the whole
+	// evidence that the candidate works.
+	Probe   string
+	Timeout time.Duration
+}
+
+func (c Canary) run(ctx context.Context, name string, args ...string) (string, error) {
+	if c.Run != nil {
+		return c.Run(ctx, name, args...)
+	}
+	return execRunner(ctx, name, args...)
+}
+
+func (c Canary) probe() string {
+	if c.Probe != "" {
+		return c.Probe
+	}
+	return "https://1.1.1.1/cdn-cgi/trace"
+}
+
+func (c Canary) timeout() time.Duration {
+	if c.Timeout != 0 {
+		return c.Timeout
+	}
+	return 20 * time.Second
+}
+
+// Try brings a candidate up in an isolated namespace, fetches through it and tears
+// the namespace down again. It reports nil only when traffic actually passed.
+func (c Canary) Try(ctx context.Context, candidate domain.ProxyTunnel, uplink string) error {
+	spec := domain.EgressSpec{
+		TunnelID:  "canary",
+		Namespace: canaryNamespace,
+		HostVeth:  "vh-canary",
+		PeerVeth:  peerVethName,
+		// A link range of its own, outside the one the reconciler hands out, so a
+		// candidate under test can never collide with a tunnel in service.
+		HostAddress: "10.91.0.1/30",
+		PeerAddress: "10.91.0.2/30",
+		ClientCIDR:  "10.91.0.0/30",
+		Interface:   SingBoxTunInterface,
+		Type:        domain.TunnelXray,
+		Proxy:       candidate,
+	}
+
+	defer func() {
+		// Torn down whatever happened: a candidate that failed must not leave a
+		// namespace behind for the next attempt to trip over.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		_, _ = c.run(cleanup, "systemctl", "stop", "vpn-hub-proxy-canary.service")
+		_ = c.Egress.namespaceLifecycle(cleanup, "del", canaryNamespace)
+		_, _ = c.run(cleanup, "ip", "link", "del", spec.HostVeth)
+	}()
+
+	if err := c.Egress.applyOne(ctx, spec); err != nil {
+		return fmt.Errorf("bring the candidate up: %w", err)
+	}
+	if err := c.allowCanaryOut(ctx, spec, uplink); err != nil {
+		return err
+	}
+
+	seconds := strconv.Itoa(int(c.timeout().Seconds()))
+	if _, err := c.run(ctx, "ip", "netns", "exec", canaryNamespace,
+		"curl", "-sS", "--max-time", seconds, "-o", "/dev/null", c.probe()); err != nil {
+		return fmt.Errorf("the candidate did not carry traffic: %w", err)
+	}
+	return nil
+}
+
+// allowCanaryOut lets the candidate's own connections reach its provider. The hub's
+// forward policy is drop, and the canary link is not in any revision, so it needs an
+// explicit and equally temporary hole.
+func (c Canary) allowCanaryOut(ctx context.Context, spec domain.EgressSpec, uplink string) error {
+	ruleset := fmt.Sprintf(`table inet vpn_hub_canary
+delete table inet vpn_hub_canary
+
+table inet vpn_hub_canary {
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+		iifname %q oifname %q accept
+	}
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		ip saddr %s oifname %q masquerade
+	}
+}
+`, spec.HostVeth, uplink, spec.ClientCIDR, uplink)
+
+	path := filepath.Join(c.Egress.secretsDir(), "canary.nft")
+	if _, err := writeIfChanged(path, ruleset, 0o600); err != nil {
+		return err
+	}
+	_, err := c.run(ctx, "nft", "-f", path)
+	return err
+}
+
+// Discard removes the temporary ruleset once no candidate is being tried.
+func (c Canary) Discard(ctx context.Context) {
+	_, _ = c.run(ctx, "nft", "delete", "table", "inet", "vpn_hub_canary")
+	_ = os.Remove(filepath.Join(c.Egress.secretsDir(), "canary.nft"))
+}
+
+// peerVethName mirrors the application layer's choice so a canary namespace looks
+// like any other from the inside.
+const peerVethName = "uplink0"
+
+// SelectCandidate tries candidates in order and returns the first that carries
+// traffic, with the reasons the others were rejected.
+func (c Canary) SelectCandidate(ctx context.Context, candidates []domain.ProxyTunnel, uplink string) (domain.ProxyTunnel, []string, error) {
+	var reasons []string
+	for _, candidate := range candidates {
+		err := c.Try(ctx, candidate, uplink)
+		if err == nil {
+			c.Discard(ctx)
+			return candidate, reasons, nil
+		}
+		reasons = append(reasons, fmt.Sprintf("%s:%d: %v", candidate.Server, candidate.Port, err))
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	c.Discard(ctx)
+	return domain.ProxyTunnel{}, reasons, fmt.Errorf("no candidate carried traffic:\n  %s",
+		strings.Join(reasons, "\n  "))
+}
