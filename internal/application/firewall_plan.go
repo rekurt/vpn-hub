@@ -43,13 +43,11 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 
 	grouped := make(map[string][]string)
 	for _, device := range state.Devices {
-		for _, profile := range device.Profiles {
-			address, err := hostAddress(profile.Address)
-			if err != nil {
-				return domain.FirewallPlan{}, fmt.Errorf("device %q profile %q: %w", device.ID, profile.ID, err)
-			}
-			grouped[profile.Egress] = append(grouped[profile.Egress], address)
+		address, err := hostAddress(device.Address)
+		if err != nil {
+			return domain.FirewallPlan{}, fmt.Errorf("device %q: %w", device.ID, err)
 		}
+		grouped[device.Egress] = append(grouped[device.Egress], address)
 	}
 
 	plan := domain.FirewallPlan{

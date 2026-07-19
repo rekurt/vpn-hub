@@ -25,9 +25,8 @@ func TestBuildDesiredStateRedactsClientPrivateKeys(t *testing.T) {
 	if state.Revision == "" || len(state.Devices) != 1 {
 		t.Fatalf("unexpected state: %#v", state)
 	}
-	profile := state.Devices[0].Profiles[0]
-	if profile.ClientPublicKey != publicKey {
-		t.Fatalf("public key = %q, want %q", profile.ClientPublicKey, publicKey)
+	if state.Devices[0].PublicKey != publicKey {
+		t.Fatalf("public key = %q, want %q", state.Devices[0].PublicKey, publicKey)
 	}
 	serialized := mustJSON(t, state)
 	if strings.Contains(serialized, privateKey) {
@@ -73,28 +72,6 @@ func TestValidateRejectsConflictingDNSZones(t *testing.T) {
 	}
 }
 
-func TestRenderProfile(t *testing.T) {
-	t.Parallel()
-	privateKey, _, err := domain.GenerateX25519KeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := Service{ProfileRenderer: profileRendererStub{}}
-	profile, err := service.RenderProfile(validConfig(privateKey), "macbook", "xray")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if profile != "rendered" {
-		t.Fatalf("profile = %q", profile)
-	}
-}
-
-type profileRendererStub struct{}
-
-func (profileRendererStub) Render(_ domain.Hub, _ domain.DeviceProfile) (string, error) {
-	return "rendered", nil
-}
-
 // testServerPublicKey is a real X25519 public key: validation now rejects
 // placeholder strings, which is the point of it existing.
 const testServerPublicKey = "TE5crMJPBmCr2bF/uSbHqAlTAHKQwLKMs0RQxfQ0LU4="
@@ -105,16 +82,23 @@ func validConfig(privateKey string) domain.Config {
 			Endpoint: "vpn.example.test:51820", ServerPublicKey: testServerPublicKey, ClientCIDR: "10.80.0.0/24", DNSAddress: "10.80.0.1",
 		},
 		Devices: []domain.Device{{
-			ID: "macbook",
-			Profiles: []domain.DeviceProfile{{
-				ID: "macbook-xray", Egress: "xray", Address: "10.80.0.2/32", ClientPrivateKey: privateKey,
-			}},
+			ID: "macbook", Address: "10.80.0.2/32",
+			PublicKey: mustPublic(privateKey), Egress: "xray",
 		}},
 		Tunnels: []domain.Tunnel{
 			{ID: "corp", Type: domain.TunnelWireGuard, Role: domain.RolePrivateNetwork, Source: domain.TunnelSource{Kind: domain.SourceConfig, Value: "secrets/corp.conf"}, Routes: []string{"10.20.0.0/16"}, DNSZones: []string{"corp.internal"}},
 			{ID: "xray", Type: domain.TunnelXray, Role: domain.RoleEgress, Source: domain.TunnelSource{Kind: domain.SourceXrayURI, Value: "vless://example"}, AllowedDevices: []string{"macbook"}},
 		},
 	}
+}
+
+// mustPublic derives the public half; the hub never stores the private one.
+func mustPublic(privateKey string) string {
+	public, err := domain.PublicKeyFromPrivate(privateKey)
+	if err != nil {
+		panic(err)
+	}
+	return public
 }
 
 func mustJSON(t *testing.T, value any) string {

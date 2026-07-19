@@ -24,14 +24,11 @@ func egressState(t *testing.T) (domain.DesiredState, map[string]domain.WireGuard
 			ClientCIDR: "10.80.0.0/24",
 			DNSAddress: "10.80.0.1",
 		},
-		Devices: []domain.DeployedDevice{{
-			ID: "laptop",
-			Profiles: []domain.DeployedProfile{
-				{ID: "laptop-direct", Egress: domain.EgressDirect, Address: "10.80.0.2/32", ClientPublicKey: clientPublic},
-				{ID: "laptop-corp", Egress: "corp-wg", Address: "10.80.0.3/32", ClientPublicKey: clientPublic},
-				{ID: "laptop-alt", Egress: "alt-wg", Address: "10.80.0.4/32", ClientPublicKey: clientPublic},
-			},
-		}},
+		Devices: []domain.DeployedDevice{
+			{ID: "laptop", Address: "10.80.0.2/32", PublicKey: clientPublic, Egress: domain.EgressDirect},
+			{ID: "phone", Address: "10.80.0.3/32", PublicKey: clientPublic, Egress: "corp-wg"},
+			{ID: "tablet", Address: "10.80.0.4/32", PublicKey: clientPublic, Egress: "alt-wg"},
+		},
 		Tunnels: []domain.Tunnel{
 			{ID: "corp-wg", Type: domain.TunnelWireGuard, Role: domain.RoleEgress,
 				Source: domain.TunnelSource{Kind: domain.SourceConfig, Value: "corp.conf"}},

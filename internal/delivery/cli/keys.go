@@ -3,10 +3,12 @@ package cli
 import (
 	"fmt"
 	"net/netip"
+	"os"
 
 	"github.com/spf13/cobra"
 
 	"vpn-hub/internal/adapters/linux"
+	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	"vpn-hub/internal/domain"
 )
 
@@ -34,16 +36,17 @@ func newKeygenCommand() *cobra.Command {
 }
 
 func newDeviceAddCommand(configPath *string) *cobra.Command {
-	var deviceID, egress, address string
+	var egress, address, output string
 	command := &cobra.Command{
 		Use:   "add <device>",
-		Short: "Print a device profile block with a fresh key pair",
-		Long: "Generates a key pair and prints the YAML to paste into devices. The private " +
-			"key is shown once and never stored by the hub, which only ever needs the " +
-			"public half.",
+		Short: "Generate a device key pair, print its entry and write its client profile",
+		Long: "The private key exists only here: it goes straight into the client profile " +
+			"and is never stored by the hub, which needs only the public half. Re-issuing " +
+			"a lost profile therefore means generating a new key, which is the right " +
+			"answer anyway.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			deviceID = args[0]
+			deviceID := args[0]
 			if egress == "" {
 				return fmt.Errorf("--egress is required (a tunnel ID, or %q)", domain.EgressDirect)
 			}
@@ -51,27 +54,44 @@ func newDeviceAddCommand(configPath *string) *cobra.Command {
 				return err
 			}
 
+			service := newService(*configPath, "")
+			cfg, err := service.LoadAndValidate(cmd.Context())
+			if err != nil {
+				return err
+			}
+
 			privateKey, publicKey, err := domain.GenerateX25519KeyPair()
 			if err != nil {
 				return err
 			}
-			profileID := deviceID + "-" + egress
 
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), `# Append to the devices list in %s.
-# The hub stores only client_public_key; keep client_private_key with the device.
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), `# Append to the devices list in %s:
   - id: %s
-    profiles:
-      - id: %s
-        egress: %s
-        address: %q
-        client_public_key: %q
-        # client_private_key: %q
-`, *configPath, deviceID, profileID, egress, address, publicKey, privateKey)
+    address: %q
+    public_key: %q
+    egress: %s
+`, *configPath, deviceID, address, publicKey, egress)
+			if err != nil {
+				return err
+			}
+
+			if output == "" {
+				return nil
+			}
+			profile, err := runtimeadapter.AmneziaProfileRenderer{}.Render(cfg.Hub, address, privateKey)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(output, []byte(profile), 0o600); err != nil {
+				return fmt.Errorf("write profile: %w", err)
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "\nwrote client profile to %s\n", output)
 			return err
 		},
 	}
-	command.Flags().StringVar(&egress, "egress", "", "egress tunnel ID, or direct")
+	command.Flags().StringVar(&egress, "egress", "", "tunnel carrying this device's internet traffic, or direct")
 	command.Flags().StringVar(&address, "address", "", "host address inside hub.client_cidr, for example 10.80.0.2/32")
+	command.Flags().StringVar(&output, "output", "", "where to write the client profile; omit to print only the entry")
 	return command
 }
 

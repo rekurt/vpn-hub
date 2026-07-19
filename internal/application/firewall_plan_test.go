@@ -13,13 +13,10 @@ func planState() domain.DesiredState {
 			ClientCIDR: "10.80.0.0/24",
 			DNSAddress: "10.80.0.1",
 		},
-		Devices: []domain.DeployedDevice{{
-			ID: "macbook",
-			Profiles: []domain.DeployedProfile{
-				{ID: "macbook-direct", Egress: domain.EgressDirect, Address: "10.80.0.2/32"},
-				{ID: "macbook-corp", Egress: "corp-wg", Address: "10.80.0.3/32"},
-			},
-		}},
+		Devices: []domain.DeployedDevice{
+			{ID: "macbook", Address: "10.80.0.2/32", Egress: domain.EgressDirect},
+			{ID: "phone", Address: "10.80.0.3/32", Egress: "corp-wg"},
+		},
 		Tunnels: []domain.Tunnel{
 			{ID: "corp-wg", Role: domain.RolePrivateNetwork, Routes: []string{"10.20.0.0/16"}},
 			{ID: "vpn-out", Role: domain.RoleEgress, Routes: []string{"10.30.0.0/16"}},
@@ -60,8 +57,8 @@ func TestDirectKeepsAStableMark(t *testing.T) {
 	}
 
 	state := planState()
-	state.Devices[0].Profiles = append(state.Devices[0].Profiles,
-		domain.DeployedProfile{ID: "macbook-aaa", Egress: "aaa-first", Address: "10.80.0.9/32"})
+	state.Devices = append(state.Devices,
+		domain.DeployedDevice{ID: "extra", Address: "10.80.0.9/32", Egress: "aaa-first"})
 	after, err := BuildFirewallPlan(state, "eth0")
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +110,7 @@ func TestBuildFirewallPlanRejectsBadInput(t *testing.T) {
 		"endpoint has no port": {func(s *domain.DesiredState) { s.Hub.Endpoint = "vpn.example.test" }, "eth0"},
 		"port out of range":    {func(s *domain.DesiredState) { s.Hub.Endpoint = "vpn.example.test:0" }, "eth0"},
 		"bad address": {func(s *domain.DesiredState) {
-			s.Devices[0].Profiles[0].Address = "not-an-address"
+			s.Devices[0].Address = "not-an-address"
 		}, "eth0"},
 	}
 

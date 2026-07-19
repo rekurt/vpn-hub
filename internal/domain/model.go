@@ -63,9 +63,12 @@ type HealthCheck struct {
 }
 
 type Tunnel struct {
-	ID             string       `mapstructure:"id" json:"id"`
-	Type           TunnelType   `mapstructure:"type" json:"type"`
-	Role           TunnelRole   `mapstructure:"role" json:"role"`
+	ID   string     `mapstructure:"id" json:"id"`
+	Type TunnelType `mapstructure:"type" json:"type"`
+	Role TunnelRole `mapstructure:"role" json:"role"`
+	// Enabled defaults to true when absent. A disabled tunnel is dropped from the
+	// revision entirely rather than built and left unused, so "off" means off.
+	Enabled        *bool        `mapstructure:"enabled" json:"enabled,omitempty"`
 	Source         TunnelSource `mapstructure:"source" json:"source"`
 	Routes         []string     `mapstructure:"routes" json:"routes,omitempty"`
 	DNSServers     []string     `mapstructure:"dns_servers" json:"dns_servers,omitempty"`
@@ -74,17 +77,29 @@ type Tunnel struct {
 	Health         HealthCheck  `mapstructure:"health" json:"health,omitempty"`
 }
 
+func (t Tunnel) IsEnabled() bool { return t.Enabled == nil || *t.Enabled }
+
+// DeviceProfile is the pre-M5 shape, kept solely so validation can recognise it and
+// say what replaced it. Profiles existed to pick an egress per connection; the hub
+// now decides by destination, so a device has one address and one default egress.
 type DeviceProfile struct {
-	ID               string `mapstructure:"id" json:"id"`
-	Egress           string `mapstructure:"egress" json:"egress"`
-	Address          string `mapstructure:"address" json:"address"`
-	ClientPublicKey  string `mapstructure:"client_public_key" json:"client_public_key,omitempty"`
-	ClientPrivateKey string `mapstructure:"client_private_key" json:"-"`
+	ID               string `mapstructure:"id"`
+	Egress           string `mapstructure:"egress"`
+	Address          string `mapstructure:"address"`
+	ClientPublicKey  string `mapstructure:"client_public_key"`
+	ClientPrivateKey string `mapstructure:"client_private_key"`
 }
 
 type Device struct {
-	ID       string          `mapstructure:"id" json:"id"`
-	Profiles []DeviceProfile `mapstructure:"profiles" json:"profiles"`
+	ID      string `mapstructure:"id" json:"id"`
+	Address string `mapstructure:"address" json:"address"`
+	// PublicKey is all the hub needs; the private half stays with the device.
+	PublicKey string `mapstructure:"public_key" json:"public_key"`
+	// Egress names the tunnel carrying this device's internet traffic. Private
+	// networks are reached in addition to it, chosen by destination.
+	Egress string `mapstructure:"egress" json:"egress"`
+
+	Profiles []DeviceProfile `mapstructure:"profiles" json:"-"`
 }
 
 type Config struct {
@@ -93,16 +108,11 @@ type Config struct {
 	Tunnels []Tunnel `mapstructure:"tunnels" json:"tunnels"`
 }
 
-type DeployedProfile struct {
-	ID              string `json:"id"`
-	Egress          string `json:"egress"`
-	Address         string `json:"address"`
-	ClientPublicKey string `json:"client_public_key"`
-}
-
 type DeployedDevice struct {
-	ID       string            `json:"id"`
-	Profiles []DeployedProfile `json:"profiles"`
+	ID        string `json:"id"`
+	Address   string `json:"address"`
+	PublicKey string `json:"public_key"`
+	Egress    string `json:"egress"`
 }
 
 type DesiredState struct {

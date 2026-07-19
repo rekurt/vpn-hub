@@ -13,17 +13,17 @@ hub:
     Jmin: "64"
     Jmax: "256"
 
+# One connection reaches everything: `egress` names the internet path, and the
+# private networks below are reached in addition to it, chosen by destination.
 devices:
   - id: macbook
-    profiles:
-      - id: macbook-xray
-        egress: xray-egress
-        address: "10.80.0.2/32"
-        client_public_key: "TE5crMJPBmCr2bF/uSbHqAlTAHKQwLKMs0RQxfQ0LU4="
-      - id: macbook-direct
-        egress: direct
-        address: "10.80.0.3/32"
-        client_public_key: "6OUoSDjcaLflZn3V7U3aO6eW1Mn5HE4xPJYmzoVvnhU="
+    address: "10.80.0.2/32"
+    public_key: "TE5crMJPBmCr2bF/uSbHqAlTAHKQwLKMs0RQxfQ0LU4="
+    egress: awg-egress
+  - id: phone
+    address: "10.80.0.3/32"
+    public_key: "6OUoSDjcaLflZn3V7U3aO6eW1Mn5HE4xPJYmzoVvnhU="
+    egress: direct
 
 tunnels:
   - id: corp-wg
@@ -49,10 +49,11 @@ tunnels:
   - id: xray-egress
     type: xray
     role: egress
+    # Disabled tunnels are dropped from the revision entirely, not built and left idle.
+    enabled: false
     source:
       kind: xray-uri
       value: "vless://replace-me"
-    allowed_devices: ["macbook"]
     health:
       https_url: "https://example.com/"
   - id: awg-egress

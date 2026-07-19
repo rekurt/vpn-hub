@@ -68,11 +68,8 @@ func hubKeyPair(t *testing.T) (string, domain.DesiredState) {
 			DNSAddress:      "10.80.0.1",
 		},
 		Devices: []domain.DeployedDevice{{
-			ID: "macbook",
-			Profiles: []domain.DeployedProfile{{
-				ID: "macbook-direct", Egress: domain.EgressDirect,
-				Address: "10.80.0.2/32", ClientPublicKey: clientPublic,
-			}},
+			ID: "macbook", Address: "10.80.0.2/32",
+			PublicKey: clientPublic, Egress: domain.EgressDirect,
 		}},
 	}
 	return privateKey, state

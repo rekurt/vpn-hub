@@ -47,11 +47,11 @@ func TestDeviceKeysNeverSerialise(t *testing.T) {
 		t.Fatal(err)
 	}
 	serialised := mustMarshal(t, Device{
-		ID: "laptop",
-		Profiles: []DeviceProfile{{
-			ID: "laptop-direct", Egress: EgressDirect, Address: "10.80.0.2/32",
-			ClientPublicKey: public, ClientPrivateKey: private,
-		}},
+		ID: "laptop", Address: "10.80.0.2/32",
+		PublicKey: public, Egress: EgressDirect,
+		// The pre-M5 shape is still decoded so validation can name its replacement;
+		// it must not reach the revision.
+		Profiles: []DeviceProfile{{ID: "laptop-direct", ClientPrivateKey: private}},
 	})
 	if strings.Contains(serialised, private) {
 		t.Fatal("a device private key reached the serialised form")

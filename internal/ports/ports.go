@@ -81,6 +81,8 @@ type SubscriptionFetcher interface {
 	Fetch(context.Context, string) ([]byte, error)
 }
 
+// ProfileRenderer builds a client configuration. It is given the private key rather
+// than a stored profile, because the hub keeps only public keys.
 type ProfileRenderer interface {
-	Render(domain.Hub, domain.DeviceProfile) (string, error)
+	Render(hub domain.Hub, address, privateKey string) (string, error)
 }

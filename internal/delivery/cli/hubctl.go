@@ -33,7 +33,6 @@ func NewHubctlCommand(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(newDeployCommand(&configPath))
 	root.AddCommand(newStatusCommand())
 	root.AddCommand(newTestCommand(&configPath))
-	root.AddCommand(newProfileCommand(&configPath))
 	root.AddCommand(newSubscriptionCommand(&configPath))
 	root.AddCommand(newDeviceCommand(&configPath))
 	root.AddCommand(newKeygenCommand())
@@ -172,40 +171,6 @@ func newTestCommand(configPath *string) *cobra.Command {
 	return command
 }
 
-func newProfileCommand(configPath *string) *cobra.Command {
-	var deviceID, egress, output string
-	command := newParentCommand("profile", "Manage client profiles")
-	render := &cobra.Command{
-		Use:   "render",
-		Short: "Render one AmneziaWG client profile from local secrets",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if deviceID == "" || egress == "" || output == "" {
-				return fmt.Errorf("--device, --egress and --output are required")
-			}
-			service := newService(*configPath, "")
-			cfg, err := service.LoadAndValidate(cmd.Context())
-			if err != nil {
-				return err
-			}
-			profile, err := service.RenderProfile(cfg, deviceID, egress)
-			if err != nil {
-				return err
-			}
-			if err := os.WriteFile(output, []byte(profile), 0o600); err != nil {
-				return fmt.Errorf("write profile: %w", err)
-			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "written %s\n", output)
-			return err
-		},
-	}
-	render.Flags().StringVar(&deviceID, "device", "", "device ID")
-	render.Flags().StringVar(&egress, "egress", "", "egress tunnel ID or direct")
-	render.Flags().StringVar(&output, "output", "", "output profile path")
-	command.AddCommand(render)
-	return command
-}
-
 func newSubscriptionCommand(configPath *string) *cobra.Command {
 	var output string
 	command := newParentCommand("subscription", "Manage Xray subscriptions")
@@ -271,6 +236,5 @@ func newService(configPath, stateDir string) application.Service {
 		// the path the tunnel exists to avoid.
 		HealthChecker:       linux.HealthChecker{},
 		SubscriptionFetcher: health.HTTPSSubscriptionFetcher{},
-		ProfileRenderer:     runtimeadapter.AmneziaProfileRenderer{},
 	}
 }

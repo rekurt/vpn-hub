@@ -10,15 +10,21 @@ import (
 
 type AmneziaProfileRenderer struct{}
 
-func (AmneziaProfileRenderer) Render(hub domain.Hub, profile domain.DeviceProfile) (string, error) {
-	if profile.ClientPrivateKey == "" {
+// Render builds a client profile. The private key is supplied by the caller rather
+// than read from configuration: the hub stores only public keys, so the one moment a
+// private key exists is when it is generated for a new device.
+func (AmneziaProfileRenderer) Render(hub domain.Hub, address, privateKey string) (string, error) {
+	if privateKey == "" {
 		return "", fmt.Errorf("client private key is required")
+	}
+	if address == "" {
+		return "", fmt.Errorf("client address is required")
 	}
 
 	var builder strings.Builder
 	builder.WriteString("[Interface]\n")
-	builder.WriteString("PrivateKey = " + profile.ClientPrivateKey + "\n")
-	builder.WriteString("Address = " + profile.Address + "\n")
+	builder.WriteString("PrivateKey = " + privateKey + "\n")
+	builder.WriteString("Address = " + address + "\n")
 	builder.WriteString("DNS = " + hub.DNSAddress + "\n")
 
 	// Emit the canonical spelling: configuration decoding lower-cases these keys, and

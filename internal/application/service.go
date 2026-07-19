@@ -50,29 +50,23 @@ func (s Service) BuildDesiredState(cfg domain.Config) (domain.DesiredState, erro
 	sort.Slice(devices, func(i, j int) bool { return devices[i].ID < devices[j].ID })
 	sort.Slice(tunnels, func(i, j int) bool { return tunnels[i].ID < tunnels[j].ID })
 
+	// Disabled tunnels are dropped here rather than filtered downstream: the revision
+	// is what the agent converges on, so a tunnel that survives into it would still
+	// get a namespace and a route.
+	enabled := make([]domain.Tunnel, 0, len(tunnels))
+	for _, tunnel := range tunnels {
+		if tunnel.IsEnabled() {
+			enabled = append(enabled, tunnel)
+		}
+	}
+	tunnels = enabled
+
 	deployed := make([]domain.DeployedDevice, 0, len(devices))
 	for _, device := range devices {
-		profiles := append([]domain.DeviceProfile(nil), device.Profiles...)
-		sort.Slice(profiles, func(i, j int) bool { return profiles[i].ID < profiles[j].ID })
-
-		result := domain.DeployedDevice{ID: device.ID, Profiles: make([]domain.DeployedProfile, 0, len(profiles))}
-		for _, profile := range profiles {
-			publicKey := profile.ClientPublicKey
-			if profile.ClientPrivateKey != "" {
-				derived, err := domain.PublicKeyFromPrivate(profile.ClientPrivateKey)
-				if err != nil {
-					return domain.DesiredState{}, fmt.Errorf("device %q profile %q: %w", device.ID, profile.ID, err)
-				}
-				if publicKey != "" && publicKey != derived {
-					return domain.DesiredState{}, fmt.Errorf("device %q profile %q: public key does not match private key", device.ID, profile.ID)
-				}
-				publicKey = derived
-			}
-			result.Profiles = append(result.Profiles, domain.DeployedProfile{
-				ID: profile.ID, Egress: profile.Egress, Address: profile.Address, ClientPublicKey: publicKey,
-			})
-		}
-		deployed = append(deployed, result)
+		deployed = append(deployed, domain.DeployedDevice{
+			ID: device.ID, Address: device.Address,
+			PublicKey: device.PublicKey, Egress: device.Egress,
+		})
 	}
 
 	state := domain.DesiredState{Hub: cfg.Hub, Devices: deployed, Tunnels: tunnels}
@@ -127,27 +121,6 @@ func (s Service) RefreshSubscription(ctx context.Context, cfg domain.Config, id 
 	return nil, fmt.Errorf("tunnel %q was not found", id)
 }
 
-func (s Service) RenderProfile(cfg domain.Config, deviceID, egress string) (string, error) {
-	if s.ProfileRenderer == nil {
-		return "", fmt.Errorf("profile renderer is not configured")
-	}
-	for _, device := range cfg.Devices {
-		if device.ID != deviceID {
-			continue
-		}
-		for _, profile := range device.Profiles {
-			if profile.Egress == egress {
-				if profile.ClientPrivateKey == "" {
-					return "", fmt.Errorf("profile %q has no local private key", profile.ID)
-				}
-				return s.ProfileRenderer.Render(cfg.Hub, profile)
-			}
-		}
-		return "", fmt.Errorf("device %q has no egress profile %q", deviceID, egress)
-	}
-	return "", fmt.Errorf("device %q was not found", deviceID)
-}
-
 func Validate(cfg domain.Config) error {
 	if cfg.Hub.Endpoint == "" || cfg.Hub.ServerPublicKey == "" || cfg.Hub.ClientCIDR == "" || cfg.Hub.DNSAddress == "" {
 		return fmt.Errorf("hub.endpoint, hub.server_public_key, hub.client_cidr and hub.dns_address are required")
@@ -157,7 +130,7 @@ func Validate(cfg domain.Config) error {
 	}
 
 	deviceIDs := make(map[string]struct{}, len(cfg.Devices))
-	profileAddresses := make(map[string]string)
+	addresses := make(map[string]string)
 	for _, device := range cfg.Devices {
 		if device.ID == "" {
 			return fmt.Errorf("device id is required")
@@ -165,38 +138,32 @@ func Validate(cfg domain.Config) error {
 		if err := validateIdentifier("device id", device.ID); err != nil {
 			return err
 		}
+		// Profiles existed to pick an egress per connection; the hub now decides by
+		// destination, so saying what replaced them beats "unknown field".
+		if len(device.Profiles) > 0 {
+			return fmt.Errorf("device %q still uses `profiles`, which no longer exists: "+
+				"give the device one `address`, one `public_key` and one `egress` "+
+				"naming its default internet path; private networks are reached in "+
+				"addition to it and are not listed per device", device.ID)
+		}
 		if _, exists := deviceIDs[device.ID]; exists {
 			return fmt.Errorf("duplicate device %q", device.ID)
 		}
 		deviceIDs[device.ID] = struct{}{}
-		profileIDs := make(map[string]struct{}, len(device.Profiles))
-		for _, profile := range device.Profiles {
-			if profile.ID == "" || profile.Egress == "" || profile.Address == "" {
-				return fmt.Errorf("device %q: profile id, egress and address are required", device.ID)
-			}
-			if err := validateIdentifier("profile id", profile.ID); err != nil {
-				return fmt.Errorf("device %q: %w", device.ID, err)
-			}
-			if _, exists := profileIDs[profile.ID]; exists {
-				return fmt.Errorf("device %q: duplicate profile %q", device.ID, profile.ID)
-			}
-			profileIDs[profile.ID] = struct{}{}
-			if err := validateProfileAddress(profile.Address, cfg.Hub.ClientCIDR); err != nil {
-				return fmt.Errorf("device %q profile %q: %w", device.ID, profile.ID, err)
-			}
-			if profile.ClientPrivateKey == "" && profile.ClientPublicKey == "" {
-				return fmt.Errorf("device %q profile %q: a client public or private key is required", device.ID, profile.ID)
-			}
-			if profile.ClientPublicKey != "" {
-				if err := domain.ValidatePublicKey(profile.ClientPublicKey); err != nil {
-					return fmt.Errorf("device %q profile %q: %w", device.ID, profile.ID, err)
-				}
-			}
-			if previous, exists := profileAddresses[profile.Address]; exists {
-				return fmt.Errorf("profile address %q is shared by %s and %s", profile.Address, previous, device.ID+"/"+profile.ID)
-			}
-			profileAddresses[profile.Address] = device.ID + "/" + profile.ID
+
+		if device.Address == "" || device.PublicKey == "" || device.Egress == "" {
+			return fmt.Errorf("device %q: address, public_key and egress are required", device.ID)
 		}
+		if err := validateProfileAddress(device.Address, cfg.Hub.ClientCIDR); err != nil {
+			return fmt.Errorf("device %q: %w", device.ID, err)
+		}
+		if err := domain.ValidatePublicKey(device.PublicKey); err != nil {
+			return fmt.Errorf("device %q: %w", device.ID, err)
+		}
+		if previous, exists := addresses[device.Address]; exists {
+			return fmt.Errorf("address %q is shared by %s and %s", device.Address, previous, device.ID)
+		}
+		addresses[device.Address] = device.ID
 	}
 
 	tunnelIDs := make(map[string]domain.Tunnel, len(cfg.Tunnels))
@@ -232,18 +199,42 @@ func Validate(cfg domain.Config) error {
 		}
 	}
 
+	enabledEgresses := 0
+	for _, tunnel := range cfg.Tunnels {
+		if tunnel.Role == domain.RoleEgress && tunnel.IsEnabled() {
+			enabledEgresses++
+		}
+	}
+
 	for _, device := range cfg.Devices {
-		for _, profile := range device.Profiles {
-			if profile.Egress == domain.EgressDirect {
-				continue
+		if device.Egress == domain.EgressDirect {
+			continue
+		}
+		tunnel, exists := tunnelIDs[device.Egress]
+		if !exists || tunnel.Role != domain.RoleEgress {
+			return fmt.Errorf("device %q: egress %q is not an egress tunnel", device.ID, device.Egress)
+		}
+		// Disabling a tunnel someone depends on must fail here rather than leave that
+		// device without internet, and it must not fall back to direct: a silent
+		// fallback is exactly what the kill switch exists to prevent.
+		if !tunnel.IsEnabled() {
+			return fmt.Errorf("device %q uses egress %q, which is disabled: "+
+				"move the device with `hubctl device set-egress` before disabling it", device.ID, device.Egress)
+		}
+		if len(tunnel.AllowedDevices) > 0 && !contains(tunnel.AllowedDevices, device.ID) {
+			return fmt.Errorf("device %q is not allowed to use egress %q", device.ID, device.Egress)
+		}
+	}
+
+	if len(cfg.Devices) > 0 && enabledEgresses == 0 {
+		hasDirect := false
+		for _, device := range cfg.Devices {
+			if device.Egress == domain.EgressDirect {
+				hasDirect = true
 			}
-			tunnel, exists := tunnelIDs[profile.Egress]
-			if !exists || tunnel.Role != domain.RoleEgress {
-				return fmt.Errorf("device %q profile %q: egress %q is not an egress tunnel", device.ID, profile.ID, profile.Egress)
-			}
-			if len(tunnel.AllowedDevices) > 0 && !contains(tunnel.AllowedDevices, device.ID) {
-				return fmt.Errorf("device %q profile %q is not allowed to use egress %q", device.ID, profile.ID, profile.Egress)
-			}
+		}
+		if !hasDirect {
+			return fmt.Errorf("no egress tunnel is enabled, so no device has a way out")
 		}
 	}
 

@@ -49,17 +49,15 @@ func BuildIngressSpec(state domain.DesiredState, privateKey string) (domain.Ingr
 	}
 
 	for _, device := range state.Devices {
-		for _, profile := range device.Profiles {
-			if profile.ClientPublicKey == "" {
-				return domain.IngressSpec{}, fmt.Errorf("device %q profile %q has no public key", device.ID, profile.ID)
-			}
-			spec.Peers = append(spec.Peers, domain.PeerSpec{
-				PublicKey: profile.ClientPublicKey,
-				// A peer may only claim its own address; anything wider would let one
-				// device impersonate another's source address.
-				AllowedIPs: []string{profile.Address},
-			})
+		if device.PublicKey == "" {
+			return domain.IngressSpec{}, fmt.Errorf("device %q has no public key", device.ID)
 		}
+		spec.Peers = append(spec.Peers, domain.PeerSpec{
+			PublicKey: device.PublicKey,
+			// A peer may only claim its own address; anything wider would let one
+			// device impersonate another's source address.
+			AllowedIPs: []string{device.Address},
+		})
 	}
 	sort.Slice(spec.Peers, func(i, j int) bool { return spec.Peers[i].PublicKey < spec.Peers[j].PublicKey })
 

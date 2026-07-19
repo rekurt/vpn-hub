@@ -25,7 +25,7 @@ func run(t *testing.T, args ...string) (string, error) {
 // writeConfig renders a minimal valid hub configuration into a temp dir.
 func writeConfig(t *testing.T) string {
 	t.Helper()
-	privateKey, _, err := domain.GenerateX25519KeyPair()
+	_, devicePublicKey, err := domain.GenerateX25519KeyPair()
 	if err != nil {
 		t.Fatalf("generate key pair: %v", err)
 	}
@@ -41,13 +41,11 @@ func writeConfig(t *testing.T) string {
   dns_address: "10.80.0.1"
 devices:
   - id: macbook
-    profiles:
-      - id: macbook-direct
-        egress: direct
-        address: "10.80.0.2/32"
-        client_private_key: %q
+    address: "10.80.0.2/32"
+    public_key: %q
+    egress: direct
 tunnels: []
-`, serverPublicKey, privateKey)
+`, serverPublicKey, devicePublicKey)
 
 	path := filepath.Join(t.TempDir(), "hub.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -83,16 +81,20 @@ func TestTunnelSubcommandAcceptsDocumentedInvocation(t *testing.T) {
 	}
 }
 
-// `profile render` must be a real subcommand rather than a literal swallowed by
-// Cobra's default ArbitraryArgs.
-func TestProfileRenderIsASubcommand(t *testing.T) {
+// `device add` generates the key pair and writes the client profile, which is the
+// only moment a private key exists.
+func TestDeviceAddWritesAProfile(t *testing.T) {
 	t.Parallel()
-	configPath := writeConfig(t)
-	output := filepath.Join(t.TempDir(), "macbook.conf")
-	if _, err := run(t, "profile", "render", "--config", configPath,
-		"--device", "macbook", "--egress", "direct", "--output", output); err != nil {
-		t.Fatalf("profile render failed: %v", err)
+	output := filepath.Join(t.TempDir(), "laptop.conf")
+	printed, err := run(t, "device", "add", "laptop", "--config", writeConfig(t),
+		"--egress", "direct", "--address", "10.80.0.9/32", "--output", output)
+	if err != nil {
+		t.Fatalf("device add failed: %v (output %q)", err, printed)
 	}
+	if !strings.Contains(printed, "public_key:") || !strings.Contains(printed, "egress: direct") {
+		t.Fatalf("expected an entry to paste into devices, got %q", printed)
+	}
+
 	rendered, err := os.ReadFile(output)
 	if err != nil {
 		t.Fatalf("read rendered profile: %v", err)
@@ -100,12 +102,10 @@ func TestProfileRenderIsASubcommand(t *testing.T) {
 	if !strings.Contains(string(rendered), "[Interface]") {
 		t.Fatalf("rendered profile looks wrong: %q", rendered)
 	}
-}
-
-func TestProfileRejectsUnknownPositionalArgument(t *testing.T) {
-	t.Parallel()
-	if _, err := run(t, "profile", "bogus", "--config", writeConfig(t)); err == nil {
-		t.Fatal("expected unknown subcommand to be rejected")
+	// The hub keeps only public halves, so the private key must not be echoed into
+	// anything but the profile itself.
+	if strings.Contains(printed, "PrivateKey") {
+		t.Error("the private key was printed alongside the entry")
 	}
 }
 
