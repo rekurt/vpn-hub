@@ -1,0 +1,389 @@
+package linux
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"vpn-hub/internal/domain"
+)
+
+// Egress runs each upstream tunnel inside its own network namespace.
+//
+// Isolation is the point: a provider's configuration routinely asks for a default
+// route and its own DNS, and inside a namespace it can have both without touching
+// the main routing table or another provider's.
+type Egress struct {
+	Run        runner
+	SecretsDir string
+	// RulePriority is where the fwmark rules sit. It is above the main table's
+	// implicit rule so marked traffic is diverted before ordinary routing sees it.
+	RulePriority int
+}
+
+func (e Egress) run(ctx context.Context, name string, args ...string) (string, error) {
+	if e.Run != nil {
+		return e.Run(ctx, name, args...)
+	}
+	return execRunner(ctx, name, args...)
+}
+
+// inNS prefixes a command so it runs inside the tunnel's namespace.
+func (e Egress) inNS(ctx context.Context, namespace string, args ...string) (string, error) {
+	return e.run(ctx, "ip", append([]string{"netns", "exec", namespace}, args...)...)
+}
+
+func (e Egress) rulePriority() int {
+	if e.RulePriority != 0 {
+		return e.RulePriority
+	}
+	return 1000
+}
+
+// Observe lists the namespaces the hub currently owns.
+func (e Egress) Observe(ctx context.Context) ([]string, error) {
+	output, err := e.run(ctx, "ip", "-j", "netns", "list")
+	if err != nil {
+		return nil, nil //nolint:nilerr // no namespaces yet is not a failure
+	}
+	return parseNamespaces(output)
+}
+
+// Apply converges every egress namespace and removes any the revision dropped.
+func (e Egress) Apply(ctx context.Context, specs []domain.EgressSpec) error {
+	wanted := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		wanted[spec.Namespace] = struct{}{}
+		if err := e.applyOne(ctx, spec); err != nil {
+			return fmt.Errorf("egress %s: %w", spec.TunnelID, err)
+		}
+	}
+
+	existing, err := e.Observe(ctx)
+	if err != nil {
+		return err
+	}
+	for _, namespace := range existing {
+		if !strings.HasPrefix(namespace, "vpn-hub-") {
+			continue // not ours
+		}
+		if _, keep := wanted[namespace]; keep {
+			continue
+		}
+		// Deleting the namespace takes its interfaces, routes and processes with it.
+		if _, err := e.run(ctx, "ip", "netns", "del", namespace); err != nil {
+			return fmt.Errorf("remove namespace %s: %w", namespace, err)
+		}
+	}
+	return nil
+}
+
+func (e Egress) applyOne(ctx context.Context, spec domain.EgressSpec) error {
+	if err := e.ensureNamespace(ctx, spec); err != nil {
+		return err
+	}
+	if err := e.ensureLink(ctx, spec); err != nil {
+		return err
+	}
+	if err := e.ensureTunnel(ctx, spec); err != nil {
+		return err
+	}
+	return e.ensurePolicyRouting(ctx, spec)
+}
+
+func (e Egress) ensureNamespace(ctx context.Context, spec domain.EgressSpec) error {
+	existing, err := e.Observe(ctx)
+	if err != nil {
+		return err
+	}
+	present := false
+	for _, namespace := range existing {
+		if namespace == spec.Namespace {
+			present = true
+			break
+		}
+	}
+
+	// A crash partway through `ip netns add` leaves the handle in /run/netns without
+	// its bind mount. It then looks present but every operation on it fails, and
+	// `ip netns add` will not replace it, so the hub would stay wedged until someone
+	// cleaned up by hand. Prove it works before trusting it.
+	if present {
+		if _, err := e.inNS(ctx, spec.Namespace, "true"); err != nil {
+			if _, err := e.run(ctx, "ip", "netns", "del", spec.Namespace); err != nil {
+				return fmt.Errorf("remove unusable namespace %s: %w", spec.Namespace, err)
+			}
+			present = false
+		}
+	}
+
+	if !present {
+		if _, err := e.run(ctx, "ip", "netns", "add", spec.Namespace); err != nil {
+			return err
+		}
+	}
+	// Applied every pass, not only at creation: these are exactly the kind of setting
+	// someone reaches for when debugging, and they must not stay changed.
+	return e.enableForwarding(ctx, spec.Namespace)
+}
+
+// enableForwarding turns on IPv4 forwarding inside the namespace and keeps IPv6 off.
+//
+// These are per-namespace settings: a fresh namespace starts with forwarding
+// disabled regardless of the host, and this namespace exists precisely to forward
+// client traffic into the tunnel.
+func (e Egress) enableForwarding(ctx context.Context, namespace string) error {
+	for _, setting := range []string{
+		"net.ipv4.ip_forward=1",
+		"net.ipv6.conf.all.disable_ipv6=1",
+		"net.ipv6.conf.default.disable_ipv6=1",
+	} {
+		if _, err := e.inNS(ctx, namespace, "sysctl", "-qw", setting); err != nil {
+			return fmt.Errorf("set %s in %s: %w", setting, namespace, err)
+		}
+	}
+	return nil
+}
+
+// ensureLink builds the veth pair joining the main namespace to the tunnel's.
+func (e Egress) ensureLink(ctx context.Context, spec domain.EgressSpec) error {
+	// A missing host side means the pair is absent: deleting either end removes both.
+	if _, err := e.run(ctx, "ip", "link", "show", spec.HostVeth); err != nil {
+		if _, err := e.run(ctx, "ip", "link", "add", spec.HostVeth,
+			"type", "veth", "peer", "name", spec.PeerVeth); err != nil {
+			return err
+		}
+		if _, err := e.run(ctx, "ip", "link", "set", spec.PeerVeth, "netns", spec.Namespace); err != nil {
+			return err
+		}
+	}
+
+	if _, err := e.run(ctx, "ip", "addr", "replace", spec.HostAddress, "dev", spec.HostVeth); err != nil {
+		return err
+	}
+	if _, err := e.run(ctx, "ip", "link", "set", spec.HostVeth, "up"); err != nil {
+		return err
+	}
+	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "addr", "replace", spec.PeerAddress, "dev", spec.PeerVeth); err != nil {
+		return err
+	}
+	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "link", "set", spec.PeerVeth, "up"); err != nil {
+		return err
+	}
+	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "link", "set", "lo", "up"); err != nil {
+		return err
+	}
+
+	// Returning client traffic has to find its way back across the link.
+	gateway := hostOf(spec.HostAddress)
+	_, err := e.run(ctx, "ip", "-n", spec.Namespace, "route", "replace",
+		spec.ClientCIDR, "via", gateway, "dev", spec.PeerVeth)
+	return err
+}
+
+// ensureTunnel brings the upstream interface up inside the namespace.
+func (e Egress) ensureTunnel(ctx context.Context, spec domain.EgressSpec) error {
+	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "link", "show", spec.Interface); err != nil {
+		// The interface is created in the main namespace and moved: a WireGuard
+		// device keeps its socket in the namespace it was created in, which is how
+		// it can still reach the internet from inside an otherwise isolated one.
+		if _, err := e.run(ctx, "ip", "link", "add", spec.Interface, "type", "wireguard"); err != nil {
+			return err
+		}
+		if _, err := e.run(ctx, "ip", "link", "set", spec.Interface, "netns", spec.Namespace); err != nil {
+			return err
+		}
+	}
+
+	keyPath, err := e.writeKey(spec.TunnelID+"-private", spec.Tunnel.PrivateKey)
+	if err != nil {
+		return err
+	}
+	arguments := []string{"wg", "set", spec.Interface, "private-key", keyPath,
+		"peer", spec.Tunnel.Peer.PublicKey,
+		"endpoint", spec.Tunnel.Peer.Endpoint,
+		"allowed-ips", strings.Join(allowedOrDefault(spec.Tunnel.Peer.AllowedIPs), ",")}
+	if spec.Tunnel.Peer.PresharedKey != "" {
+		pskPath, err := e.writeKey(spec.TunnelID+"-psk", spec.Tunnel.Peer.PresharedKey)
+		if err != nil {
+			return err
+		}
+		arguments = append(arguments, "preshared-key", pskPath)
+	}
+	if spec.Tunnel.Peer.Keepalive > 0 {
+		arguments = append(arguments, "persistent-keepalive", strconv.Itoa(spec.Tunnel.Peer.Keepalive))
+	}
+	if _, err := e.inNS(ctx, spec.Namespace, arguments...); err != nil {
+		return err
+	}
+	// An egress tunnel has exactly one peer, and its allowed-ips is usually
+	// 0.0.0.0/0. A peer left over from an earlier configuration would claim the same
+	// range, making the route ambiguous and sending traffic to whichever matched
+	// first -- possibly an endpoint the operator has since replaced.
+	if err := e.removeOtherPeers(ctx, spec); err != nil {
+		return err
+	}
+
+	for _, address := range spec.Tunnel.Addresses {
+		if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "addr", "replace", address, "dev", spec.Interface); err != nil {
+			return err
+		}
+	}
+	if spec.Tunnel.MTU > 0 {
+		if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "link", "set", spec.Interface,
+			"mtu", strconv.Itoa(spec.Tunnel.MTU)); err != nil {
+			return err
+		}
+	}
+	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "link", "set", spec.Interface, "up"); err != nil {
+		return err
+	}
+
+	// The only way out of this namespace is the tunnel. If it drops, packets have
+	// nowhere to go and are discarded here -- a second kill switch, independent of
+	// the packet filter in the main namespace.
+	if _, err := e.run(ctx, "ip", "-n", spec.Namespace, "route", "replace",
+		"default", "dev", spec.Interface); err != nil {
+		return err
+	}
+
+	// Client addresses are translated to the tunnel's own, so the provider sees
+	// traffic from the address it issued.
+	ruleset := fmt.Sprintf(`table inet vpn_hub_egress
+delete table inet vpn_hub_egress
+
+table inet vpn_hub_egress {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		ip saddr %s oifname %q masquerade
+	}
+}
+`, spec.ClientCIDR, spec.Interface)
+	return e.applyNamespaceRuleset(ctx, spec.Namespace, ruleset)
+}
+
+func (e Egress) removeOtherPeers(ctx context.Context, spec domain.EgressSpec) error {
+	output, err := e.inNS(ctx, spec.Namespace, "wg", "show", spec.Interface, "dump")
+	if err != nil {
+		return nil //nolint:nilerr // nothing to prune if the interface cannot be read
+	}
+	observed, err := ParseDump(output)
+	if err != nil {
+		return fmt.Errorf("read peers of %s: %w", spec.Interface, err)
+	}
+	for _, peer := range observed.Peers {
+		if peer.PublicKey == spec.Tunnel.Peer.PublicKey {
+			continue
+		}
+		if _, err := e.inNS(ctx, spec.Namespace, "wg", "set", spec.Interface,
+			"peer", peer.PublicKey, "remove"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensurePolicyRouting steers marked traffic into this tunnel's table.
+func (e Egress) ensurePolicyRouting(ctx context.Context, spec domain.EgressSpec) error {
+	table := strconv.Itoa(spec.RouteTable)
+	mark := fmt.Sprintf("0x%x", spec.Mark)
+
+	// Via the namespace end rather than just "dev": on a /30 link a device-scoped
+	// default makes the kernel resolve the destination address itself, and the peer
+	// answers for nothing but its own.
+	if _, err := e.run(ctx, "ip", "route", "replace", "default",
+		"via", hostOf(spec.PeerAddress), "dev", spec.HostVeth, "table", table); err != nil {
+		return err
+	}
+
+	// `ip rule add` is not idempotent and would stack duplicates on every reconcile.
+	existing, err := e.run(ctx, "ip", "rule", "show", "fwmark", mark)
+	if err == nil && strings.Contains(existing, "lookup "+table) {
+		return nil
+	}
+	_, err = e.run(ctx, "ip", "rule", "add", "fwmark", mark,
+		"lookup", table, "priority", strconv.Itoa(e.rulePriority()))
+	return err
+}
+
+// applyNamespaceRuleset feeds a ruleset to nft inside a namespace. It bypasses the
+// runner because that has no way to supply stdin, and a fake runner cannot verify
+// the ruleset anyway -- the integration tests read it back from the namespace.
+func (e Egress) applyNamespaceRuleset(ctx context.Context, namespace, ruleset string) error {
+	if e.Run != nil {
+		_, err := e.Run(ctx, "nft-in-netns", namespace, ruleset)
+		return err
+	}
+	command := exec.CommandContext(ctx, "ip", "netns", "exec", namespace, "nft", "-f", "-")
+	command.Stdin = strings.NewReader(ruleset)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		if message := strings.TrimSpace(stderr.String()); message != "" {
+			return fmt.Errorf("apply ruleset in %s: %w: %s", namespace, err, message)
+		}
+		return fmt.Errorf("apply ruleset in %s: %w", namespace, err)
+	}
+	return nil
+}
+
+func (e Egress) writeKey(name, value string) (string, error) {
+	directory := e.SecretsDir
+	if directory == "" {
+		directory = "/run/vpn-hub"
+	}
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return "", fmt.Errorf("create secrets directory: %w", err)
+	}
+	path := filepath.Join(directory, name+".key")
+	if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("write key: %w", err)
+	}
+	return path, nil
+}
+
+// allowedOrDefault treats an unset AllowedIPs as "everything", which is what an
+// egress tunnel means.
+func allowedOrDefault(allowed []string) []string {
+	if len(allowed) == 0 {
+		return []string{"0.0.0.0/0"}
+	}
+	return allowed
+}
+
+// hostOf strips the prefix length from an address.
+func hostOf(address string) string {
+	host, _, found := strings.Cut(address, "/")
+	if !found {
+		return address
+	}
+	return host
+}
+
+type namespaceEntry struct {
+	Name string `json:"name"`
+}
+
+func parseNamespaces(output string) ([]string, error) {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" || trimmed == "[]" {
+		return nil, nil
+	}
+	var entries []namespaceEntry
+	if err := json.Unmarshal([]byte(trimmed), &entries); err != nil {
+		return nil, fmt.Errorf("decode namespace list: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Name != "" {
+			names = append(names, entry.Name)
+		}
+	}
+	return names, nil
+}

@@ -41,6 +41,18 @@ type Ingress interface {
 	Observe(ctx context.Context, name string) (domain.IngressObservation, error)
 }
 
+// EgressManager runs upstream tunnels, each isolated in its own namespace.
+type EgressManager interface {
+	Apply(context.Context, []domain.EgressSpec) error
+	Observe(context.Context) ([]string, error)
+}
+
+// TunnelConfigStore holds upstream provider configurations, which stay on the host
+// rather than travelling inside a revision.
+type TunnelConfigStore interface {
+	Load(ctx context.Context, source string) (domain.WireGuardTunnel, error)
+}
+
 // HostNetwork answers questions about the machine the hub runs on, which cannot come
 // from configuration.
 type HostNetwork interface {

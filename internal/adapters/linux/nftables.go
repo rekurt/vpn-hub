@@ -122,10 +122,16 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\t}")
 	line("")
 
+	// Only traffic leaving through the host's own uplink is translated here. A tunnel
+	// namespace does its own translation, to the address its provider issued, and
+	// translating twice would hide the client address from the rule that does it --
+	// the packet would arrive there sourced from this end of the veth instead.
 	line("\tchain postrouting {")
 	line("\t\ttype nat hook postrouting priority srcnat; policy accept;")
 	for _, group := range plan.Egresses {
-		line("\t\tip saddr %s oifname %q masquerade", plan.ClientCIDR, group.Interface)
+		if group.Interface == plan.UplinkInterface {
+			line("\t\tip saddr %s oifname %q masquerade", plan.ClientCIDR, group.Interface)
+		}
 	}
 	line("\t}")
 	line("}")

@@ -61,6 +61,5 @@ table inet vpn_hub {
 	chain postrouting {
 		type nat hook postrouting priority srcnat; policy accept;
 		ip saddr 10.80.0.0/24 oifname "eth0" masquerade
-		ip saddr 10.80.0.0/24 oifname "vh-corp-wg" masquerade
 	}
 }

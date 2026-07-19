@@ -18,9 +18,21 @@ StateDirectory=vpn-hub
 ConfigurationDirectory=vpn-hub
 
 UMask=0077
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
+
+# Mount-based sandboxing is deliberately absent, and this is the one hardening
+# trade-off the agent makes.
+#
+# `ip netns add` bind-mounts a namespace handle into /run/netns. Anything that gives
+# the service a private mount namespace -- ProtectSystem, ProtectHome, PrivateTmp --
+# confines that mount to the service, where it is unusable even by the agent's own
+# later invocations: the namespace appears to exist and every operation on it fails
+# with "Invalid argument". MountFlags=shared does not rescue it, and neither does
+# CAP_SYS_ADMIN; managing network namespaces and having a private mount namespace are
+# simply incompatible.
+#
+# Everything that does not depend on mount isolation is kept below.
+ProtectHome=false
+PrivateTmp=false
 NoNewPrivileges=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
@@ -28,18 +40,19 @@ RestrictSUIDSGID=true
 RestrictRealtime=true
 RestrictNamespaces=~user pid ipc uts cgroup
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
+# @system-service alone kills `ip netns add` with SIGSYS: creating a network
+# namespace needs unshare and setns, and `ip` bind-mounts the handle into /run/netns,
+# which needs @mount. Found only after a reboot -- running the agent by hand from a
+# shell carries no seccomp filter, so the failure is invisible outside systemd.
+SystemCallFilter=@system-service @mount
+SystemCallFilter=setns unshare
 
 # The reconciler drives netlink, nftables and network namespaces; everything else is dropped.
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
 
-# `ip netns` bind-mounts into /run/netns, which ProtectSystem=strict would otherwise
-# make read-only. The tmpfiles rule in deploy/terraform/cloud-init.yaml creates it.
-ReadWritePaths=/run/netns
-
-# ProtectKernelTunables is deliberately NOT set: disabling IPv6 requires writing
-# /proc/sys/net/ipv6/conf/*/disable_ipv6.
+# ProtectKernelTunables is deliberately NOT set: the agent writes
+# /proc/sys/net/ipv4/ip_forward inside each tunnel namespace.
 
 [Install]
 WantedBy=multi-user.target
