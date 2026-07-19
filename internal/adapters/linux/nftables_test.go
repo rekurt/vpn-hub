@@ -398,3 +398,25 @@ func TestAFailedReadIsNotAnAbsentTable(t *testing.T) {
 		t.Error("a failed read was reported as an absent table")
 	}
 }
+
+// An egress tunnel nobody has chosen as their default has an empty set, and
+// `elements = { }` does not parse -- nft rejects the whole ruleset, so the hub
+// applies nothing at all and every client loses its connection. Found on the host,
+// not here, which is why this test exists.
+func TestAnEgressNobodyDefaultsToRendersNoElementsLine(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.Egresses = append(plan.Egresses, domain.EgressGroup{
+		ID:        "nl",
+		Mark:      0x101,
+		Interface: "vh-nl",
+	})
+	ruleset := RenderRuleset(plan)
+
+	if strings.Contains(ruleset, "elements = {  }") || strings.Contains(ruleset, "elements = { }") {
+		t.Fatalf("an empty elements line is a syntax error, so nft rejects everything:\n%s", ruleset)
+	}
+	if !strings.Contains(ruleset, "set client_nl {") {
+		t.Errorf("the set must still exist, since rules refer to it:\n%s", ruleset)
+	}
+}

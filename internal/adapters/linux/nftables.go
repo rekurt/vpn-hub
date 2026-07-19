@@ -99,7 +99,12 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	for _, group := range plan.Egresses {
 		line("\tset %s {", setName(group))
 		line("\t\ttype ipv4_addr")
-		line("\t\telements = { %s }", strings.Join(group.Addresses, ", "))
+		// Omitted when empty: `elements = { }` is a syntax error, and an egress
+		// tunnel no device has chosen as its default has exactly that -- an empty
+		// set. It still needs to exist, since rules refer to it.
+		if len(group.Addresses) > 0 {
+			line("\t\telements = { %s }", strings.Join(group.Addresses, ", "))
+		}
 		line("\t}")
 		line("")
 	}
