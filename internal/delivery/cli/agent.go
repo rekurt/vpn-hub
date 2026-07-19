@@ -137,6 +137,16 @@ type loop struct {
 
 func (l *loop) reconcile(cmd *cobra.Command, dryRun bool) error {
 	ctx := cmd.Context()
+
+	// An unconfirmed deploy is put back before anything is applied, so a revision
+	// that cut the operator's access is undone by the hub itself rather than
+	// requiring the access it just removed.
+	if !dryRun {
+		if err := l.rollbackIfUnconfirmed(cmd); err != nil {
+			return err
+		}
+	}
+
 	state, err := runtimeadapter.FileRevisionStore{StateDir: l.flags.stateDir}.Load(ctx)
 	if err != nil {
 		return err
@@ -169,6 +179,28 @@ func (l *loop) reconcile(cmd *cobra.Command, dryRun bool) error {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "converged on revision %s\n", state.Revision)
 		l.applied = state.Revision
 	}
+	return nil
+}
+
+func (l *loop) rollbackIfUnconfirmed(cmd *cobra.Command) error {
+	store := runtimeadapter.ConfirmationStore{StateDir: l.flags.stateDir}
+	expired, pending, err := store.Expired()
+	if err != nil || !expired {
+		return err
+	}
+
+	restored, err := store.Rollback(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("revision %s was not confirmed and could not be rolled back: %w", pending.Revision, err)
+	}
+	// Loud on purpose: this is the hub overruling an operator's deploy, and the
+	// reason has to be in the journal where they will look for it.
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+		"revision %s was not confirmed within the deadline; restored %s\n",
+		pending.Revision, restored.Revision)
+	// Forget the applied revision so the restored one is reported rather than
+	// suppressed as unchanged.
+	l.applied = ""
 	return nil
 }
 

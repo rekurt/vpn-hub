@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -15,6 +16,7 @@ import (
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	"vpn-hub/internal/application"
 	"vpn-hub/internal/domain"
+	"vpn-hub/internal/ports"
 )
 
 func NewHubctlCommand(out, errOut io.Writer) *cobra.Command {
@@ -35,6 +37,10 @@ func NewHubctlCommand(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(newTestCommand(&configPath))
 	root.AddCommand(newSubscriptionCommand(&configPath))
 	root.AddCommand(newDeviceCommand(&configPath))
+	root.AddCommand(newTunnelCommand(&configPath))
+	root.AddCommand(newRoutesCommand(&configPath))
+	root.AddCommand(newConfirmCommand())
+	root.AddCommand(newRollbackCommand())
 	root.AddCommand(newKeygenCommand())
 	return root
 }
@@ -74,6 +80,7 @@ func newValidateCommand(configPath *string) *cobra.Command {
 func newDeployCommand(configPath *string) *cobra.Command {
 	var stateDir string
 	var dryRun bool
+	var confirmWithin time.Duration
 	command := &cobra.Command{
 		Use:   "deploy",
 		Short: "Compile and safely apply a desired-state revision locally",
@@ -102,7 +109,19 @@ func newDeployCommand(configPath *string) *cobra.Command {
 					state.Revision, len(state.Tunnels), len(state.Devices))
 				return err
 			}
+			confirmations := runtimeadapter.ConfirmationStore{StateDir: stateDir}
+			if confirmWithin > 0 {
+				if err := confirmations.Arm(cmd.Context(), confirmWithin, state.Revision); err != nil {
+					return err
+				}
+			}
 			if err := service.Save(cmd.Context(), state); err != nil {
+				return err
+			}
+			if confirmWithin > 0 {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(),
+					"saved revision %s; run `hubctl confirm` within %s or the agent restores the previous one\n",
+					state.Revision, confirmWithin)
 				return err
 			}
 			// The agent converges the host onto this; hubctl never touches it.
@@ -113,6 +132,54 @@ func newDeployCommand(configPath *string) *cobra.Command {
 	}
 	command.Flags().StringVar(&stateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
 	command.Flags().BoolVar(&dryRun, "dry-run", true, "print the plan without persisting state")
+	command.Flags().DurationVar(&confirmWithin, "confirm-within", 0,
+		"restore the previous revision unless `hubctl confirm` runs within this time")
+	return command
+}
+
+func newConfirmCommand() *cobra.Command {
+	var stateDir string
+	command := &cobra.Command{
+		Use:   "confirm",
+		Short: "Accept the deployed revision and drop the rollback timer",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			store := runtimeadapter.ConfirmationStore{StateDir: stateDir}
+			pending, armed, err := store.Load()
+			if err != nil {
+				return err
+			}
+			if !armed {
+				return fmt.Errorf("nothing is awaiting confirmation")
+			}
+			if err := store.Confirm(); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "confirmed revision %s\n", pending.Revision)
+			return err
+		},
+	}
+	command.Flags().StringVar(&stateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
+	return command
+}
+
+func newRollbackCommand() *cobra.Command {
+	var stateDir string
+	command := &cobra.Command{
+		Use:   "rollback",
+		Short: "Return to the previous revision now",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			state, err := runtimeadapter.ConfirmationStore{StateDir: stateDir}.Rollback(cmd.Context())
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(),
+				"restored revision %s; the agent applies it on its next pass\n", state.Revision)
+			return err
+		},
+	}
+	command.Flags().StringVar(&stateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
 	return command
 }
 
@@ -129,7 +196,16 @@ func newStatusCommand() *cobra.Command {
 			// This is the revision the hub was told to converge on, read back from
 			// disk. It is not a report of what the machine is currently doing;
 			// observing that arrives with the reconciler.
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "desired: revision=%s generated_at=%s tunnels=%d devices=%d\n", state.Revision, state.GeneratedAt.Format("2006-01-02T15:04:05Z"), len(state.Tunnels), len(state.Devices))
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "desired: revision=%s generated_at=%s tunnels=%d devices=%d\n", state.Revision, state.GeneratedAt.Format("2006-01-02T15:04:05Z"), len(state.Tunnels), len(state.Devices)); err != nil {
+				return err
+			}
+			pending, armed, err := runtimeadapter.ConfirmationStore{StateDir: stateDir}.Load()
+			if err != nil || !armed {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(),
+				"awaiting confirmation: %s left before the previous revision is restored\n",
+				time.Until(pending.Deadline).Round(time.Second))
 			return err
 		},
 	}
@@ -210,6 +286,8 @@ func newDeviceCommand(configPath *string) *cobra.Command {
 	var stateDir string
 	command := newParentCommand("device", "Manage device admission")
 	command.AddCommand(newDeviceAddCommand(configPath))
+	command.AddCommand(newDeviceListCommand(configPath))
+	command.AddCommand(newDeviceSetEgressCommand(configPath))
 	revoke := &cobra.Command{
 		Use:   "revoke <id>",
 		Short: "Persist a local device revocation consumed by the agent",
@@ -228,9 +306,18 @@ func newDeviceCommand(configPath *string) *cobra.Command {
 	return command
 }
 
+// configRepository reads a directory layout when given one and a single file
+// otherwise, so the example and the tests need no directory.
+func configRepository(path string) ports.ConfigRepository {
+	if configadapter.IsDirectory(path) {
+		return configadapter.DirectoryRepository{Path: path}
+	}
+	return configadapter.ViperRepository{Path: path}
+}
+
 func newService(configPath, stateDir string) application.Service {
 	return application.Service{
-		ConfigRepository: configadapter.ViperRepository{Path: configPath},
+		ConfigRepository: configRepository(configPath),
 		RevisionStore:    runtimeadapter.FileRevisionStore{StateDir: stateDir},
 		// Probing from the host would measure the host's own connectivity, which is
 		// the path the tunnel exists to avoid.

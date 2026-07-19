@@ -22,6 +22,9 @@
 - **SOPS**: upstream-конфиги расшифровываются прозрачно, определение по содержимому файла;
 - **отзыв устройства**: `device revoke` + `deploy` убирает пира, связь рвётся;
 - `hubctl keygen` и `device add` — ключи и профили без ручного редактирования YAML;
+- **конфигурация каталогом**: `hub.yaml`, `devices.yaml`, `tunnels/*.yaml` — файл на туннель;
+- **операционные команды**, правящие YAML с сохранением комментариев: `tunnel list/enable/disable/routes/zones`, `device list/set-egress`, `routes`;
+- **подтверждение с таймером**: `deploy --confirm-within 5m`, и агент сам возвращает предыдущую ревизию, если не подтвердить;
 - генерация клиентских AmneziaWG-профилей;
 - атомарное сохранение состояния с fsync и блокировкой директории.
 
@@ -50,14 +53,33 @@ go run ./cmd/hubctl deploy --config configs/example.yaml --state-dir ./state --d
 go run ./cmd/vpn-hub-agent reconcile --state-dir ./state --dry-run
 ```
 
-Заведение устройства и выпуск профиля:
+Заведение устройства:
 
 ```sh
 hubctl keygen --output /etc/vpn-hub/server.key   # один раз на хаб
-hubctl device add laptop --egress direct --address 10.80.0.2/32
-# вставить напечатанный блок в devices, приватный ключ оставить устройству
-hubctl profile render --device laptop --egress direct --output ./laptop.conf
+hubctl device add laptop --egress provider-nl --address 10.80.0.2/32 --output laptop.conf
+# вставить напечатанный блок в devices; laptop.conf отдать устройству
 ```
+
+Приватный ключ существует ровно один раз — при генерации, сразу попадая в профиль клиента. Хаб хранит только публичную половину, поэтому переиздать потерянный профиль можно лишь с новым ключом; это и правильный ответ.
+
+## Эксплуатация
+
+```sh
+hubctl tunnel list                              что есть и что включено
+hubctl tunnel disable corp-a                    выключить, не удаляя конфиг
+hubctl tunnel routes corp-a --add 10.30.0.0/16
+hubctl device set-egress laptop provider-de     сменить провайдера, клиент не трогаем
+hubctl routes                                   какой адрес куда поедет
+hubctl deploy --confirm-within 5m               с автооткатом
+hubctl confirm
+```
+
+Команды правят YAML и сохраняют комментарии: для сетевой конфигурации пояснение «почему этот маршрут» часто ценнее самого маршрута.
+
+Выключить туннель, которым пользуется устройство, нельзя — команда откажет и назовёт устройства. Молчаливый откат на `direct` противоречил бы kill switch.
+
+`--confirm-within` существует потому, что хаб удалённый: ошибка в ruleset рвёт ту самую SSH-сессию, из которой её чинить. Не подтвердили — агент возвращает предыдущую ревизию сам.
 
 `configs/example.yaml` намеренно не содержит приватных ключей: хабу нужна только публичная половина, а пример приватного ключа рано или поздно копируют в реальную установку.
 
