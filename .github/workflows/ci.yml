@@ -38,7 +38,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: golangci/golangci-lint-action@v6
+      # v8 is the first release that understands the version 2 configuration format.
+      - uses: golangci/golangci-lint-action@v8
         with:
           version: latest
 

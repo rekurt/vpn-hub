@@ -66,8 +66,29 @@ func (b bed) waitForTraffic(t *testing.T) string {
 		}
 		time.Sleep(2 * time.Second)
 	}
-	t.Fatalf("no traffic reached the internet\n%s", sh(t, "nft list table inet vpn_hub"))
+	t.Fatalf("no traffic reached the internet\n%s", diagnose(t))
 	return ""
+}
+
+// diagnose collects the state that distinguishes the ways this can fail: no
+// handshake, no route, a rule that never matched, or an environment that cannot reach
+// the probe target at all.
+func diagnose(t *testing.T) string {
+	t.Helper()
+	var report strings.Builder
+	for _, step := range []struct{ title, command string }{
+		{"hub interface", fmt.Sprintf("wg show %s", hubInterface)},
+		{"client interface", fmt.Sprintf("ip netns exec %s wg show %s", clientNS, clientLink)},
+		{"client routes", fmt.Sprintf("ip -n %s route", clientNS)},
+		{"client reaches the hub", fmt.Sprintf("ip netns exec %s ping -c2 -W2 10.99.0.1", clientNS)},
+		{"client reaches the target", fmt.Sprintf("ip netns exec %s ping -c2 -W2 1.1.1.1", clientNS)},
+		{"root namespace reaches the target", "curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://1.1.1.1/cdn-cgi/trace"},
+		{"ruleset", "nft list table inet vpn_hub"},
+	} {
+		output, _ := exec.Command("bash", "-c", step.command+" 2>&1").CombinedOutput()
+		fmt.Fprintf(&report, "\n--- %s ---\n%s", step.title, output)
+	}
+	return report.String()
 }
 
 func newBed(t *testing.T) bed {
@@ -93,6 +114,12 @@ func newBed(t *testing.T) bed {
 	uplink := sh(t, "ip -j route show default | jq -r '.[0].dev'")
 	if uplink == "" || uplink == "null" {
 		t.Skip("no default route on this machine")
+	}
+	// If the machine itself cannot reach the probe target, a failure downstream would
+	// say nothing about the hub.
+	if err := exec.Command("bash", "-c",
+		"curl -s --max-time 8 -o /dev/null https://1.1.1.1/cdn-cgi/trace").Run(); err != nil {
+		t.Skip("this machine cannot reach the probe target, so the tunnel cannot be judged")
 	}
 
 	hubKey := sh(t, "wg genkey")
