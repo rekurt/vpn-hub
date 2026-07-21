@@ -15,6 +15,13 @@ RestartSec=5s
 RuntimeDirectory=vpn-hub
 StateDirectory=vpn-hub
 ConfigurationDirectory=vpn-hub
+# All three hold secrets -- the runtime key, the persisted device-profile keys and
+# state, and the config/token -- so close them to their owner. Declaring the mode
+# also matches what is already on disk: without it systemd assumes the 0755 default
+# and logs "mode is different" on every start against the 0700 directories.
+RuntimeDirectoryMode=0700
+StateDirectoryMode=0700
+ConfigurationDirectoryMode=0700
 
 UMask=0077
 ProtectSystem=strict

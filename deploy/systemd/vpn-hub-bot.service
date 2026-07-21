@@ -14,7 +14,10 @@ RuntimeDirectory=vpn-hub
 StateDirectory=vpn-hub
 ConfigurationDirectory=vpn-hub
 # The token lives in /etc/vpn-hub and the offset/settings in /var/lib/vpn-hub;
-# close both directories to their owner even though the files inside are 0600.
+# close all three directories to their owner even though the files inside are 0600.
+# Declaring every mode also keeps systemd from logging "mode is different" when it
+# finds the on-disk 0700 under its assumed 0755 default.
+RuntimeDirectoryMode=0700
 ConfigurationDirectoryMode=0700
 StateDirectoryMode=0700
 

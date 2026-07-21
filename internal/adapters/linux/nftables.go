@@ -64,13 +64,22 @@ func allowedSets(plan domain.FirewallPlan) []struct {
 	return result
 }
 
-// Fingerprint identifies a firewall plan by its content.
+// rulesetFormatVersion is folded into the fingerprint so that a change to how a plan
+// renders -- not just to the plan itself -- makes the agent re-apply the ruleset.
+// The fingerprint is computed from the plan rather than the rendered text (the text
+// carries the marker, so hashing it would have to hash around itself), which means a
+// renderer fix alone leaves the fingerprint unchanged and never deploys. Bump this
+// whenever RenderRuleset's output changes for an unchanged plan.
 //
-// It is deliberately computed from the plan rather than from the rendered text: the
-// rendering is what the fingerprint is embedded in, so hashing the output would have
-// to hash around its own marker.
+//	1: forwarded TCP MSS clamp matched on the SYN|RST mask, not a bare `flags syn`.
+const rulesetFormatVersion = 1
+
+// Fingerprint identifies a firewall plan by its content and rendering format.
 func Fingerprint(plan domain.FirewallPlan) string {
-	payload, err := json.Marshal(plan)
+	payload, err := json.Marshal(struct {
+		Version int                 `json:"version"`
+		Plan    domain.FirewallPlan `json:"plan"`
+	}{rulesetFormatVersion, plan})
 	if err != nil {
 		// FirewallPlan holds only strings, numbers and slices of them.
 		panic("firewall plan is not serialisable: " + err.Error())

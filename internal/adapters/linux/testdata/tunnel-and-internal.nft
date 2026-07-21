@@ -6,7 +6,7 @@ table inet vpn_hub
 delete table inet vpn_hub
 
 table inet vpn_hub {
-	comment "vpn-hub:677e9497fd252595"
+	comment "vpn-hub:296d2a437dff7533"
 
 	set client_direct {
 		type ipv4_addr
