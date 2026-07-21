@@ -26,6 +26,7 @@ table inet vpn_hub {
 
 	chain forward {
 		type filter hook forward priority filter; policy drop;
+		tcp flags syn tcp option maxseg size set 1240
 		ct state established,related accept
 		iifname "awg0" oifname "awg0" drop
 		iifname "awg0" tcp dport 853 reject with tcp reset
@@ -40,6 +41,7 @@ table inet vpn_hub {
 		ip protocol icmp accept
 		tcp dport 22 accept
 		udp dport 51820 accept
+		tcp dport 443 accept
 		iifname "awg0" ip daddr 10.80.0.1 udp dport 53 accept
 		iifname "awg0" ip daddr 10.80.0.1 tcp dport 53 accept
 	}

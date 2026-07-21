@@ -49,6 +49,15 @@ resource "digitalocean_firewall" "hub" {
     source_addresses = ["0.0.0.0/0"]
   }
 
+  # A TCP/443 fallback is deliberately separate from AmneziaWG.  Reality makes
+  # its TLS handshake look like an ordinary HTTPS connection on networks that
+  # discard or shape every UDP flow.
+  inbound_rule {
+    protocol         = "tcp"
+    port_range       = "443"
+    source_addresses = ["0.0.0.0/0"]
+  }
+
   inbound_rule {
     protocol         = "icmp"
     source_addresses = ["0.0.0.0/0"]

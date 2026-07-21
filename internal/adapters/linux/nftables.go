@@ -12,6 +12,13 @@ import (
 	"vpn-hub/internal/domain"
 )
 
+// forwardedMSSClamp is the largest TCP MSS a forwarded connection may negotiate. It
+// leaves room under a 1280-byte inner packet -- the smallest IPv6-era path worth
+// planning for -- for the WireGuard and AmneziaWG obfuscation overhead the datagram
+// then carries across the client's own uplink. Fixed rather than derived from a route
+// MTU: the constraining hop is on the client side, which the hub never measures.
+const forwardedMSSClamp = 1240
+
 // internalSetName names the address set of one private network. Identifier safety
 // comes from validation, which restricts tunnel IDs to a charset nftables accepts.
 func internalSetName(tunnelID string) string {
@@ -156,6 +163,18 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	// with an egress rule, so a tunnel that is down drops rather than falls back.
 	line("\tchain forward {")
 	line("\t\ttype filter hook forward priority filter; policy drop;")
+	// Clamp the MSS of every forwarded TCP connection before anything else. A client
+	// reaches the hub across a path whose MTU the hub cannot see -- a mobile carrier,
+	// or a link that shrinks packets to disguise the tunnel -- and the encrypted
+	// datagram carrying a full-size segment is silently dropped there. The handshake,
+	// being small, still gets through, so the tunnel looks up while bulk transfer
+	// stalls: pages never load though ping and DNS work. Clamping to a value that
+	// survives the WireGuard and obfuscation overhead on top of the smallest path we
+	// expect fixes it without depending on PMTU discovery, which such paths also break.
+	// The rule sets an option and returns no verdict, so traversal continues to the
+	// egress rules below. It precedes the established-state accept so the SYN and
+	// SYN-ACK, which are new, are both reached.
+	line("\t\ttcp flags syn tcp option maxseg size set %d", forwardedMSSClamp)
 	line("\t\tct state established,related accept")
 	line("\t\tiifname %q oifname %q drop", plan.IngressInterface, plan.IngressInterface)
 	// DNS-over-TLS is refused before any egress rule can accept it. A client that
@@ -210,6 +229,10 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\t\tip protocol icmp accept")
 	line("\t\ttcp dport %d accept", plan.ManagementPort)
 	line("\t\tudp dport %d accept", plan.ListenPort)
+	// Reality is a TCP fallback for networks that discard encrypted UDP. Keep this
+	// in the reconciled table rather than in a parallel table: verdicts from a
+	// second base chain do not bypass this chain's drop policy.
+	line("\t\ttcp dport 443 accept")
 	line("\t\tiifname %q ip daddr %s udp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
 	line("\t\tiifname %q ip daddr %s tcp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
 	line("\t}")

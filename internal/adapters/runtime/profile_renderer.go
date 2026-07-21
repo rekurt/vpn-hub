@@ -31,6 +31,14 @@ func (AmneziaProfileRenderer) Render(hub domain.Hub, address, privateKey string)
 	builder.WriteString("PrivateKey = " + privateKey + "\n")
 	builder.WriteString("Address = " + address + "\n")
 	builder.WriteString("DNS = " + hub.DNSAddress + "\n")
+	// Cap the tunnel MTU rather than leave the client on its 1420 default. The client
+	// reaches the hub across a path -- a mobile carrier, a link that shrinks packets --
+	// whose MTU it cannot see, and a full-size encrypted datagram is dropped there
+	// without warning: the handshake works while every larger packet, TCP or QUIC,
+	// vanishes. The hub also clamps forwarded TCP MSS, but that cannot help UDP; a low
+	// client MTU covers both. The value leaves headroom under a 1280-byte path for the
+	// WireGuard and obfuscation overhead the datagram carries on top.
+	builder.WriteString("MTU = 1240\n")
 
 	// Emit the canonical spelling: configuration decoding lower-cases these keys, and
 	// the client expects `Jc`, not `jc`. Validation has already rejected anything that
