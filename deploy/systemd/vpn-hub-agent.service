@@ -11,14 +11,17 @@ Restart=on-failure
 RestartSec=5s
 
 # systemd creates and owns these, so the unit no longer fails with 226/NAMESPACE on a
-# clean host. They map to /run/vpn-hub, /var/lib/vpn-hub and /etc/vpn-hub and are
-# implicitly writable even under ProtectSystem=strict.
+# clean host. They map to /run/vpn-hub, /var/lib/vpn-hub and /etc/vpn-hub.
 RuntimeDirectory=vpn-hub
 StateDirectory=vpn-hub
 ConfigurationDirectory=vpn-hub
 
 UMask=0077
 ProtectSystem=strict
+# RuntimeDirectory is normally writable under ProtectSystem=strict. Declare it
+# explicitly as well: the reconciler writes one-time key and provider files here,
+# and older systemd sandbox combinations otherwise expose it read-only.
+ReadWritePaths=/run/vpn-hub
 ProtectHome=true
 PrivateTmp=true
 NoNewPrivileges=true
