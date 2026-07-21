@@ -10,6 +10,11 @@ import (
 
 type AmneziaProfileRenderer struct{}
 
+// defaultI1 is Amnezia's documented DNS-shaped client-side signature for
+// AmneziaWG 1.5. It is sent before the handshake, which makes a profile less
+// recognisable to DPI without requiring a matching server-side setting.
+const defaultI1 = "<r 2><b 0x8580000100010000000004796162730679616e6465780272750000010001c00c000100010000026d000457fa27d1>"
+
 // Render builds a client profile. The private key is supplied by the caller rather
 // than read from configuration: the hub stores only public keys, so the one moment a
 // private key exists is when it is generated for a new device.
@@ -42,6 +47,10 @@ func (AmneziaProfileRenderer) Render(hub domain.Hub, address, privateKey string)
 		}
 		builder.WriteString(name + " = " + hub.AWGInterface[key] + "\n")
 	}
+	// I1 is deliberately profile-only. AmneziaWG treats signature packets as
+	// optional pre-handshake camouflage, so adding it to a client does not alter
+	// the ingress protocol or invalidate existing peers.
+	builder.WriteString("I1 = " + defaultI1 + "\n")
 
 	builder.WriteString("\n[Peer]\n")
 	builder.WriteString("PublicKey = " + hub.ServerPublicKey + "\n")

@@ -18,7 +18,7 @@ func TestAmneziaProfileRenderer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, wanted := range []string{"[Interface]", "PrivateKey = " + privateKey, "Jc = 4", "[Peer]", "AllowedIPs = 0.0.0.0/0"} {
+	for _, wanted := range []string{"[Interface]", "PrivateKey = " + privateKey, "Jc = 4", "I1 = " + defaultI1, "[Peer]", "AllowedIPs = 0.0.0.0/0"} {
 		if !strings.Contains(profile, wanted) {
 			t.Fatalf("profile does not contain %q:\n%s", wanted, profile)
 		}
