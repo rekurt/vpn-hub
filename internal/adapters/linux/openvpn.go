@@ -60,16 +60,17 @@ func (e Egress) ensureOpenVPN(ctx context.Context, spec domain.EgressSpec) error
 	}
 
 	unit := "vpn-hub-openvpn-" + spec.TunnelID
+	// OpenVPN removes routes it installed when it reconnects. Keep the provider's
+	// address pinned to the veth on every reconcile, not just when its generated
+	// configuration changes; otherwise the next UDP handshake follows the tunnel
+	// that is currently down and can never recover.
+	if err := e.ensureRemoteRoutes(ctx, spec); err != nil {
+		return err
+	}
 	if !changed {
 		if _, err := e.run(ctx, "systemctl", "is-active", "--quiet", unit+".service"); err == nil {
 			return e.ensureOpenVPNRoutes(ctx, spec)
 		}
-	}
-	// The remote must be reachable without going through the tunnel being built:
-	// ensureOpenVPNRoutes replaces the namespace default with the tun device, and
-	// OpenVPN's own socket would then follow it straight back into itself.
-	if err := e.ensureRemoteRoutes(ctx, spec); err != nil {
-		return err
 	}
 
 	_, _ = e.run(ctx, "systemctl", "stop", unit+".service")
@@ -108,7 +109,10 @@ func (e Egress) ensureRemoteRoutes(ctx context.Context, spec domain.EgressSpec) 
 // negotiates before it appears, so this is retried rather than assumed.
 func (e Egress) ensureOpenVPNRoutes(ctx context.Context, spec domain.EgressSpec) error {
 	var lastErr error
-	for range 30 {
+	// A remote may spend a full TLS retransmission interval before assigning its
+	// tun device. Stopping at 30 seconds races a healthy first connection and leaves
+	// the reconciler reporting a failure moments before the interface appears.
+	for range 60 {
 		_, lastErr = e.run(ctx, "ip", "-n", spec.Namespace, "link", "show", spec.Interface)
 		if lastErr == nil {
 			break
