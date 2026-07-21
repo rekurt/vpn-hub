@@ -1,0 +1,9 @@
+# Managed by vpn-hub. Keep this separate from inet vpn_hub: the agent replaces
+# its own table on every reconcile, while this preserves the alternate public
+# listener for networks that filter UDP/51820.
+table ip vpn_hub_alt_udp443 {
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+		udp dport 443 dnat to :51820
+	}
+}

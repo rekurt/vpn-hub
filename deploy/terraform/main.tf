@@ -41,6 +41,14 @@ resource "digitalocean_firewall" "hub" {
     source_addresses = ["0.0.0.0/0"]
   }
 
+  # Kept alongside the primary port for mobile networks that block or throttle
+  # conventional WireGuard traffic. The host DNATs it to the ingress socket.
+  inbound_rule {
+    protocol         = "udp"
+    port_range       = "443"
+    source_addresses = ["0.0.0.0/0"]
+  }
+
   inbound_rule {
     protocol         = "icmp"
     source_addresses = ["0.0.0.0/0"]

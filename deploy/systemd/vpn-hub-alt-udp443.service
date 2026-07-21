@@ -1,0 +1,15 @@
+[Unit]
+Description=vpn-hub alternate UDP 443 ingress
+After=network-online.target
+Wants=network-online.target
+Before=vpn-hub-agent.service
+
+[Service]
+Type=oneshot
+ExecStartPre=-/usr/sbin/nft delete table ip vpn_hub_alt_udp443
+ExecStart=/usr/sbin/nft -f /etc/vpn-hub/vpn-hub-alt-udp443.nft
+ExecStop=/usr/sbin/nft delete table ip vpn_hub_alt_udp443
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
