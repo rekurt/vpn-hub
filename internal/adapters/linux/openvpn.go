@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -68,8 +69,15 @@ func (e Egress) ensureOpenVPN(ctx context.Context, spec domain.EgressSpec) error
 		return err
 	}
 	if !changed {
+		// is-active alone is not enough. The management socket can be gone while the
+		// unit still reports active -- a /run wipe, or a process that stopped serving
+		// it -- and then the health check reports "socket not answering" while
+		// convergence, seeing an unchanged config and an active unit, never repairs it.
+		// A missing socket file is a deterministic signal to restart.
 		if _, err := e.run(ctx, "systemctl", "is-active", "--quiet", unit+".service"); err == nil {
-			return e.ensureOpenVPNRoutes(ctx, spec)
+			if _, statErr := os.Stat(socket); statErr == nil {
+				return e.ensureOpenVPNRoutes(ctx, spec)
+			}
 		}
 	}
 

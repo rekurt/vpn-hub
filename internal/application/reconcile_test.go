@@ -127,6 +127,56 @@ func TestFirewallIsAppliedBeforeIngress(t *testing.T) {
 	}
 }
 
+type recordingEgress struct {
+	applied int
+	err     error
+}
+
+func (e *recordingEgress) Apply(context.Context, []domain.EgressSpec) error {
+	e.applied++
+	return e.err
+}
+
+func (e *recordingEgress) Observe(context.Context) ([]string, error) { return nil, nil }
+
+type recordingDNS struct {
+	applied     int
+	repopulated bool
+	err         error
+}
+
+func (d *recordingDNS) Apply(_ context.Context, _ domain.DNSPlan, repopulate bool) error {
+	d.applied++
+	d.repopulated = repopulate
+	return d.err
+}
+
+// A provider that is down must not stop the resolvers converging. Egress.Apply
+// returning an error used to short-circuit the reconcile before DNS.Apply ran, so on
+// a tick that rebuilt the firewall (the internal sets just emptied) private-zone
+// traffic would fall through to the default egress until a clean tick. DNS must be
+// applied regardless, and both errors reported.
+func TestDNSAppliesEvenWhenEgressFails(t *testing.T) {
+	t.Parallel()
+	key, state := hubKeyPair(t)
+	egress := &recordingEgress{err: fmt.Errorf("provider unreachable")}
+	dns := &recordingDNS{}
+	r := newReconciler(key, &recordingFirewall{}, &recordingIngress{})
+	r.Egress = egress
+	r.DNS = dns
+
+	_, err := r.Apply(context.Background(), state)
+	if err == nil || !strings.Contains(err.Error(), "provider unreachable") {
+		t.Fatalf("Apply err = %v, want it to report the egress failure", err)
+	}
+	if egress.applied != 1 {
+		t.Fatalf("Egress.Apply called %d times, want 1", egress.applied)
+	}
+	if dns.applied != 1 {
+		t.Errorf("DNS.Apply called %d times, want 1 despite the egress failure", dns.applied)
+	}
+}
+
 // A hub key that does not match the revision means every issued client profile names
 // the wrong peer, so no handshake can ever succeed. Failing loudly beats a dead hub.
 func TestMismatchedHubKeyIsRejected(t *testing.T) {

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -98,17 +99,29 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 	}
 	// Egress namespaces come last: the marks that steer traffic into them are already
 	// installed, so a half-built namespace drops traffic rather than leaking it.
+	//
+	// A failing egress -- an OpenVPN or Xray provider that is down -- must NOT stop
+	// the DNS layer from converging. Egress.Apply already isolates its per-tunnel
+	// failures, but its non-nil result used to short-circuit the reconcile before
+	// DNS.Apply ran. On a tick that rebuilt the firewall the internal sets were just
+	// emptied, so skipping DNS left private-zone answers unpopulated and their traffic
+	// following the default (internet) egress -- the silent misroute the rebuild
+	// exists to prevent. So apply DNS regardless and report both errors together.
+	var errs []error
 	if r.Egress != nil {
 		if err := r.Egress.Apply(ctx, egresses); err != nil {
-			return nil, fmt.Errorf("apply egress: %w", err)
+			errs = append(errs, fmt.Errorf("apply egress: %w", err))
 		}
 	}
 	// Resolvers after the namespaces they live in and forward through. The plan
 	// itself was derived by compile, before any of the above ran.
 	if r.DNS != nil {
 		if err := r.DNS.Apply(ctx, compiled.dns, rebuilt); err != nil {
-			return nil, fmt.Errorf("apply dns: %w", err)
+			errs = append(errs, fmt.Errorf("apply dns: %w", err))
 		}
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 	return operations, nil
 }
