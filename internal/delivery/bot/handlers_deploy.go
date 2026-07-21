@@ -144,6 +144,15 @@ func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRev
 }
 
 func (b *Bot) confirmDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
+	// Serialize with the other confirmation-state mutators (rollback, scheduled
+	// refresh) through the same gate rollbackDeploy takes: both write Confirmations,
+	// and confirming while a rollback is in flight must not race.
+	release, busyWith, ok := b.gate.Acquire("подтверждение")
+	if !ok {
+		return busyResult(busyWith)
+	}
+	defer release()
+
 	pending, armed, err := b.Confirmations.Load()
 	if err != nil {
 		return result{toast: err.Error(), alert: true}

@@ -20,6 +20,10 @@ ConfigurationDirectory=vpn-hub
 RuntimeDirectoryMode=0700
 ConfigurationDirectoryMode=0700
 StateDirectoryMode=0700
+# Shared with vpn-hub-agent: keep /run/vpn-hub across a restart of this service so a
+# single-service restart cannot tear the shared runtime directory (and the egress
+# sockets and keys the agent keeps there) out from under the other service.
+RuntimeDirectoryPreserve=yes
 
 # The bot is the operator's seat, not the reconciler: it edits /etc/vpn-hub, forks
 # systemctl/journalctl/qrencode and builds the canary namespace for subscription
