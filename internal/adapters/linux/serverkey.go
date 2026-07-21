@@ -44,9 +44,6 @@ func (s ServerKeyFile) PrivateKey(_ context.Context) (string, error) {
 // Create writes a freshly generated key, refusing to overwrite an existing one:
 // replacing the hub key invalidates every client profile already issued.
 func (s ServerKeyFile) Create() (publicKey string, err error) {
-	if _, err := os.Stat(s.path()); err == nil {
-		return "", fmt.Errorf("%s already exists; replacing the hub key would invalidate every issued client profile", s.path())
-	}
 	private, public, err := domain.GenerateX25519KeyPair()
 	if err != nil {
 		return "", err
@@ -54,7 +51,22 @@ func (s ServerKeyFile) Create() (publicKey string, err error) {
 	if err := os.MkdirAll(filepath.Dir(s.path()), 0o700); err != nil {
 		return "", fmt.Errorf("create key directory: %w", err)
 	}
-	if err := os.WriteFile(s.path(), []byte(private+"\n"), 0o600); err != nil {
+	// O_EXCL makes "refuse to overwrite" atomic and correct. A Stat check first races
+	// a concurrent writer, and a Stat error other than not-exist (e.g. EACCES) would
+	// be read as "absent" and clobber a key that is in fact present -- which would
+	// invalidate every issued client profile.
+	handle, err := os.OpenFile(s.path(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return "", fmt.Errorf("%s already exists; replacing the hub key would invalidate every issued client profile", s.path())
+		}
+		return "", fmt.Errorf("write hub key: %w", err)
+	}
+	if _, err := handle.WriteString(private + "\n"); err != nil {
+		_ = handle.Close()
+		return "", fmt.Errorf("write hub key: %w", err)
+	}
+	if err := handle.Close(); err != nil {
 		return "", fmt.Errorf("write hub key: %w", err)
 	}
 	return public, nil

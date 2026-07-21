@@ -34,6 +34,14 @@ func (h HealthCheck) Validate() error {
 	}
 
 	if h.HTTPSURL != "" {
+		// url.Parse already rejects ASCII control characters, but not spaces or shell
+		// metacharacters in the path or query. Only the hostname was being checked, so
+		// the rest of the URL was the one probe value left unconstrained. Reject any
+		// whitespace in the whole URL: it closes the "https://ok/ -o /etc/passwd" shape
+		// this field's threat model means to exclude, at no cost to real probe URLs.
+		if strings.ContainsAny(h.HTTPSURL, " \t\r\n") {
+			return fmt.Errorf("https_url %q must not contain whitespace", h.HTTPSURL)
+		}
 		parsed, err := url.Parse(h.HTTPSURL)
 		if err != nil {
 			return fmt.Errorf("https_url %q: %w", h.HTTPSURL, err)

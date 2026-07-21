@@ -44,6 +44,20 @@ func (s RevocationStore) Add(ctx context.Context, deviceID string) error {
 	if s.StateDir == "" {
 		return fmt.Errorf("state directory is required")
 	}
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		return fmt.Errorf("create state directory: %w", err)
+	}
+	// Hold the cross-process lock across the whole read-modify-write. The bot and
+	// hubctl both revoke into this one file; reading before taking the lock lets two
+	// concurrent revocations start from the same snapshot and the second overwrite the
+	// first -- silently dropping a revocation, which for a stolen device leaves it
+	// authorised.
+	release, err := lockStateDir(s.StateDir)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	existing, err := s.Load(ctx)
 	if err != nil {
 		return err
@@ -53,15 +67,6 @@ func (s RevocationStore) Add(ctx context.Context, deviceID string) error {
 			return nil
 		}
 	}
-
-	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
-		return fmt.Errorf("create state directory: %w", err)
-	}
-	release, err := lockStateDir(s.StateDir)
-	if err != nil {
-		return err
-	}
-	defer release()
 
 	ids := append(existing, deviceID)
 	sort.Strings(ids)
@@ -79,6 +84,16 @@ func (s RevocationStore) Remove(ctx context.Context, deviceID string) error {
 	if s.StateDir == "" {
 		return fmt.Errorf("state directory is required")
 	}
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		return fmt.Errorf("create state directory: %w", err)
+	}
+	// Lock before reading, for the same lost-update reason as Add.
+	release, err := lockStateDir(s.StateDir)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	existing, err := s.Load(ctx)
 	if err != nil {
 		return err
@@ -92,12 +107,6 @@ func (s RevocationStore) Remove(ctx context.Context, deviceID string) error {
 	if len(kept) == len(existing) {
 		return nil
 	}
-
-	release, err := lockStateDir(s.StateDir)
-	if err != nil {
-		return err
-	}
-	defer release()
 
 	data, err := json.MarshalIndent(kept, "", "  ")
 	if err != nil {

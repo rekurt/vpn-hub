@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,8 +54,15 @@ func (c ConfirmationStore) path(name string) string { return filepath.Join(c.Sta
 // nothing.
 func (c ConfirmationStore) Arm(ctx context.Context, within time.Duration, revision string) (bool, error) {
 	current, err := (FileRevisionStore{StateDir: c.StateDir}).Load(ctx)
+	if errors.Is(err, os.ErrNotExist) {
+		// No earlier revision to return to -- the honest first-deploy case.
+		return false, nil
+	}
 	if err != nil {
-		return false, nil //nolint:nilerr // no previous revision is not a failure
+		// A real read error (I/O, permissions, corrupt JSON) is NOT "no previous
+		// revision": treating it as such would overwrite an unsnapshotted working
+		// revision and tell the operator a rollback is armed when none is. Surface it.
+		return false, fmt.Errorf("load current revision to snapshot: %w", err)
 	}
 
 	data, err := json.MarshalIndent(current, "", "  ")

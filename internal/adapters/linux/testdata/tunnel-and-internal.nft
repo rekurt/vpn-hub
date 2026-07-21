@@ -43,7 +43,7 @@ table inet vpn_hub {
 
 	chain forward {
 		type filter hook forward priority filter; policy drop;
-		tcp flags syn tcp option maxseg size set 1240
+		tcp flags & (syn|rst) == syn tcp option maxseg size set 1240
 		ct state established,related accept
 		iifname "awg0" oifname "awg0" drop
 		iifname "awg0" tcp dport 853 reject with tcp reset

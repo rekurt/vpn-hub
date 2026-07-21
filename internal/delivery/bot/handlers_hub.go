@@ -440,6 +440,20 @@ func probeKind(key string) (field, title, example string, ok bool) {
 	return "", "", "", false
 }
 
+// probeValue reads the configured value of one probe kind off a HealthCheck, so a
+// removal can be reverted with the value it displaced.
+func probeValue(h domain.HealthCheck, kindKey string) string {
+	switch kindKey {
+	case "tcp":
+		return h.TCPAddress
+	case "https":
+		return h.HTTPSURL
+	case "dns":
+		return h.DNSName
+	}
+	return ""
+}
+
 func (b *Bot) buildProbes(ctx context.Context, tunnelID string) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
@@ -520,11 +534,27 @@ func (b *Bot) removeProbe(ctx context.Context, cb *tg.CallbackQuery, tunnelID, k
 	}
 	defer release()
 
+	// Capture the current value so the removal can be undone if it turns the config
+	// invalid -- symmetric to setting a probe (handleProbeSetInput reverts too). The
+	// config is valid now, so this read succeeds; without the revert a removal that
+	// broke validation would leave the config unloadable and the whole UI broken.
+	previous := ""
+	if cfg, err := b.Service.LoadAndValidate(ctx); err == nil {
+		for _, tunnel := range cfg.Tunnels {
+			if tunnel.ID == tunnelID {
+				previous = probeValue(tunnel.Health, kindKey)
+			}
+		}
+	}
+
 	if err := b.Editor.RemoveTunnelMapField(tunnelID, "health", field); err != nil {
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		return b.show(ctx, cb, renderFailure("проба удалена, но конфигурация перестала проходить проверку", err))
+		if previous != "" {
+			_ = b.Editor.SetTunnelMapField(tunnelID, "health", field, previous)
+		}
+		return b.show(ctx, cb, renderFailure("отменено: удаление пробы сделало конфигурацию невалидной", err))
 	}
 	outcome := b.show(ctx, cb, b.buildProbes(ctx, tunnelID))
 	outcome.toast = "Удалена " + title + "-проба"

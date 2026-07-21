@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
 	"vpn-hub/internal/domain"
 )
@@ -57,14 +58,30 @@ func validateProfileAddress(value, clientCIDR string) error {
 }
 
 func validateHubNetwork(hub domain.Hub) error {
-	if _, err := parseNetworkPrefix(hub.ClientCIDR); err != nil {
+	clientSubnet, err := parseNetworkPrefix(hub.ClientCIDR)
+	if err != nil {
 		return fmt.Errorf("invalid hub client_cidr %q: %w", hub.ClientCIDR, err)
+	}
+	// The client subnet must not overlap the range the veth links to tunnel
+	// namespaces are carved from: a device host address that lands on a link address
+	// would silently break routing between the main namespace and a tunnel. The
+	// separation is an invariant egress_spec relies on, so enforce it here rather than
+	// discover a collision at reconcile time.
+	if prefixesOverlap(hub.ClientCIDR, egressLinkBase) {
+		return fmt.Errorf("hub client_cidr %q overlaps the egress link base %s; choose a client subnet outside it", hub.ClientCIDR, egressLinkBase)
 	}
 	if err := validateEndpoint(hub.Endpoint); err != nil {
 		return err
 	}
-	if _, err := netip.ParseAddr(hub.DNSAddress); err != nil {
+	dnsAddr, err := netip.ParseAddr(hub.DNSAddress)
+	if err != nil {
 		return fmt.Errorf("invalid hub dns_address %q: %w", hub.DNSAddress, err)
+	}
+	// The resolver address is the hub's own address on the ingress interface, so it
+	// has to live inside the client subnet. Checked here rather than only at reconcile
+	// time (hubAddress) so `hubctl validate` rejects it before a deploy.
+	if !clientSubnet.Contains(dnsAddr) {
+		return fmt.Errorf("hub dns_address %q is outside client_cidr %s", hub.DNSAddress, hub.ClientCIDR)
 	}
 	if err := domain.ValidatePublicKey(hub.ServerPublicKey); err != nil {
 		return fmt.Errorf("hub server_public_key: %w", err)
@@ -79,6 +96,12 @@ func validateEndpoint(endpoint string) error {
 	}
 	if host == "" {
 		return fmt.Errorf("invalid hub endpoint %q: host is required", endpoint)
+	}
+	// The endpoint is substituted verbatim into the rendered client profile. Reject
+	// control characters in the host so a value cannot inject extra profile lines --
+	// net.SplitHostPort itself accepts them.
+	if strings.ContainsAny(host, "\r\n") {
+		return fmt.Errorf("invalid hub endpoint %q: host contains a control character", endpoint)
 	}
 	port, err := strconv.ParseUint(rawPort, 10, 16)
 	if err != nil || port == 0 {

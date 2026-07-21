@@ -174,7 +174,13 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	// The rule sets an option and returns no verdict, so traversal continues to the
 	// egress rules below. It precedes the established-state accept so the SYN and
 	// SYN-ACK, which are new, are both reached.
-	line("\t\ttcp flags syn tcp option maxseg size set %d", forwardedMSSClamp)
+	//
+	// Match on `flags & (syn|rst) == syn`, not a bare `flags syn`: the bare form
+	// compiles to an equality test on the whole flags byte and so matches only a pure
+	// SYN (0x02), missing the SYN-ACK (0x12). The MSS in the SYN bounds one direction
+	// and the MSS in the SYN-ACK the other, so clamping only the SYN would leave the
+	// server->client segment size unclamped and half the transfers still stalling.
+	line("\t\ttcp flags & (syn|rst) == syn tcp option maxseg size set %d", forwardedMSSClamp)
 	line("\t\tct state established,related accept")
 	line("\t\tiifname %q oifname %q drop", plan.IngressInterface, plan.IngressInterface)
 	// DNS-over-TLS is refused before any egress rule can accept it. A client that

@@ -7,8 +7,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -23,7 +26,16 @@ func (f HTTPSSubscriptionFetcher) Fetch(ctx context.Context, rawURL string) ([]b
 	}
 	client := f.Client
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second, CheckRedirect: httpsOnlyRedirect}
+		client = &http.Client{
+			Timeout:       15 * time.Second,
+			CheckRedirect: httpsOnlyRedirect,
+			// Guard at the socket, after DNS resolution, so a hostname that resolves
+			// to a private/metadata address is refused just as an IP literal is --
+			// covering both the original URL and any redirect target.
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{Timeout: 10 * time.Second, Control: refusePrivateDial}).DialContext,
+			},
+		}
 	}
 	maxSize := f.MaxSize
 	if maxSize == 0 {
@@ -63,6 +75,26 @@ func (f HTTPSSubscriptionFetcher) Fetch(ctx context.Context, rawURL string) ([]b
 func httpsOnlyRedirect(request *http.Request, _ []*http.Request) error {
 	if request.URL.Scheme != "https" {
 		return fmt.Errorf("subscription redirect to non-HTTPS %q refused", request.URL.Scheme)
+	}
+	return nil
+}
+
+// refusePrivateDial rejects a connection to a loopback, private, link-local or
+// unspecified address. It runs on the resolved dial target, so it closes the
+// server-side request forgery the scheme check cannot: a provider answering a
+// redirect to https://169.254.169.254/… or a hostname resolving into 10.x, aimed at
+// the metadata service or the private network this hub gateways.
+func refusePrivateDial(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("subscription dial %q: %w", address, err)
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return fmt.Errorf("subscription dial to unparseable address %q", host)
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return fmt.Errorf("subscription dial to non-public address %s refused", ip)
 	}
 	return nil
 }

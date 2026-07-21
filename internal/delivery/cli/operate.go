@@ -66,7 +66,9 @@ func newTunnelToggleCommand(configPath *string, enable bool) *cobra.Command {
 			// change leaves a device without a way out -- and can undo it knowingly
 			// rather than discovering it at the next deploy.
 			if _, err := newService(*configPath, "").LoadAndValidate(cmd.Context()); err != nil {
-				_ = editor.SetTunnelField(args[0], "enabled", fmt.Sprint(!enable))
+				if revertErr := editor.SetTunnelField(args[0], "enabled", fmt.Sprint(!enable)); revertErr != nil {
+					return fmt.Errorf("change left the config invalid (%w) AND the revert failed (%v); fix %s by hand", err, revertErr, *configPath)
+				}
 				return fmt.Errorf("reverted: %w", err)
 			}
 			_, err := fmt.Fprintf(cmd.OutOrStdout(), "%sd %s; run `hubctl deploy` to apply\n", verb, args[0])
@@ -153,7 +155,9 @@ func newDeviceSetEgressCommand(configPath *string) *cobra.Command {
 			}
 			if _, err := newService(*configPath, "").LoadAndValidate(cmd.Context()); err != nil {
 				if previous != "" {
-					_ = editor.SetDeviceField(args[0], "egress", previous)
+					if revertErr := editor.SetDeviceField(args[0], "egress", previous); revertErr != nil {
+						return fmt.Errorf("change left the config invalid (%w) AND the revert failed (%v); fix %s by hand", err, revertErr, *configPath)
+					}
 				}
 				return fmt.Errorf("reverted: %w", err)
 			}

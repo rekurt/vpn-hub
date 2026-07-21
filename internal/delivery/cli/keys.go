@@ -82,7 +82,23 @@ func newDeviceAddCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(output, []byte(profile), 0o600); err != nil {
+			// os.WriteFile applies the 0600 mode only when it creates the file; an
+			// existing target keeps its old, possibly world-readable, permissions.
+			// The profile carries the device private key, so open explicitly and
+			// chmod to guarantee 0600 whether or not the file already existed.
+			out, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+			if err != nil {
+				return fmt.Errorf("write profile: %w", err)
+			}
+			if err := out.Chmod(0o600); err != nil {
+				_ = out.Close()
+				return fmt.Errorf("secure profile permissions: %w", err)
+			}
+			if _, err := out.WriteString(profile); err != nil {
+				_ = out.Close()
+				return fmt.Errorf("write profile: %w", err)
+			}
+			if err := out.Close(); err != nil {
 				return fmt.Errorf("write profile: %w", err)
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "\nwrote client profile to %s\n", output)

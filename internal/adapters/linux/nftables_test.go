@@ -99,6 +99,29 @@ func TestForwardChainDefaultsToDrop(t *testing.T) {
 	}
 }
 
+// The forwarded-TCP MSS clamp must match on the SYN|RST mask, not a bare `flags syn`.
+// A bare match compiles to an equality test on the whole flags byte and so catches
+// only a pure SYN (0x02), missing the SYN-ACK (0x12) -- which would clamp only one
+// direction and leave half the transfers stalling on a low-MTU path. It must also
+// precede the established-state accept so the (new) SYN and SYN-ACK both reach it.
+func TestForwardChainClampsMSSBothDirections(t *testing.T) {
+	t.Parallel()
+	rendered := RenderRuleset(directOnlyPlan())
+
+	clampRule := "tcp flags & (syn|rst) == syn tcp option maxseg size set"
+	clamp := strings.Index(rendered, clampRule)
+	if clamp < 0 {
+		t.Fatalf("MSS clamp must match SYN and SYN-ACK via the syn|rst mask:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "\t\ttcp flags syn tcp option maxseg") {
+		t.Error("bare `flags syn` misses the SYN-ACK; use the syn|rst mask")
+	}
+	established := strings.Index(rendered, "ct state established,related accept")
+	if established < 0 || clamp > established {
+		t.Error("the MSS clamp must precede the established-state accept")
+	}
+}
+
 // Without this the operator loses the host the moment the agent applies a ruleset.
 func TestManagementPortStaysOpen(t *testing.T) {
 	t.Parallel()

@@ -1,8 +1,11 @@
 /plans
 /service
 /bin
-# The real hub configuration; configs/example.yaml is the template.
-/configs/hub.yaml
+# Everything under configs/ is live hub material (keys, device configs, upstream
+# links); only the template is committed. A blanket ignore keeps a stray `git add`
+# from ever committing a real credential.
+/configs/*
+!/configs/example.yaml
 
 # OpenTofu state holds the API token and resource IDs. The lock file is committed.
 deploy/terraform/.terraform/

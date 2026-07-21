@@ -207,10 +207,12 @@ func (h HealthChecker) probe(ctx context.Context, namespace string, checks domai
 		// curl opens the connection and reports whether it succeeded, which is the
 		// whole probe. Bash's /dev/tcp would do the same, but only by way of a shell
 		// interpreting a string built from configuration -- and no probe is worth a
-		// shell.
+		// shell. Rebuild with net.JoinHostPort so an IPv6 literal keeps its brackets
+		// (SplitHostPort strips them); "telnet://::1:53" is unparseable to curl and
+		// would fail every IPv6 probe.
 		if _, err := h.run(ctx, "ip", "netns", "exec", namespace,
 			"curl", "-sS", "--max-time", seconds, "-o", "/dev/null",
-			fmt.Sprintf("telnet://%s:%s", host, port)); err != nil {
+			"telnet://"+net.JoinHostPort(host, port)); err != nil {
 			reasons = append(reasons, "tcp probe: "+checks.TCPAddress+" is unreachable through the tunnel")
 		}
 	}

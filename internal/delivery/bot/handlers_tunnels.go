@@ -169,8 +169,26 @@ func (b *Bot) editTunnelList(ctx context.Context, cb *tg.CallbackQuery, tunnelID
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
+		// Revert, like every other mutator does. AppendListItem/RemoveListItem write
+		// the value without semantic checks, so a mistyped route or zone leaves the
+		// config unloadable -- and because every bot screen calls LoadAndValidate,
+		// the whole UI (including the button that would remove the bad value) breaks,
+		// forcing an SSH fix. Undo the write so the config stays deployable.
+		var revertErr error
+		if add {
+			revertErr = b.Editor.RemoveListItem(tunnelID, field, value)
+		} else {
+			revertErr = b.Editor.AppendListItem(tunnelID, field, value)
+		}
+		if revertErr != nil {
+			return b.show(ctx, cb, screen{
+				text: "⚠️ Изменение сделало конфигурацию невалидной, и откат не удался:\n<code>" +
+					esc(revertErr.Error()) + "</code>\n\nПравьте конфигурацию на хосте.",
+				markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID)}),
+			})
+		}
 		return b.show(ctx, cb, screen{
-			text: "⚠️ Изменение записано, но конфигурация теперь не проходит проверку и не задеплоится:\n<code>" +
+			text: "↩️ Изменение отменено, конфигурация не проходит проверку:\n<code>" +
 				esc(err.Error()) + "</code>",
 			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID)}),
 		})

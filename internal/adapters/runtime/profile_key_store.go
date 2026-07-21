@@ -13,13 +13,15 @@ import (
 
 const profileKeysDir = "device-profiles"
 
-// ErrProfileKeyNotFound means the profile predates encrypted-at-rest profile
-// storage, so its private half was intentionally never kept by the hub.
+// ErrProfileKeyNotFound means no stored private half exists for the device -- either
+// its profile predates the store or it was added outside the bot -- so the profile
+// cannot be re-delivered and the device must be reissued a fresh key instead.
 var ErrProfileKeyNotFound = errors.New("device profile key not found")
 
-// ProfileKeyStore keeps the private half of profiles issued by the bot. Files
-// remain inside StateDirectory, with a directory and file mode that keep them
-// readable only by the service owner.
+// ProfileKeyStore keeps the private half of profiles issued by the bot so they can
+// be re-delivered without reissuing a key. The keys are stored as plaintext on disk;
+// what protects them is filesystem permissions -- 0600 files inside a 0700 directory
+// under StateDir, readable only by the service owner -- not encryption at rest.
 type ProfileKeyStore struct {
 	StateDir string
 }

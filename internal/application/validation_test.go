@@ -115,6 +115,29 @@ func TestValidateRejects(t *testing.T) {
 		"unsupported tunnel type": {
 			func(c *domain.Config) { c.Tunnels[0].Type = "ipsec" }, "unsupported type",
 		},
+		"two devices sharing a public key": {
+			func(c *domain.Config) {
+				second := c.Devices[0]
+				second.ID = "phone"
+				second.Address = "10.80.0.3/32"
+				c.Devices = append(c.Devices, second)
+			}, "is shared with",
+		},
+		"device claiming the hub's own dns_address": {
+			func(c *domain.Config) { c.Devices[0].Address = "10.80.0.1/32" }, "hub's own dns_address",
+		},
+		"tunnel id reserved for direct": {
+			func(c *domain.Config) { c.Tunnels[1].ID = domain.EgressDirect }, "reserved",
+		},
+		"client_cidr overlapping the egress link base": {
+			func(c *domain.Config) { c.Hub.ClientCIDR = "10.90.0.0/24" }, "overlaps the egress link base",
+		},
+		"dns_address outside the client subnet": {
+			func(c *domain.Config) { c.Hub.DNSAddress = "10.99.0.1" }, "outside client_cidr",
+		},
+		"endpoint host with a newline": {
+			func(c *domain.Config) { c.Hub.Endpoint = "vpn.example.test\nInjected = 1:51820" }, "control character",
+		},
 	}
 
 	for name, test := range tests {

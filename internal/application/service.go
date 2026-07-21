@@ -114,6 +114,7 @@ func Validate(cfg domain.Config) error {
 
 	deviceIDs := make(map[string]struct{}, len(cfg.Devices))
 	addresses := make(map[string]string)
+	publicKeys := make(map[string]string)
 	for _, device := range cfg.Devices {
 		if device.ID == "" {
 			return fmt.Errorf("device id is required")
@@ -143,6 +144,18 @@ func Validate(cfg domain.Config) error {
 		if err := validateProfileAddress(device.Address, cfg.Hub.ClientCIDR); err != nil {
 			return fmt.Errorf("device %q: %w", device.ID, err)
 		}
+		// A device may not claim the hub's own address, which is also the resolver
+		// address on the ingress interface. Allowing it would install a route sending
+		// the hub's DNS/gateway address to that peer and let it impersonate the
+		// resolver. Compare parsed addresses, not strings, so a non-canonical IPv6
+		// spelling of the same address cannot slip past. Both parse here: the device
+		// address passed validateProfileAddress and the dns_address passed
+		// validateHubNetwork above.
+		if devAddr, err := netip.ParsePrefix(device.Address); err == nil {
+			if dnsAddr, derr := netip.ParseAddr(cfg.Hub.DNSAddress); derr == nil && devAddr.Addr() == dnsAddr {
+				return fmt.Errorf("device %q: address %q is the hub's own dns_address", device.ID, device.Address)
+			}
+		}
 		if err := domain.ValidatePublicKey(device.PublicKey); err != nil {
 			return fmt.Errorf("device %q: %w", device.ID, err)
 		}
@@ -150,6 +163,14 @@ func Validate(cfg domain.Config) error {
 			return fmt.Errorf("address %q is shared by %s and %s", device.Address, previous, device.ID)
 		}
 		addresses[device.Address] = device.ID
+		// Reject a public key shared by two devices. WireGuard identifies a peer only
+		// by its key, so a duplicate would collapse the two peers into one -- and
+		// revoking one device would leave the shared credential live on the other,
+		// silently defeating the revocation.
+		if previous, exists := publicKeys[device.PublicKey]; exists {
+			return fmt.Errorf("public_key of device %q is shared with %s; each device needs its own key", device.ID, previous)
+		}
+		publicKeys[device.PublicKey] = device.ID
 	}
 
 	tunnelIDs := make(map[string]domain.Tunnel, len(cfg.Tunnels))
@@ -160,6 +181,14 @@ func Validate(cfg domain.Config) error {
 		}
 		if err := validateIdentifier("tunnel id", tunnel.ID); err != nil {
 			return err
+		}
+		// "direct" is the reserved egress name meaning the hub's own uplink. A tunnel
+		// carrying that id collides with it: the firewall plan would emit two egress
+		// groups called "direct" (one for real direct, one a phantom "vh-direct" with
+		// no namespace behind it), corrupting the plan and leaving the tunnel
+		// unreachable. Reject it up front.
+		if tunnel.ID == domain.EgressDirect {
+			return fmt.Errorf("tunnel id %q is reserved for the hub's own uplink", tunnel.ID)
 		}
 		if len(tunnel.ID) > maxTunnelIDLength {
 			return fmt.Errorf("tunnel id %q is %d characters; at most %d fit in an interface name", tunnel.ID, len(tunnel.ID), maxTunnelIDLength)

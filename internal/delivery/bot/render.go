@@ -924,10 +924,9 @@ func renderProbes(tunnelID string, health domain.HealthCheck) (string, *tg.Inlin
 	var b strings.Builder
 	fmt.Fprintf(&b, "🩺 <b>Пробы туннеля %s</b>\n\n", esc(tunnelID))
 	b.WriteString("Проба выполняется внутри namespace туннеля и отвечает на вопрос «идёт ли трафик прямо сейчас». Без проб здоровье — «неизвестно», и это честнее, чем «работает».\n\n")
-	values := map[string]string{"tcp": health.TCPAddress, "https": health.HTTPSURL, "dns": health.DNSName}
 	var rows [][]tg.InlineKeyboardButton
 	for _, kind := range probeKinds {
-		value := values[kind.Key]
+		value := probeValue(health, kind.Key)
 		if value == "" {
 			fmt.Fprintf(&b, "• %s: не задана\n", kind.Title)
 			rows = append(rows, []tg.InlineKeyboardButton{btn("➕ "+kind.Title, "tun:ps:"+tunnelID+":"+kind.Key)})

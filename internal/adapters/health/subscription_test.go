@@ -8,6 +8,45 @@ import (
 	"testing"
 )
 
+// The subscription fetcher runs as root in the host's main namespace, so a redirect
+// (or DNS answer) pointing at the metadata service or the private network it gateways
+// must be refused at the dial. refusePrivateDial is the socket-level guard.
+func TestRefusePrivateDial(t *testing.T) {
+	t.Parallel()
+	refused := map[string]string{
+		"metadata link-local":  "169.254.169.254:443",
+		"rfc1918 ten":          "10.20.0.53:443",
+		"rfc1918 192.168":      "192.168.1.1:443",
+		"loopback":             "127.0.0.1:443",
+		"unspecified":          "0.0.0.0:443",
+		"ipv6 loopback":        "[::1]:443",
+		"ipv6 link-local":      "[fe80::1]:443",
+		"ipv6 unique-local":    "[fd00::1]:443",
+		"not an ip (hostname)": "example.com:443",
+	}
+	for name, address := range refused {
+		t.Run("refused/"+name, func(t *testing.T) {
+			t.Parallel()
+			if err := refusePrivateDial("tcp", address, nil); err == nil {
+				t.Fatalf("refusePrivateDial(%q) = nil, want it refused", address)
+			}
+		})
+	}
+
+	allowed := map[string]string{
+		"public v4": "1.1.1.1:443",
+		"public v6": "[2606:4700:4700::1111]:443",
+	}
+	for name, address := range allowed {
+		t.Run("allowed/"+name, func(t *testing.T) {
+			t.Parallel()
+			if err := refusePrivateDial("tcp", address, nil); err != nil {
+				t.Fatalf("refusePrivateDial(%q) = %v, want it allowed", address, err)
+			}
+		})
+	}
+}
+
 func TestFetchRejectsNonHTTPSURL(t *testing.T) {
 	t.Parallel()
 	if _, err := (HTTPSSubscriptionFetcher{}).Fetch(context.Background(), "http://example.test/sub"); err == nil {

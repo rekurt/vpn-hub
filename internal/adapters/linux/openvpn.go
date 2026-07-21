@@ -184,7 +184,16 @@ func OpenVPNState(socket string, timeout time.Duration) (string, error) {
 
 // parseOpenVPNState reads the state line, whose second field is the stage.
 func parseOpenVPNState(output string) (string, error) {
-	for _, line := range strings.Split(output, "\n") {
+	lines := strings.Split(output, "\n")
+	// The final segment carries no terminating newline in the raw socket output, so
+	// on a fragmented read it may be a half-received state line ("...,CONN" cut before
+	// ",CONNECTED,..."). Parsing it would return a truncated stage and mark a healthy
+	// tunnel unhealthy. Only the segments before it are known-complete; drop the last
+	// unless the output actually ended on a newline.
+	if !strings.HasSuffix(output, "\n") && len(lines) > 0 {
+		lines = lines[:len(lines)-1]
+	}
+	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, ">") || line == "END" {
 			continue
