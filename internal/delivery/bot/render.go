@@ -313,10 +313,13 @@ func renderDeviceCard(device deviceEntry) (string, *tg.InlineKeyboardMarkup) {
 	}
 	rows := [][]tg.InlineKeyboardButton{
 		{btn("🔀 Сменить egress", "dev:eg:"+device.ID)},
-		{btn("📤 Перевыпустить профиль", "dev:re:"+device.ID)},
 	}
 	if !device.Revoked {
+		rows = append(rows, []tg.InlineKeyboardButton{btn("📄 Прислать текущий профиль", "dev:pr:"+device.ID)})
+		rows = append(rows, []tg.InlineKeyboardButton{btn("📤 Перевыпустить профиль", "dev:re:"+device.ID)})
 		rows = append(rows, []tg.InlineKeyboardButton{btn("🚫 Отозвать", "dev:rv:"+device.ID)})
+	} else {
+		rows = append(rows, []tg.InlineKeyboardButton{btn("📤 Перевыпустить профиль", "dev:re:"+device.ID)})
 	}
 	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ Устройства", "dev"), btn("🏠 Меню", "m")})
 	return b.String(), keyboard(rows...)

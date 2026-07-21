@@ -59,6 +59,13 @@ type offsetStore interface {
 	Save(offset int64) error
 }
 
+// profileKeyStore holds the private half of profiles that the bot issued, so a
+// profile can be delivered again without rotating its public key.
+type profileKeyStore interface {
+	Load(ctx context.Context, deviceID string) (string, error)
+	Save(ctx context.Context, deviceID, privateKey string) error
+}
+
 // keyRotator replaces the hub key, keeping the previous one recoverable.
 type keyRotator interface {
 	Rotate() (publicKey string, err error)
@@ -102,6 +109,7 @@ type Bot struct {
 	Confirmations runtimeadapter.ConfirmationStore
 	Revocations   runtimeadapter.RevocationStore
 	Profiles      runtimeadapter.AmneziaProfileRenderer
+	ProfileKeys   profileKeyStore
 	Settings      settingsStore
 	Offsets       offsetStore
 
@@ -150,6 +158,7 @@ func New(cfg Config, client *tg.Client, configPath, stateDir, configDir, runtime
 		Revisions:     runtimeadapter.FileRevisionStore{StateDir: stateDir},
 		Confirmations: runtimeadapter.ConfirmationStore{StateDir: stateDir},
 		Revocations:   runtimeadapter.RevocationStore{StateDir: stateDir},
+		ProfileKeys:   runtimeadapter.ProfileKeyStore{StateDir: stateDir},
 		Settings:      runtimeadapter.BotSettingsStore{StateDir: stateDir},
 		Offsets:       runtimeadapter.OffsetStore{StateDir: stateDir},
 

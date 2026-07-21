@@ -141,7 +141,7 @@ func (f fakeReconciler) Apply(context.Context, domain.DesiredState) ([]domain.Op
 // the bot wired against it and the fake API.
 func hubFixture(t *testing.T) (*Bot, *fakeAPI) {
 	t.Helper()
-	_, devicePublicKey, err := domain.GenerateX25519KeyPair()
+	devicePrivateKey, devicePublicKey, err := domain.GenerateX25519KeyPair()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +192,7 @@ tunnels:
 		Revisions:     runtimeadapter.FileRevisionStore{StateDir: stateDir},
 		Confirmations: runtimeadapter.ConfirmationStore{StateDir: stateDir},
 		Revocations:   runtimeadapter.RevocationStore{StateDir: stateDir},
+		ProfileKeys:   runtimeadapter.ProfileKeyStore{StateDir: stateDir},
 		Settings:      runtimeadapter.BotSettingsStore{StateDir: stateDir},
 		Offsets:       runtimeadapter.OffsetStore{StateDir: stateDir},
 		Journal:       fakeJournal{},
@@ -211,6 +212,9 @@ tunnels:
 		Uplink: func(context.Context) (string, error) { return "", fmt.Errorf("no uplink in tests") },
 		Now:    func() time.Time { return time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC) },
 		Out:    testWriter{t},
+	}
+	if err := instance.ProfileKeys.Save(context.Background(), "macbook", devicePrivateKey); err != nil {
+		t.Fatal(err)
 	}
 	instance.init()
 	return instance, api
@@ -803,6 +807,36 @@ func TestReissueLiftsRevocation(t *testing.T) {
 	api.mu.Unlock()
 	if docs != 1 {
 		t.Fatalf("expected a re-issued profile document, got %d", docs)
+	}
+}
+
+func TestSendCurrentProfile(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	before, err := instance.Service.LoadAndValidate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance.handleUpdate(ctx, tap(adminID, "dev:pr:macbook"))
+
+	after, err := instance.Service.LoadAndValidate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Devices[0].PublicKey != before.Devices[0].PublicKey {
+		t.Fatal("resending a profile must not rotate its key")
+	}
+	api.mu.Lock()
+	docs := len(api.docs)
+	filename := ""
+	if docs > 0 {
+		filename = api.docs[0]
+	}
+	api.mu.Unlock()
+	if docs != 1 || filename != "macbook.conf" {
+		t.Fatalf("expected current profile document, got docs=%d filename=%q", docs, filename)
 	}
 }
 

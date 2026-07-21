@@ -385,6 +385,10 @@ func (b *Bot) rotateHubKey(ctx context.Context, chatID, messageID int64) {
 			fail("запись ключа устройства "+device.ID, err, delivered)
 			return
 		}
+		if err := b.saveProfileKey(ctx, device.ID, privateKey); err != nil {
+			fail("сохранение профиля устройства "+device.ID, err, delivered)
+			return
+		}
 		if outcome := b.sendProfile(ctx, withNewKey.Hub, device.ID, device.Address, privateKey); outcome != nil {
 			fail("доставка профиля "+device.ID, fmt.Errorf("сообщение не отправилось"), delivered)
 			return

@@ -2,11 +2,13 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"regexp"
 	"sort"
 
+	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	tg "vpn-hub/internal/adapters/telegram"
 	"vpn-hub/internal/application"
 	"vpn-hub/internal/domain"
@@ -125,6 +127,11 @@ func (b *Bot) routeDevices(ctx context.Context, cb *tg.CallbackQuery, action str
 			return result{toast: "Не указано устройство"}
 		}
 		return b.reissueDevice(ctx, cb, args[0])
+	case "pr":
+		if len(args) < 1 {
+			return result{toast: "Не указано устройство"}
+		}
+		return b.sendCurrentProfile(ctx, cb, args[0])
 	default:
 		return result{toast: "Не понимаю эту кнопку"}
 	}
@@ -366,6 +373,10 @@ func (b *Bot) finishDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, egress 
 		_ = b.Editor.RemoveDevice(deviceID)
 		return b.show(ctx, cb, renderFailure("отменено: конфигурация с новым устройством не проходит проверку", err))
 	}
+	if err := b.saveProfileKey(ctx, deviceID, privateKey); err != nil {
+		_ = b.Editor.RemoveDevice(deviceID)
+		return b.show(ctx, cb, renderFailure("устройство отменено: ключ профиля не сохранился", err))
+	}
 	b.dialogs.clear()
 
 	if outcome := b.sendProfile(ctx, cfg.Hub, deviceID, address, privateKey); outcome != nil {
@@ -374,6 +385,69 @@ func (b *Bot) finishDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, egress 
 	view := b.afterConfigChange(fmt.Sprintf("✅ Устройство <b>%s</b> добавлено (%s → %s).\nПрофиль и QR-код выше — доставьте их на устройство и удалите из чата.", esc(deviceID), esc(address), esc(egress)), backToDevices)
 	b.sendScreen(ctx, view)
 	return result{toast: "Устройство добавлено"}
+}
+
+func (b *Bot) saveProfileKey(ctx context.Context, deviceID, privateKey string) error {
+	if b.ProfileKeys == nil {
+		return fmt.Errorf("хранилище профилей не настроено")
+	}
+	return b.ProfileKeys.Save(ctx, deviceID, privateKey)
+}
+
+// sendCurrentProfile re-delivers a profile without changing the device key. A
+// profile issued before key storage was introduced cannot be reconstructed, so the
+// operator gets an explicit, safe reissue path instead of a different profile.
+func (b *Bot) sendCurrentProfile(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
+	release, busyWith, ok := b.gate.Acquire("отправка профиля " + deviceID)
+	if !ok {
+		return busyResult(busyWith)
+	}
+	defer release()
+
+	cfg, err := b.Service.LoadAndValidate(ctx)
+	if err != nil {
+		return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+	}
+	var device domain.Device
+	for _, candidate := range cfg.Devices {
+		if candidate.ID == deviceID {
+			device = candidate
+			break
+		}
+	}
+	if device.ID == "" {
+		return result{toast: "Устройство не найдено", alert: true}
+	}
+	revoked, err := b.Revocations.Load(ctx)
+	if err != nil {
+		return b.show(ctx, cb, renderFailure("не удалось проверить отзыв", err))
+	}
+	for _, id := range revoked {
+		if id == deviceID {
+			return result{toast: "Устройство отозвано — перевыпустите профиль", alert: true}
+		}
+	}
+	if b.ProfileKeys == nil {
+		return result{toast: "Хранилище профилей не настроено", alert: true}
+	}
+	privateKey, err := b.ProfileKeys.Load(ctx, deviceID)
+	if errors.Is(err, runtimeadapter.ErrProfileKeyNotFound) {
+		return result{toast: "Старый профиль не сохранён — перевыпустите его", alert: true}
+	}
+	if err != nil {
+		return b.show(ctx, cb, renderFailure("не удалось прочитать сохранённый профиль", err))
+	}
+	publicKey, err := domain.PublicKeyFromPrivate(privateKey)
+	if err != nil {
+		return b.show(ctx, cb, renderFailure("сохранённый профиль повреждён", err))
+	}
+	if publicKey != device.PublicKey {
+		return result{toast: "Ключ изменён — перевыпустите профиль", alert: true}
+	}
+	if outcome := b.sendProfile(ctx, cfg.Hub, deviceID, device.Address, privateKey); outcome != nil {
+		return *outcome
+	}
+	return result{toast: "Профиль отправлен"}
 }
 
 // sendProfile renders the client profile and delivers it as a file plus a QR code.
@@ -433,6 +507,10 @@ func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID 
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
 		_ = b.Editor.SetDeviceField(deviceID, "public_key", device.PublicKey)
 		return b.show(ctx, cb, renderFailure("отменено: конфигурация не проходит проверку", err))
+	}
+	if err := b.saveProfileKey(ctx, deviceID, privateKey); err != nil {
+		_ = b.Editor.SetDeviceField(deviceID, "public_key", device.PublicKey)
+		return b.show(ctx, cb, renderFailure("отменено: ключ профиля не сохранился", err))
 	}
 	// A re-issued device is meant to work again: lifting the revocation is part of
 	// the same operation, not a separate thing to remember.

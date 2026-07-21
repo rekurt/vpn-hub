@@ -9,6 +9,7 @@ Egress: <code>wg-nl</code>
 
 --- keyboard ---
 [🔀 Сменить egress](dev:eg:macbook)
+[📄 Прислать текущий профиль](dev:pr:macbook)
 [📤 Перевыпустить профиль](dev:re:macbook)
 [🚫 Отозвать](dev:rv:macbook)
 [⬅️ Устройства](dev) | [🏠 Меню](m)
