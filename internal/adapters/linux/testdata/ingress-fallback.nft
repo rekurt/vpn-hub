@@ -55,18 +55,18 @@ table inet vpn_hub {
 	chain output {
 		type filter hook output priority filter; policy accept;
 		meta nfproto ipv6 drop
+		meta mark 0x00000101 oifname != "vh-provider-nl" drop
 	}
 
 	chain prerouting_nat {
 		type nat hook prerouting priority dstnat; policy accept;
 		iifname "awg0" udp dport 53 dnat ip to 10.80.0.1:53
 		iifname "awg0" tcp dport 53 dnat ip to 10.80.0.1:53
-		iifname "eth0" udp dport 443 redirect to :51820
+		iifname "eth0" meta nfproto ipv4 udp dport 443 dnat to :51820
 	}
 
 	chain postrouting {
 		type nat hook postrouting priority srcnat; policy accept;
 		ip saddr 10.80.0.0/24 oifname "eth0" masquerade
-		ip saddr != 10.80.0.0/24 oifname "vh-provider-nl" masquerade
 	}
 }

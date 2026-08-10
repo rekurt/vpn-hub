@@ -108,20 +108,33 @@ func RealityShortID(publicKey string) string {
 	return hex.EncodeToString(digest[:])[:16]
 }
 
-// RealityUserUUID derives a device's VLESS credential from the hub's private key.
+// RealityUserUUID derives a device's VLESS credential from the hub's private key
+// and the device's own public key.
 //
 // Derived, so nothing new has to be stored, backed up or kept in step with the
 // device list: the credential exists wherever the private key does. Revocation
 // still works, because a device removed from the revision is a user the rendered
 // server configuration no longer contains.
-func RealityUserUUID(privateKey, deviceID string) (string, error) {
+//
+// The device's public key is in the input, not just its id, so that re-issuing a
+// profile actually re-issues this credential too. Deriving from the id alone made
+// the credential permanent for the lifetime of the hub key: the operator's answer
+// to "this device leaked" would rotate the WireGuard key, report success, and
+// leave the leaked vless:// link working -- and revoking then re-adding the device
+// under the same name would bring the old credential back.
+func RealityUserUUID(privateKey, deviceID, devicePublicKey string) (string, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(privateKey)
 	if err != nil {
 		return "", fmt.Errorf("decode reality private key: %w", err)
 	}
+	if devicePublicKey == "" {
+		return "", fmt.Errorf("device %q has no public key to derive a credential from", deviceID)
+	}
 	mac := hmac.New(sha256.New, raw)
-	// hash.Hash documents that Write never returns an error.
-	_, _ = mac.Write([]byte("vpn-hub/reality-user/" + deviceID))
+	// hash.Hash documents that Write never returns an error. The separator cannot
+	// appear in either field -- an id is [a-z0-9-] and a key is base64 -- so no two
+	// different pairs can produce the same input.
+	_, _ = mac.Write([]byte("vpn-hub/reality-user/" + deviceID + "\x00" + devicePublicKey))
 	sum := mac.Sum(nil)
 
 	// Shaped as a version 4 UUID: the value is derived, but every client parses it

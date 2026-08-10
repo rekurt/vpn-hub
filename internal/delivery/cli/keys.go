@@ -167,7 +167,11 @@ func printFallback(cmd *cobra.Command, hub domain.Hub, deviceID, address, privat
 	if err != nil {
 		return err
 	}
-	uuid, err := domain.RealityUserUUID(realityKey, deviceID)
+	devicePublicKey, err := domain.PublicKeyFromPrivate(privateKey)
+	if err != nil {
+		return err
+	}
+	uuid, err := domain.RealityUserUUID(realityKey, deviceID, devicePublicKey)
 	if err != nil {
 		return err
 	}

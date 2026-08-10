@@ -37,7 +37,11 @@ func TestRealityLinkRoundTripsThroughTheParser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uuid, err := domain.RealityUserUUID(privateKey, "macbook")
+	_, devicePublicKey, err := domain.GenerateX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uuid, err := domain.RealityUserUUID(privateKey, "macbook", devicePublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}

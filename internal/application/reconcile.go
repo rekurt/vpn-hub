@@ -127,6 +127,9 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 	// The fallback listener is the last thing and its failure is collected rather
 	// than returned: it is an alternative way in, so a hub whose listener will not
 	// start must still converge everything the ordinary ingress depends on.
+	if compiled.realityErr != nil {
+		errs = append(errs, fmt.Errorf("compile reality fallback: %w", compiled.realityErr))
+	}
 	if r.Reality != nil {
 		if err := r.Reality.Apply(ctx, compiled.reality); err != nil {
 			errs = append(errs, fmt.Errorf("apply reality fallback: %w", err))
@@ -175,6 +178,10 @@ type compiled struct {
 	egresses []domain.EgressSpec
 	dns      domain.DNSPlan
 	reality  domain.RealityIngressSpec
+	// realityErr records a fallback that could not be compiled -- almost always a
+	// missing key. It is carried rather than returned so the rest of the revision
+	// still converges; Apply reports it alongside any other partial failure.
+	realityErr error
 }
 
 // compile turns a revision into the artefacts the host needs. All of them are
@@ -193,6 +200,17 @@ func (r HostReconciler) compile(ctx context.Context, state domain.DesiredState) 
 	if err != nil {
 		return compiled{}, fmt.Errorf("find uplink interface: %w", err)
 	}
+
+	// Settled before the plan is built, because a fallback that cannot run must not
+	// leave 443 accepted with nothing behind it. Turning the fallback on without
+	// generating its key used to fail the whole compile, which stopped the agent
+	// converging the firewall, the ingress, the tunnels and DNS -- every tick,
+	// until someone noticed. An alternative way in is not worth the hub.
+	realityKey, realityErr := r.realityKey(ctx, state)
+	if realityErr != nil {
+		state.Hub.Fallback.Reality.Enabled = false
+	}
+
 	plan, err := BuildFirewallPlan(state, uplink)
 	if err != nil {
 		return compiled{}, err
@@ -221,27 +239,28 @@ func (r HostReconciler) compile(ctx context.Context, state domain.DesiredState) 
 		return compiled{}, err
 	}
 
-	reality, err := r.compileReality(ctx, state, plan)
+	reality, err := BuildRealityIngressSpec(state, plan, realityKey)
 	if err != nil {
-		return compiled{}, err
+		// Same reasoning as the key: a fallback that will not compile is reported,
+		// not allowed to hold up everything else.
+		reality, realityErr = domain.RealityIngressSpec{}, err
 	}
-	return compiled{firewall: plan, ingress: spec, egresses: egresses, dns: dns, reality: reality}, nil
+	return compiled{
+		firewall: plan, ingress: spec, egresses: egresses, dns: dns,
+		reality: reality, realityErr: realityErr,
+	}, nil
 }
 
-// compileReality reads the fallback key only when the fallback is on, so a hub that
+// realityKey reads the fallback key, and only when the fallback is on: a hub that
 // does not use it never needs the key to exist.
-func (r HostReconciler) compileReality(ctx context.Context, state domain.DesiredState, plan domain.FirewallPlan) (domain.RealityIngressSpec, error) {
+func (r HostReconciler) realityKey(ctx context.Context, state domain.DesiredState) (string, error) {
 	if r.Reality == nil || !state.Hub.Fallback.Reality.Enabled {
-		return domain.RealityIngressSpec{}, nil
+		return "", nil
 	}
 	if r.RealityKey == nil {
-		return domain.RealityIngressSpec{}, fmt.Errorf("the REALITY fallback is enabled but no key store is configured")
+		return "", fmt.Errorf("the REALITY fallback is enabled but no key store is configured")
 	}
-	privateKey, err := r.RealityKey.PrivateKey(ctx)
-	if err != nil {
-		return domain.RealityIngressSpec{}, err
-	}
-	return BuildRealityIngressSpec(state, plan, privateKey)
+	return r.RealityKey.PrivateKey(ctx)
 }
 
 // compileEgresses loads each upstream configuration and derives its namespace. The

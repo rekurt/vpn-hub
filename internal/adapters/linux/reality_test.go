@@ -88,16 +88,17 @@ func TestRealityOutboundsAreOnePerMark(t *testing.T) {
 	config := decodeReality(t, realitySpec())
 
 	outbounds := config["outbounds"].([]any)
-	if len(outbounds) != 2 {
-		t.Fatalf("got %d outbounds, want direct plus one marked: %v", len(outbounds), outbounds)
+	if len(outbounds) != 3 {
+		t.Fatalf("got %d outbounds, want direct, block and one marked: %v", len(outbounds), outbounds)
 	}
 	marks := map[string]any{}
 	for _, entry := range outbounds {
 		outbound := entry.(map[string]any)
-		if outbound["domain_strategy"] != "ipv4_only" {
-			t.Errorf("outbound %v may resolve to IPv6, which the host cannot reach", outbound["tag"])
+		tag := outbound["tag"].(string)
+		if tag != "block" && outbound["domain_strategy"] != "ipv4_only" {
+			t.Errorf("outbound %v may resolve to IPv6, which the host cannot reach", tag)
 		}
-		marks[outbound["tag"].(string)] = outbound["routing_mark"]
+		marks[tag] = outbound["routing_mark"]
 	}
 	if marks["direct"] != nil {
 		t.Error("the default outbound carries a mark; unmarked is what leaves by the uplink")
@@ -108,12 +109,39 @@ func TestRealityOutboundsAreOnePerMark(t *testing.T) {
 		t.Errorf("final = %v, want direct", route["final"])
 	}
 	rules := route["rules"].([]any)
-	if len(rules) != 2 {
-		t.Fatalf("got %d rules, want one per device with an egress: %v", len(rules), rules)
+	if len(rules) != 3 {
+		t.Fatalf("got %d rules, want the private-address refusal plus one per device with an egress: %v",
+			len(rules), rules)
 	}
 	// The device with no mark must not appear: it belongs on the default outbound.
 	if strings.Contains(mustJSON(t, rules), "phone") {
 		t.Errorf("a device on direct got a route rule: %v", rules)
+	}
+}
+
+// This path never passes through the forward chain, so none of the packet
+// filter's client rules constrain it. Without an explicit refusal an
+// authenticated device would reach the hub's own loopback services, the other
+// clients' addresses and every private network the hub can see -- including the
+// ones its allowed_devices deliberately exclude it from.
+func TestRealityRefusesPrivateDestinations(t *testing.T) {
+	t.Parallel()
+	config := decodeReality(t, realitySpec())
+
+	rules := config["route"].(map[string]any)["rules"].([]any)
+	first := rules[0].(map[string]any)
+	if first["ip_is_private"] != true || first["outbound"] != "block" {
+		t.Fatalf("the first route rule does not refuse private destinations: %v", first)
+	}
+
+	blocked := false
+	for _, entry := range config["outbounds"].([]any) {
+		if outbound := entry.(map[string]any); outbound["tag"] == "block" && outbound["type"] == "block" {
+			blocked = true
+		}
+	}
+	if !blocked {
+		t.Error("the refusal names an outbound that does not exist")
 	}
 }
 

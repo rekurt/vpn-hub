@@ -39,7 +39,7 @@ func BuildRealityIngressSpec(state domain.DesiredState, plan domain.FirewallPlan
 
 	users := make([]domain.RealityUser, 0, len(state.Devices))
 	for _, device := range state.Devices {
-		uuid, err := domain.RealityUserUUID(privateKey, device.ID)
+		uuid, err := domain.RealityUserUUID(privateKey, device.ID, device.PublicKey)
 		if err != nil {
 			return domain.RealityIngressSpec{}, fmt.Errorf("device %q: %w", device.ID, err)
 		}

@@ -506,7 +506,15 @@ func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID
 		b.logf("reality public key: %v", err)
 		return
 	}
-	uuid, err := domain.RealityUserUUID(privateRealityKey, deviceID)
+	// Derived from the device's public half, so a re-issued profile carries a new
+	// fallback credential too. The private key is what this function was handed;
+	// the hub itself only ever stores the public one.
+	devicePublicKey, err := domain.PublicKeyFromPrivate(privateKey)
+	if err != nil {
+		b.logf("reality credential: %v", err)
+		return
+	}
+	uuid, err := domain.RealityUserUUID(privateRealityKey, deviceID, devicePublicKey)
 	if err != nil {
 		b.logf("reality credential: %v", err)
 		return

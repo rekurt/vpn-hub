@@ -102,29 +102,33 @@ func TestRenderIngressFallback(t *testing.T) {
 	goldenTest(t, "ingress-fallback", plan)
 }
 
-// Without a return path the REALITY listener's per-device egress completes its
-// handshake and then carries nothing: the connections it opens hold the hub's own
-// address, which the tunnel namespace has no route back to.
-func TestFallbackGivesHubOriginatedTrafficAWayBack(t *testing.T) {
+// The kill switch has to cover traffic the hub originates on a client's behalf,
+// not only forwarded traffic. `ip rule fwmark N lookup N` fails OPEN -- a table
+// with no matching route falls through to main and the packet leaves by the hub's
+// own uplink -- so the output chain has to say what the forward chain's drop
+// policy says for everyone else.
+func TestOutputChainDropsMarkedTrafficLeavingTheWrongWay(t *testing.T) {
 	t.Parallel()
 	plan := directOnlyPlan()
 	plan.Egresses = append(plan.Egresses, domain.EgressGroup{
 		ID: "provider-nl", Mark: 0x101, Interface: "vh-provider-nl",
 	})
-
-	rule := `ip saddr != 10.80.0.0/24 oifname "vh-provider-nl" masquerade`
-	if strings.Contains(RenderRuleset(plan), rule) {
-		t.Error("the rule is present with no fallback to originate that traffic")
-	}
-
-	plan.RealityPort = domain.RealityPort
+	plan.Internals = []domain.InternalNetwork{{
+		TunnelID: "corp", Mark: 0x102, Interface: "vh-corp", Routes: []string{"10.20.0.0/16"},
+	}}
 	rendered := RenderRuleset(plan)
-	if !strings.Contains(rendered, rule) {
-		t.Fatalf("missing %q:\n%s", rule, rendered)
+
+	for _, rule := range []string{
+		`meta mark 0x00000101 oifname != "vh-provider-nl" drop`,
+		`meta mark 0x00000102 oifname != "vh-corp" drop`,
+	} {
+		if !strings.Contains(rendered, rule) {
+			t.Errorf("missing %q:\n%s", rule, rendered)
+		}
 	}
-	// direct leaves by the uplink, which already masquerades the client subnet.
-	if strings.Contains(rendered, `ip saddr != 10.80.0.0/24 oifname "eth0" masquerade`) {
-		t.Error("the uplink got a rule meant for tunnel links")
+	// direct is the uplink, which is where an unmarked socket goes anyway.
+	if strings.Contains(rendered, `meta mark 0x00000100 oifname !=`) {
+		t.Error("the direct egress got a rule that would drop its own traffic")
 	}
 }
 
@@ -150,12 +154,18 @@ func TestAltUDP443IsScopedToTheUplink(t *testing.T) {
 	plan.AltUDP443 = true
 	ruleset := RenderRuleset(plan)
 
-	want := `iifname "eth0" udp dport 443 redirect to :51820`
+	// `dnat to :port` rather than `redirect`, which would also rewrite the
+	// destination address to the interface's primary one and break every client
+	// dialling a secondary or floating address.
+	want := `iifname "eth0" meta nfproto ipv4 udp dport 443 dnat to :51820`
 	if !strings.Contains(ruleset, want) {
 		t.Fatalf("missing %q:\n%s", want, ruleset)
 	}
+	if strings.Contains(ruleset, "redirect to") {
+		t.Errorf("the address-rewriting form came back:\n%s", ruleset)
+	}
 	if strings.Contains(ruleset, `iifname "awg0" udp dport 443`) {
-		t.Errorf("the redirect also matches the ingress interface:\n%s", ruleset)
+		t.Errorf("the rule also matches the ingress interface:\n%s", ruleset)
 	}
 }
 

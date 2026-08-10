@@ -71,6 +71,8 @@ table inet vpn_hub {
 	chain output {
 		type filter hook output priority filter; policy accept;
 		meta nfproto ipv6 drop
+		meta mark 0x00000101 oifname != "vh-provider-nl" drop
+		meta mark 0x00000102 oifname != "vh-corp-a" drop
 	}
 
 	chain prerouting_nat {

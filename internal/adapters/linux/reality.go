@@ -50,11 +50,12 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 	path := filepath.Join(r.secretsDir(), RealityConfigName)
 
 	if !spec.Enabled {
-		// Asked before stopping, so a hub that never turns the fallback on does not
-		// log a failed stop of a unit that does not exist on every single tick.
-		if _, err := r.run(ctx, "systemctl", "is-active", "--quiet", realityUnit+".service"); err == nil {
-			_, _ = r.run(ctx, "systemctl", "stop", realityUnit+".service")
-		}
+		// Unconditional. `is-active` reports non-zero for a unit that is merely
+		// `activating`, which is exactly where a crash-looping listener sits during
+		// its RestartSec backoff -- asking first would skip the stop and leave it
+		// looping after the operator switched the fallback off. Stopping a unit that
+		// does not exist is harmless.
+		_, _ = r.run(ctx, "systemctl", "stop", realityUnit+".service")
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}
@@ -121,7 +122,7 @@ func RenderRealityServerConfig(spec domain.RealityIngressSpec) (string, error) {
 	// egress share the route out of the hub, and duplicate outbounds would only make
 	// the rendered file longer and the diff noisier.
 	marked := make(map[uint32]string)
-	outbounds := []any{directOutbound("direct", 0)}
+	outbounds := []any{directOutbound("direct", 0), map[string]any{"type": "block", "tag": "block"}}
 
 	for _, user := range spec.Users {
 		if user.DeviceID == "" || user.UUID == "" {
@@ -150,13 +151,20 @@ func RenderRealityServerConfig(spec domain.RealityIngressSpec) (string, error) {
 		})
 	}
 
+	// Refused before anything else. This path does not pass through the forward
+	// chain, so none of the packet filter's client rules apply to it: without this,
+	// an authenticated device could reach the hub's own loopback services, the other
+	// clients' addresses, the tunnel namespaces' SOCKS ports, and every private
+	// network the hub can see -- including ones its allowed_devices deliberately
+	// exclude it from. Private destinations belong to the AmneziaWG path, where the
+	// packet filter can tell who is asking.
+	rules = append([]any{map[string]any{"ip_is_private": true, "outbound": "block"}}, rules...)
+
 	route := map[string]any{
+		"rules": rules,
 		"final": "direct",
 		// One interface, one routing table: there is nothing here to detect.
 		"auto_detect_interface": false,
-	}
-	if len(rules) > 0 {
-		route["rules"] = rules
 	}
 
 	config := map[string]any{

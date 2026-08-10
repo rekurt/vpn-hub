@@ -277,6 +277,28 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\tchain output {")
 	line("\t\ttype filter hook output priority filter; policy accept;")
 	line("\t\tmeta nfproto ipv6 drop")
+	// The kill switch for traffic the hub originates on a client's behalf.
+	//
+	// Marked traffic is steered by `ip rule fwmark N lookup N`, and that construct
+	// fails OPEN: a table with no matching route is a lookup that falls through to
+	// the next rule and then to main, so the packet leaves by the hub's own uplink
+	// carrying the hub's address. Forwarded client traffic is safe from this because
+	// the forward chain's drop policy only accepts it out of the interface its mark
+	// belongs to -- but the REALITY listener's connections, and the resolver's
+	// queries into a private zone, never pass through forward at all.
+	//
+	// So the same guarantee is stated here explicitly: a marked packet leaving by
+	// anything other than its own interface is dropped rather than delivered by the
+	// wrong path.
+	for _, group := range plan.Egresses {
+		if group.ID == domain.EgressDirect {
+			continue // direct means the uplink, which is where unmarked traffic goes
+		}
+		line("\t\tmeta mark 0x%08x oifname != %q drop", group.Mark, group.Interface)
+	}
+	for _, network := range plan.Internals {
+		line("\t\tmeta mark 0x%08x oifname != %q drop", network.Mark, network.Interface)
+	}
 	line("\t}")
 	line("")
 
@@ -293,13 +315,18 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\t\tiifname %q udp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
 	line("\t\tiifname %q tcp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
 	// The UDP fallback, for networks that block UDP/51820 by port rather than
-	// discarding UDP as such. Scoped to the uplink: an unscoped redirect also
-	// matches client traffic arriving on the ingress interface, so a forwarded QUIC
-	// or HTTP/3 request to any site's :443 would have its destination port rewritten
-	// to the ingress and silently break. Conntrack reverses it for the replies, as it
+	// discarding UDP as such. Scoped to the uplink: an unscoped rule also matches
+	// client traffic arriving on the ingress interface, so a forwarded QUIC or
+	// HTTP/3 request to any site's :443 would have its destination port rewritten to
+	// the ingress and silently break. Conntrack reverses it for the replies, as it
 	// already does for the DNS rules above.
+	//
+	// `dnat to :port` rather than `redirect`, which would also rewrite the
+	// destination address to the incoming interface's primary one: where clients
+	// dial a secondary or floating address, the reply would then be sourced from the
+	// primary and the client would discard it as coming from the wrong endpoint.
 	if plan.AltUDP443 {
-		line("\t\tiifname %q udp dport %d redirect to :%d",
+		line("\t\tiifname %q meta nfproto ipv4 udp dport %d dnat to :%d",
 			plan.UplinkInterface, domain.RealityPort, plan.ListenPort)
 	}
 	line("\t}")
@@ -319,20 +346,6 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	// serving, and the namespace translates it once on the way out.
 	for _, network := range plan.Internals {
 		line("\t\tip saddr != %s oifname %q masquerade", plan.ClientCIDR, network.Interface)
-	}
-	// The same treatment for egress tunnels, but only where something on the hub
-	// actually originates traffic into one: the REALITY listener opens connections
-	// on a client's behalf, marked with that client's egress. Those packets carry
-	// the hub's own address, which the namespace has no route back to, so without
-	// this the handshake completes and nothing answers. Client traffic is excluded
-	// as everywhere else -- it keeps its address so the provider sees who it serves.
-	if plan.RealityPort != 0 {
-		for _, group := range plan.Egresses {
-			if group.ID == domain.EgressDirect || group.Interface == plan.UplinkInterface {
-				continue
-			}
-			line("\t\tip saddr != %s oifname %q masquerade", plan.ClientCIDR, group.Interface)
-		}
 	}
 	// A proxy's own connections leave from its side of the veth, an address the
 	// internet cannot answer.

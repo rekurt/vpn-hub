@@ -18,8 +18,12 @@ for binary in hubctl vpn-hub-agent vpn-hub-bot; do
 	fi
 done
 
-if [ -d "$STAGE/systemd" ]; then
-	install -m 0644 "$STAGE"/systemd/* /etc/systemd/system/
+# Guarded on the glob matching, not just the directory existing: an unexpanded
+# `*` makes install fail, and under `set -e` that would abort the deploy after the
+# binaries are already in place but before the agent is enabled and restarted.
+set -- "$STAGE"/systemd/*
+if [ -e "$1" ]; then
+	install -m 0644 "$@" /etc/systemd/system/
 fi
 
 # Migration from units this repository no longer ships. The subscription timer's
@@ -27,13 +31,21 @@ fi
 # SSH fallback); the 443 fallbacks live in the reconciled ruleset and a transient
 # unit, gated by hub.fallback in hub.yaml. Drop these lines once every host has
 # taken one deploy past them.
-systemctl disable --now 'vpn-hub-subscription@*.timer' >/dev/null 2>&1 || true
+# `systemctl stop` expands a glob over loaded units; `systemctl disable` does not
+# -- it mangles the `*` into a literal instance name and quietly does nothing. So
+# the enablement symlinks go by hand, or a real instance would keep its dangling
+# symlink and a not-found unit after the template below is deleted.
+systemctl stop 'vpn-hub-subscription@*.timer' >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/timers.target.wants/vpn-hub-subscription@*.timer
 systemctl disable --now vpn-hub-alt-udp443.service vpn-hub-vless-reality.service >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/vpn-hub-subscription@.service \
 	/etc/systemd/system/vpn-hub-subscription@.timer \
 	/etc/systemd/system/vpn-hub-alt-udp443.service \
 	/etc/systemd/system/vpn-hub-vless-reality.service \
 	/etc/vpn-hub/vpn-hub-alt-udp443.nft
+# The retired listener's configuration holds a REALITY private key and a UUID per
+# device. A secret must not outlive the thing that justified it.
+rm -rf /etc/vpn-hub/vless-reality
 nft delete table ip vpn_hub_alt_udp443 2>/dev/null || true
 
 systemctl daemon-reload

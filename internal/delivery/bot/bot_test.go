@@ -522,12 +522,27 @@ func TestDeviceAddDeliversTheFallbackProfiles(t *testing.T) {
 	if link == "" {
 		t.Fatal("no vless:// link was delivered")
 	}
-	// The credential in the chat has to be the one the listener will admit.
+	// The credential in the chat has to be the one the listener will admit, and the
+	// listener's user list is derived from the device's public key as it appears in
+	// the configuration -- so read it from there rather than trusting the renderer.
 	privateKey, err := instance.RealityKey.PrivateKey(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	uuid, err := domain.RealityUserUUID(privateKey, "phone")
+	cfg, err := instance.Service.LoadAndValidate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var devicePublicKey string
+	for _, device := range cfg.Devices {
+		if device.ID == "phone" {
+			devicePublicKey = device.PublicKey
+		}
+	}
+	if devicePublicKey == "" {
+		t.Fatal("the device was not added to the configuration")
+	}
+	uuid, err := domain.RealityUserUUID(privateKey, "phone", devicePublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}

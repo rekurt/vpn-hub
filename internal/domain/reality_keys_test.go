@@ -58,6 +58,7 @@ func TestValidateRealityKeyRejectsStandardBase64(t *testing.T) {
 func TestRealityDerivationsAreStable(t *testing.T) {
 	t.Parallel()
 	const privateKey = "cGtxNTZKb0hRZHZKWXhpVGxDMFlpS3Y0dGRlbEVOSHU"
+	const devicePublicKey = "aYo1x9b951yd4mtMeKkW/vyOJvU08j2UU96u/Ve9QWA="
 	publicKey, err := RealityPublicKey(privateKey)
 	if err != nil {
 		t.Fatal(err)
@@ -70,11 +71,11 @@ func TestRealityDerivationsAreStable(t *testing.T) {
 		t.Fatalf("derived public key is not base64url: %v", err)
 	}
 
-	first, err := RealityUserUUID(privateKey, "macbook")
+	first, err := RealityUserUUID(privateKey, "macbook", devicePublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := RealityUserUUID(privateKey, "macbook")
+	second, err := RealityUserUUID(privateKey, "macbook", devicePublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,12 +83,26 @@ func TestRealityDerivationsAreStable(t *testing.T) {
 		t.Fatalf("the same device got two credentials: %q and %q", first, second)
 	}
 
-	other, err := RealityUserUUID(privateKey, "phone")
+	other, err := RealityUserUUID(privateKey, "phone", devicePublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if other == first {
 		t.Fatal("two devices share one credential")
+	}
+
+	// A re-issued profile carries a new device key, and that has to produce a new
+	// credential: otherwise "this device leaked, re-issue it" leaves the leaked
+	// vless:// link working, which is the opposite of what the operator was told.
+	reissued, err := RealityUserUUID(privateKey, "macbook", "TE5crMJPBmCr2bF/uSbHqAlTAHKQwLKMs0RQxfQ0LU4=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reissued == first {
+		t.Fatal("re-issuing the device's key left its fallback credential unchanged")
+	}
+	if _, err := RealityUserUUID(privateKey, "macbook", ""); err == nil {
+		t.Fatal("a credential was derived for a device with no key")
 	}
 
 	// Shaped as a version 4 UUID, since some clients reject anything else.
