@@ -40,6 +40,12 @@ type Ingress interface {
 	Observe(ctx context.Context, name string) (domain.IngressObservation, error)
 }
 
+// RealityIngress runs the TCP/443 fallback listener. A spec with Enabled false
+// asks for it to be gone, which is how turning the fallback off closes the port.
+type RealityIngress interface {
+	Apply(context.Context, domain.RealityIngressSpec) error
+}
+
 // EgressManager runs upstream tunnels, each isolated in its own namespace.
 type EgressManager interface {
 	Apply(context.Context, []domain.EgressSpec) error

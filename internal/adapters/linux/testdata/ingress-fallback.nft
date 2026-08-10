@@ -6,17 +6,27 @@ table inet vpn_hub
 delete table inet vpn_hub
 
 table inet vpn_hub {
-	comment "vpn-hub:a4fe03a17656848b"
+	comment "vpn-hub:e47bcab98a060660"
 
 	set client_direct {
 		type ipv4_addr
 		elements = { 10.80.0.2, 10.80.0.3 }
 	}
 
+	set client_provider_nl {
+		type ipv4_addr
+		elements = { 10.80.0.4 }
+	}
+
+	set allowed_provider_nl {
+		type ipv4_addr
+	}
+
 	chain prerouting {
 		type filter hook prerouting priority mangle; policy accept;
 		iifname != "awg0" accept
 		ip saddr @client_direct meta mark set 0x00000100
+		ip saddr @client_provider_nl meta mark set 0x00000101
 		ct mark set meta mark
 	}
 
@@ -27,6 +37,7 @@ table inet vpn_hub {
 		iifname "awg0" oifname "awg0" drop
 		iifname "awg0" tcp dport 853 reject with tcp reset
 		iifname "awg0" ip saddr @client_direct oifname "eth0" accept
+		iifname "awg0" ip saddr @client_provider_nl oifname "vh-provider-nl" accept
 	}
 
 	chain input {
@@ -56,5 +67,6 @@ table inet vpn_hub {
 	chain postrouting {
 		type nat hook postrouting priority srcnat; policy accept;
 		ip saddr 10.80.0.0/24 oifname "eth0" masquerade
+		ip saddr != 10.80.0.0/24 oifname "vh-provider-nl" masquerade
 	}
 }

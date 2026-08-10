@@ -90,7 +90,42 @@ func TestRenderIngressFallback(t *testing.T) {
 	plan := directOnlyPlan()
 	plan.AltUDP443 = true
 	plan.RealityPort = domain.RealityPort
+	// A tunnel egress as well as direct: the fallback listener opens hub-originated
+	// connections into it on a device's behalf, which is what the extra masquerade
+	// in the golden file exists for.
+	plan.Egresses = append(plan.Egresses, domain.EgressGroup{
+		ID:        "provider-nl",
+		Mark:      0x101,
+		Interface: "vh-provider-nl",
+		Addresses: []string{"10.80.0.4"},
+	})
 	goldenTest(t, "ingress-fallback", plan)
+}
+
+// Without a return path the REALITY listener's per-device egress completes its
+// handshake and then carries nothing: the connections it opens hold the hub's own
+// address, which the tunnel namespace has no route back to.
+func TestFallbackGivesHubOriginatedTrafficAWayBack(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.Egresses = append(plan.Egresses, domain.EgressGroup{
+		ID: "provider-nl", Mark: 0x101, Interface: "vh-provider-nl",
+	})
+
+	rule := `ip saddr != 10.80.0.0/24 oifname "vh-provider-nl" masquerade`
+	if strings.Contains(RenderRuleset(plan), rule) {
+		t.Error("the rule is present with no fallback to originate that traffic")
+	}
+
+	plan.RealityPort = domain.RealityPort
+	rendered := RenderRuleset(plan)
+	if !strings.Contains(rendered, rule) {
+		t.Fatalf("missing %q:\n%s", rule, rendered)
+	}
+	// direct leaves by the uplink, which already masquerades the client subnet.
+	if strings.Contains(rendered, `ip saddr != 10.80.0.0/24 oifname "eth0" masquerade`) {
+		t.Error("the uplink got a rule meant for tunnel links")
+	}
 }
 
 // The fallbacks open a port and rewrite a destination, so their absence has to be

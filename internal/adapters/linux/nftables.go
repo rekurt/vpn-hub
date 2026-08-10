@@ -320,6 +320,20 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	for _, network := range plan.Internals {
 		line("\t\tip saddr != %s oifname %q masquerade", plan.ClientCIDR, network.Interface)
 	}
+	// The same treatment for egress tunnels, but only where something on the hub
+	// actually originates traffic into one: the REALITY listener opens connections
+	// on a client's behalf, marked with that client's egress. Those packets carry
+	// the hub's own address, which the namespace has no route back to, so without
+	// this the handshake completes and nothing answers. Client traffic is excluded
+	// as everywhere else -- it keeps its address so the provider sees who it serves.
+	if plan.RealityPort != 0 {
+		for _, group := range plan.Egresses {
+			if group.ID == domain.EgressDirect || group.Interface == plan.UplinkInterface {
+				continue
+			}
+			line("\t\tip saddr != %s oifname %q masquerade", plan.ClientCIDR, group.Interface)
+		}
+	}
 	// A proxy's own connections leave from its side of the veth, an address the
 	// internet cannot answer.
 	if plan.LinkBase != "" && anyProxied(plan) {

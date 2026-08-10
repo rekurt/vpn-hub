@@ -6,6 +6,8 @@
 package wiring
 
 import (
+	"path/filepath"
+
 	configadapter "vpn-hub/internal/adapters/config"
 	"vpn-hub/internal/adapters/linux"
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
@@ -33,6 +35,19 @@ func Service(configPath, stateDir string) application.Service {
 	}
 }
 
+// RealityKeyPath names the fallback listener's key, beside the configuration it
+// belongs to. Derived rather than given a flag of its own: the agent, the bot and
+// hubctl all need it, and three flags is three chances for one of them to look at a
+// different file and quietly disagree about which devices can connect.
+func RealityKeyPath(configDir string) string {
+	return filepath.Join(configDir, "reality.key")
+}
+
+// RealityKey is the store hubctl and the bot read to issue client links.
+func RealityKey(configDir string) linux.RealityKeyFile {
+	return linux.RealityKeyFile{Path: RealityKeyPath(configDir)}
+}
+
 // Reconciler wires the host-facing adapters. Everything it drives only formats or
 // executes; the decisions live in the application layer.
 func Reconciler(keyPath, runtimeDir, configDir string) ports.Reconciler {
@@ -44,5 +59,7 @@ func Reconciler(keyPath, runtimeDir, configDir string) ports.Reconciler {
 		TunnelConfigs: linux.TunnelConfigFiles{Dir: configDir, Secrets: configadapter.SOPSSecretStore{}},
 		Host:          linux.NetConf{},
 		ServerKey:     linux.ServerKeyFile{Path: keyPath},
+		Reality:       linux.RealityIngress{SecretsDir: runtimeDir},
+		RealityKey:    RealityKey(configDir),
 	}
 }
