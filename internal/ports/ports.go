@@ -8,6 +8,7 @@ package ports
 
 import (
 	"context"
+	"time"
 
 	"vpn-hub/internal/domain"
 )
@@ -76,6 +77,20 @@ type HostNetwork interface {
 // carried in a revision.
 type ServerKeyStore interface {
 	PrivateKey(context.Context) (string, error)
+}
+
+// RevocationSource lists locally revoked device ids, consumed at deploy time so a
+// revoked device never reaches the state the agent converges on.
+type RevocationSource interface {
+	Load(context.Context) ([]string, error)
+}
+
+// DeployConfirmation arms the deploy-and-confirm safety net and clears it.
+type DeployConfirmation interface {
+	// Arm reports false without error when there is no earlier revision to return
+	// to -- the first deploy has nothing to roll back onto.
+	Arm(ctx context.Context, within time.Duration, revision string) (armed bool, err error)
+	Confirm() error
 }
 
 // Reconciler converges a host towards a revision. Apply returns the differences it

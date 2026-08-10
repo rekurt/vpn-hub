@@ -83,23 +83,17 @@ func newDeployCommand(configPath *string) *cobra.Command {
 		Use:   "deploy",
 		Short: "Compile and safely apply a desired-state revision locally",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			service := newService(*configPath, stateDir)
-			cfg, err := service.LoadAndValidate(cmd.Context())
-			if err != nil {
-				return err
+			deployment := application.Deployment{
+				Service:       newService(*configPath, stateDir),
+				Revocations:   runtimeadapter.RevocationStore{StateDir: stateDir},
+				Confirmations: runtimeadapter.ConfirmationStore{StateDir: stateDir},
 			}
-			// Applied after validation and before compiling the revision, so a revoked
-			// device never reaches the state the agent converges on.
-			revoked, err := runtimeadapter.RevocationStore{StateDir: stateDir}.Load(cmd.Context())
+			state, revoked, err := deployment.Compile(cmd.Context())
 			if err != nil {
 				return err
 			}
 			if len(revoked) > 0 {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "excluding %d revoked device(s): %s\n", len(revoked), strings.Join(revoked, ", "))
-			}
-			state, err := service.BuildDesiredState(application.RemoveRevoked(cfg, revoked))
-			if err != nil {
-				return err
 			}
 			if dryRun {
 				_, err = fmt.Fprintf(cmd.OutOrStdout(),
@@ -107,33 +101,27 @@ func newDeployCommand(configPath *string) *cobra.Command {
 					state.Revision, len(state.Tunnels), len(state.Devices))
 				return err
 			}
-			confirmations := runtimeadapter.ConfirmationStore{StateDir: stateDir}
-			var armed bool
-			if confirmWithin > 0 {
-				if armed, err = confirmations.Arm(cmd.Context(), confirmWithin, state.Revision); err != nil {
-					return err
-				}
-			}
-			if err := service.Save(cmd.Context(), state); err != nil {
+			result, err := deployment.Apply(cmd.Context(), state, confirmWithin)
+			if err != nil {
 				return err
 			}
 			if confirmWithin > 0 {
-				if !armed {
+				if !result.Armed {
 					// Said plainly rather than implied: an operator who reads the
 					// usual message trusts a rollback that is not there.
 					_, err = fmt.Fprintf(cmd.OutOrStdout(),
 						"saved revision %s; no rollback was armed because there is no earlier revision to return to\n",
-						state.Revision)
+						result.Revision)
 					return err
 				}
 				_, err = fmt.Fprintf(cmd.OutOrStdout(),
 					"saved revision %s; run `hubctl confirm` within %s or the agent restores the previous one\n",
-					state.Revision, confirmWithin)
+					result.Revision, confirmWithin)
 				return err
 			}
 			// The agent converges the host onto this; hubctl never touches it.
 			_, err = fmt.Fprintf(cmd.OutOrStdout(),
-				"saved revision %s to %s; the agent applies it on its next pass\n", state.Revision, stateDir)
+				"saved revision %s to %s; the agent applies it on its next pass\n", result.Revision, stateDir)
 			return err
 		},
 	}
