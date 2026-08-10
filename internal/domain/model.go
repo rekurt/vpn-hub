@@ -36,6 +36,9 @@ type Hub struct {
 	ClientCIDR      string            `mapstructure:"client_cidr" json:"client_cidr"`
 	DNSAddress      string            `mapstructure:"dns_address" json:"dns_address"`
 	AWGInterface    map[string]string `mapstructure:"awg_interface" json:"awg_interface,omitempty"`
+	// Fallback opens alternative ways in for networks that block the ordinary UDP
+	// ingress. Absent means both are off.
+	Fallback IngressFallback `mapstructure:"fallback" json:"fallback,omitempty"`
 }
 
 type TunnelSource struct {

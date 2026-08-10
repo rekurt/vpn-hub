@@ -71,8 +71,12 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 		ManagementPort:   ManagementPort,
 		ClientCIDR:       state.Hub.ClientCIDR,
 		DNSAddress:       state.Hub.DNSAddress,
+		AltUDP443:        state.Hub.Fallback.UDP443,
 		Internals:        nil, // filled below, once marks are allocated
 		Egresses:         make([]domain.EgressGroup, 0, len(grouped)),
+	}
+	if state.Hub.Fallback.Reality.Enabled {
+		plan.RealityPort = domain.RealityPort
 	}
 
 	if addresses := grouped[domain.EgressDirect]; len(addresses) > 0 {

@@ -72,7 +72,9 @@ func allowedSets(plan domain.FirewallPlan) []struct {
 // whenever RenderRuleset's output changes for an unchanged plan.
 //
 //	1: forwarded TCP MSS clamp matched on the SYN|RST mask, not a bare `flags syn`.
-const rulesetFormatVersion = 1
+//	2: TCP/443 is accepted only when the REALITY fallback is on, and the UDP/443
+//	   redirect moved into this table, scoped to the uplink.
+const rulesetFormatVersion = 2
 
 // Fingerprint identifies a firewall plan by its content and rendering format.
 func Fingerprint(plan domain.FirewallPlan) string {
@@ -244,10 +246,13 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\t\tip protocol icmp accept")
 	line("\t\ttcp dport %d accept", plan.ManagementPort)
 	line("\t\tudp dport %d accept", plan.ListenPort)
-	// Reality is a TCP fallback for networks that discard encrypted UDP. Keep this
-	// in the reconciled table rather than in a parallel table: verdicts from a
-	// second base chain do not bypass this chain's drop policy.
-	line("\t\ttcp dport 443 accept")
+	// REALITY is a TCP fallback for networks that discard encrypted UDP. Kept in
+	// the reconciled table rather than a parallel one: verdicts from a second base
+	// chain do not bypass this chain's drop policy. Conditional, because a port
+	// accepted with nothing listening behind it is attack surface offered for free.
+	if plan.RealityPort != 0 {
+		line("\t\ttcp dport %d accept", plan.RealityPort)
+	}
 	line("\t\tiifname %q ip daddr %s udp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
 	line("\t\tiifname %q ip daddr %s tcp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
 	line("\t}")
@@ -287,6 +292,16 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	// will not guess which one a rule means.
 	line("\t\tiifname %q udp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
 	line("\t\tiifname %q tcp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
+	// The UDP fallback, for networks that block UDP/51820 by port rather than
+	// discarding UDP as such. Scoped to the uplink: an unscoped redirect also
+	// matches client traffic arriving on the ingress interface, so a forwarded QUIC
+	// or HTTP/3 request to any site's :443 would have its destination port rewritten
+	// to the ingress and silently break. Conntrack reverses it for the replies, as it
+	// already does for the DNS rules above.
+	if plan.AltUDP443 {
+		line("\t\tiifname %q udp dport %d redirect to :%d",
+			plan.UplinkInterface, domain.RealityPort, plan.ListenPort)
+	}
 	line("\t}")
 	line("")
 

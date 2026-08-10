@@ -85,6 +85,45 @@ func TestRenderWithTunnelAndInternalRoutes(t *testing.T) {
 	goldenTest(t, "tunnel-and-internal", plan)
 }
 
+func TestRenderIngressFallback(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.AltUDP443 = true
+	plan.RealityPort = domain.RealityPort
+	goldenTest(t, "ingress-fallback", plan)
+}
+
+// The fallbacks open a port and rewrite a destination, so their absence has to be
+// as exact as their presence: with the gate off nothing may accept on 443, and no
+// redirect may exist to catch a client's own QUIC traffic.
+func TestFallbackRulesAreAbsentWhenOff(t *testing.T) {
+	t.Parallel()
+	ruleset := RenderRuleset(directOnlyPlan())
+	for _, rule := range []string{"tcp dport 443", "redirect to :"} {
+		if strings.Contains(ruleset, rule) {
+			t.Errorf("%q is present with the fallback off:\n%s", rule, ruleset)
+		}
+	}
+}
+
+// The redirect must never match traffic arriving from clients: an unscoped rule
+// would rewrite a forwarded QUIC or HTTP/3 request to any site's :443 and break it
+// in a way that looks like the site's fault.
+func TestAltUDP443IsScopedToTheUplink(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.AltUDP443 = true
+	ruleset := RenderRuleset(plan)
+
+	want := `iifname "eth0" udp dport 443 redirect to :51820`
+	if !strings.Contains(ruleset, want) {
+		t.Fatalf("missing %q:\n%s", want, ruleset)
+	}
+	if strings.Contains(ruleset, `iifname "awg0" udp dport 443`) {
+		t.Errorf("the redirect also matches the ingress interface:\n%s", ruleset)
+	}
+}
+
 // The kill switch is the forward chain's policy rather than an explicit rule, so it
 // is worth asserting directly: a refactor that flipped it to accept would leave every
 // golden file looking plausible.

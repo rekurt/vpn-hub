@@ -6,7 +6,7 @@ table inet vpn_hub
 delete table inet vpn_hub
 
 table inet vpn_hub {
-	comment "vpn-hub:7d0e137725d2204e"
+	comment "vpn-hub:580efdded4ed7e72"
 
 	set client_direct {
 		type ipv4_addr
@@ -36,7 +36,6 @@ table inet vpn_hub {
 		ip protocol icmp accept
 		tcp dport 22 accept
 		udp dport 51820 accept
-		tcp dport 443 accept
 		iifname "awg0" ip daddr 10.80.0.1 udp dport 53 accept
 		iifname "awg0" ip daddr 10.80.0.1 tcp dport 53 accept
 	}

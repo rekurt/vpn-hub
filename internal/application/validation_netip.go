@@ -86,7 +86,78 @@ func validateHubNetwork(hub domain.Hub) error {
 	if err := domain.ValidatePublicKey(hub.ServerPublicKey); err != nil {
 		return fmt.Errorf("hub server_public_key: %w", err)
 	}
+	if err := validateFallback(hub); err != nil {
+		return err
+	}
 	return validateAWGInterface(hub.AWGInterface)
+}
+
+// validateFallback checks the alternative ingress paths. Both open a port on the
+// hub, so a half-stated configuration is refused rather than silently ignored.
+func validateFallback(hub domain.Hub) error {
+	if hub.Fallback.UDP443 {
+		port, err := hubListenPort(hub.Endpoint)
+		if err != nil {
+			return err
+		}
+		// The redirect would point the port at itself, and the packet filter would
+		// carry a rule that reads as a fallback while doing nothing.
+		if port == domain.RealityPort {
+			return fmt.Errorf("hub.fallback.udp443 is pointless when the hub already listens on %d", domain.RealityPort)
+		}
+	}
+
+	reality := hub.Fallback.Reality
+	if !reality.Enabled {
+		// A server_name left behind after switching the fallback off is harmless,
+		// and rejecting it would make turning the feature off a two-step edit.
+		return nil
+	}
+	if reality.ServerName == "" {
+		return fmt.Errorf("hub.fallback.reality.server_name is required: " +
+			"REALITY mimics a real TLS 1.3 site and hands unauthenticated connections to it")
+	}
+	if err := validateHostname(reality.ServerName); err != nil {
+		return fmt.Errorf("hub.fallback.reality.server_name: %w", err)
+	}
+	// Mimicking the hub itself would send unauthenticated connections back to the
+	// hub, which answers nothing on 443 but this listener -- a loop that also makes
+	// the disguise pointless.
+	if host, _, err := net.SplitHostPort(hub.Endpoint); err == nil &&
+		strings.EqualFold(host, reality.ServerName) {
+		return fmt.Errorf("hub.fallback.reality.server_name %q is the hub's own endpoint; "+
+			"name a real site elsewhere for the handshake to mimic", reality.ServerName)
+	}
+	return nil
+}
+
+// validateHostname accepts the shape of a DNS name. It deliberately does not
+// resolve it: validation runs on a workstation that may not share the hub's view
+// of DNS, and a name that resolves today is not the property being checked.
+func validateHostname(value string) error {
+	if len(value) > 253 {
+		return fmt.Errorf("%q is longer than a DNS name may be", value)
+	}
+	if strings.ContainsAny(value, " \t\r\n/:") {
+		return fmt.Errorf("%q is not a bare hostname", value)
+	}
+	labels := strings.Split(strings.TrimSuffix(value, "."), ".")
+	if len(labels) < 2 {
+		return fmt.Errorf("%q needs at least one dot; a public site is what the handshake mimics", value)
+	}
+	for _, label := range labels {
+		if label == "" || len(label) > 63 {
+			return fmt.Errorf("%q has an empty or over-long label", value)
+		}
+		for _, symbol := range label {
+			isLetter := (symbol >= 'a' && symbol <= 'z') || (symbol >= 'A' && symbol <= 'Z')
+			isDigit := symbol >= '0' && symbol <= '9'
+			if !isLetter && !isDigit && symbol != '-' {
+				return fmt.Errorf("%q contains %q, which a hostname may not", value, symbol)
+			}
+		}
+	}
+	return nil
 }
 
 func validateEndpoint(endpoint string) error {
