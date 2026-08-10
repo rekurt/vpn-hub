@@ -67,7 +67,7 @@ func newTunnelToggleCommand(configPath *string, enable bool) *cobra.Command {
 			// rather than discovering it at the next deploy.
 			if _, err := newService(*configPath, "").LoadAndValidate(cmd.Context()); err != nil {
 				if revertErr := editor.SetTunnelField(args[0], "enabled", fmt.Sprint(!enable)); revertErr != nil {
-					return fmt.Errorf("change left the config invalid (%w) AND the revert failed (%v); fix %s by hand", err, revertErr, *configPath)
+					return fmt.Errorf("change left the config invalid (%w) AND the revert failed (%w); fix %s by hand", err, revertErr, *configPath)
 				}
 				return fmt.Errorf("reverted: %w", err)
 			}
@@ -156,7 +156,7 @@ func newDeviceSetEgressCommand(configPath *string) *cobra.Command {
 			if _, err := newService(*configPath, "").LoadAndValidate(cmd.Context()); err != nil {
 				if previous != "" {
 					if revertErr := editor.SetDeviceField(args[0], "egress", previous); revertErr != nil {
-						return fmt.Errorf("change left the config invalid (%w) AND the revert failed (%v); fix %s by hand", err, revertErr, *configPath)
+						return fmt.Errorf("change left the config invalid (%w) AND the revert failed (%w); fix %s by hand", err, revertErr, *configPath)
 					}
 				}
 				return fmt.Errorf("reverted: %w", err)
