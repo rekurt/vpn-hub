@@ -10,18 +10,37 @@ import (
 	"vpn-hub/internal/adapters/linux"
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	"vpn-hub/internal/domain"
+	"vpn-hub/internal/wiring"
 )
 
 func newKeygenCommand() *cobra.Command {
 	var output string
+	var reality bool
 	command := &cobra.Command{
 		Use:   "keygen",
 		Short: "Generate the hub key pair and print the public half",
 		Long: "Writes the private key to --output with mode 0600 and prints the public key " +
 			"to paste into hub.server_public_key. Refuses to overwrite an existing key, " +
-			"because replacing it invalidates every client profile already issued.",
+			"because replacing it invalidates every client profile already issued.\n\n" +
+			"With --reality, generates the TCP/443 fallback listener's key instead. " +
+			"That key stays on the hub: devices get a derived credential, and the public " +
+			"half travels inside each vless:// link the bot issues.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if reality {
+				if !cmd.Flags().Changed("output") {
+					output = wiring.RealityKeyPath("/etc/vpn-hub")
+				}
+				publicKey, err := linux.RealityKeyFile{Path: output}.Create()
+				if err != nil {
+					return err
+				}
+				_, err = fmt.Fprintf(cmd.OutOrStdout(),
+					"wrote %s\nREALITY public key: %s\n"+
+						"Turn hub.fallback.reality on, deploy, and the bot issues each device its link.\n",
+					output, publicKey)
+				return err
+			}
 			publicKey, err := linux.ServerKeyFile{Path: output}.Create()
 			if err != nil {
 				return err
@@ -32,6 +51,7 @@ func newKeygenCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&output, "output", "/etc/vpn-hub/server.key", "where to write the hub private key")
+	command.Flags().BoolVar(&reality, "reality", false, "generate the TCP/443 fallback key instead of the hub key")
 	return command
 }
 
@@ -101,14 +121,62 @@ func newDeviceAddCommand(configPath *string) *cobra.Command {
 			if err := out.Close(); err != nil {
 				return fmt.Errorf("write profile: %w", err)
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "\nwrote client profile to %s\n", output)
-			return err
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "\nwrote client profile to %s\n", output); err != nil {
+				return err
+			}
+			return printFallback(cmd, cfg.Hub, deviceID, address, privateKey, output)
 		},
 	}
 	command.Flags().StringVar(&egress, "egress", "", "tunnel carrying this device's internet traffic, or direct")
 	command.Flags().StringVar(&address, "address", "", "host address inside hub.client_cidr, for example 10.80.0.2/32")
 	command.Flags().StringVar(&output, "output", "", "where to write the client profile; omit to print only the entry")
 	return command
+}
+
+// printFallback writes the alternative ways in beside the ordinary profile.
+//
+// Every failure is reported on stderr and stepped over: the profile has already
+// been written, and a hub whose fallback key is missing is still a hub that works
+// on every network that does not need one.
+func printFallback(cmd *cobra.Command, hub domain.Hub, deviceID, address, privateKey, output string) error {
+	if hub.Fallback.UDP443 {
+		profile, err := runtimeadapter.AltPortProfile(hub, address, privateKey)
+		if err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "no UDP/443 profile: %v\n", err)
+		} else {
+			path := output + ".443"
+			if err := os.WriteFile(path, []byte(profile), 0o600); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "no UDP/443 profile: %v\n", err)
+			} else if _, err := fmt.Fprintf(cmd.OutOrStdout(),
+				"wrote the UDP/443 fallback profile to %s\n", path); err != nil {
+				return err
+			}
+		}
+	}
+	if !hub.Fallback.Reality.Enabled {
+		return nil
+	}
+
+	realityKey, err := wiring.RealityKey("/etc/vpn-hub").PrivateKey(cmd.Context())
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"no TCP/443 link: %v\n(the hub issues it itself; run this on the hub to print it here)\n", err)
+		return nil
+	}
+	publicKey, err := domain.RealityPublicKey(realityKey)
+	if err != nil {
+		return err
+	}
+	uuid, err := domain.RealityUserUUID(realityKey, deviceID)
+	if err != nil {
+		return err
+	}
+	link, err := runtimeadapter.RealityProfileRenderer{}.Link(hub, deviceID, uuid, publicKey)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "\nTCP/443 fallback link:\n%s\n", link)
+	return err
 }
 
 func validateHostAddress(value string) error {

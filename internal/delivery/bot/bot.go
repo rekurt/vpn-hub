@@ -71,6 +71,12 @@ type keyRotator interface {
 	Rotate() (publicKey string, err error)
 }
 
+// realityKeyReader reads the TCP/443 fallback key, from which each device's
+// credential is derived when its profile is issued.
+type realityKeyReader interface {
+	PrivateKey(ctx context.Context) (string, error)
+}
+
 // peerObserver reads the live ingress interface: who connected, when, how much.
 type peerObserver interface {
 	Observe(ctx context.Context, name string) (domain.IngressObservation, error)
@@ -113,15 +119,16 @@ type Bot struct {
 	Settings      settingsStore
 	Offsets       offsetStore
 
-	Journal   journalReader
-	Units     unitManager
-	QR        qrEncoder
-	Keys      keyRotator
-	Peers     peerObserver
-	Host      func() (linux.HostSnapshot, error)
-	Uplink    func(ctx context.Context) (string, error)
-	Refresh   refreshFunc
-	Upstreams upstreamStore
+	Journal    journalReader
+	Units      unitManager
+	QR         qrEncoder
+	Keys       keyRotator
+	RealityKey realityKeyReader
+	Peers      peerObserver
+	Host       func() (linux.HostSnapshot, error)
+	Uplink     func(ctx context.Context) (string, error)
+	Refresh    refreshFunc
+	Upstreams  upstreamStore
 	// Fetch and Parse list a subscription's candidates without touching the host;
 	// Prove tries exactly one in the canary namespace.
 	Fetch func(ctx context.Context, url string) ([]byte, error)
@@ -162,17 +169,18 @@ func New(cfg Config, client *tg.Client, configPath, stateDir, configDir, runtime
 		Settings:      runtimeadapter.BotSettingsStore{StateDir: stateDir},
 		Offsets:       runtimeadapter.OffsetStore{StateDir: stateDir},
 
-		Journal:   linux.Journal{},
-		Units:     linux.Systemctl{},
-		QR:        linux.QREncoder{},
-		Keys:      linux.ServerKeyFile{Path: serverKey},
-		Peers:     linux.Ingress{SecretsDir: runtimeDir},
-		Host:      linux.HostInfo{}.Snapshot,
-		Uplink:    linux.NetConf{}.UplinkInterface,
-		Upstreams: linux.UpstreamFile{Dir: configDir},
-		Fetch:     health.HTTPSSubscriptionFetcher{}.Fetch,
-		Parse:     linux.ParseSubscription,
-		Now:       time.Now,
+		Journal:    linux.Journal{},
+		Units:      linux.Systemctl{},
+		QR:         linux.QREncoder{},
+		Keys:       linux.ServerKeyFile{Path: serverKey},
+		RealityKey: wiring.RealityKey(configDir),
+		Peers:      linux.Ingress{SecretsDir: runtimeDir},
+		Host:       linux.HostInfo{}.Snapshot,
+		Uplink:     linux.NetConf{}.UplinkInterface,
+		Upstreams:  linux.UpstreamFile{Dir: configDir},
+		Fetch:      health.HTTPSSubscriptionFetcher{}.Fetch,
+		Parse:      linux.ParseSubscription,
+		Now:        time.Now,
 	}
 	b.Refresh = b.canaryRefresh
 	b.Prove = func(ctx context.Context, candidate domain.ProxyTunnel, uplink string) error {
@@ -201,6 +209,11 @@ func (b *Bot) init() {
 	}
 	if b.Now == nil {
 		b.Now = time.Now
+	}
+	// Defaulted rather than required: issuing a profile reads this only when the
+	// fallback is on, and a Bot built by hand should not have to know that.
+	if b.RealityKey == nil {
+		b.RealityKey = wiring.RealityKey(b.ConfigDir)
 	}
 	if b.Out == nil {
 		b.Out = io.Discard

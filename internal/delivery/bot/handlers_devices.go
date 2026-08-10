@@ -471,7 +471,60 @@ func (b *Bot) sendProfile(ctx context.Context, hub domain.Hub, deviceID, address
 		"Сканировать в приложении AmneziaWG"); err != nil {
 		b.logf("sendPhoto: %v", err)
 	}
+	b.sendFallbackProfiles(ctx, hub, deviceID, address, privateKey)
 	return nil
+}
+
+// sendFallbackProfiles delivers the alternative ways in, when they are configured.
+//
+// Every failure here is reported and stepped over: the ordinary profile has
+// already been delivered, and a device that cannot use the fallback is still a
+// device that works everywhere the fallback is not needed.
+func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID, address, privateKey string) {
+	if hub.Fallback.UDP443 {
+		if profile, err := runtimeadapter.AltPortProfile(hub, address, privateKey); err != nil {
+			b.logf("alt-port profile: %v", err)
+		} else if _, err := b.API.SendDocument(ctx, b.Cfg.AdminID,
+			runtimeadapter.RealityProfileName(deviceID), []byte(profile),
+			"Запасной профиль на <b>UDP/443</b> — для сетей, где режут порт 51820. "+
+				"Тот же профиль, другой порт."); err != nil {
+			b.logf("alt-port profile: %v", err)
+		}
+	}
+
+	if !hub.Fallback.Reality.Enabled {
+		return
+	}
+	privateRealityKey, err := b.RealityKey.PrivateKey(ctx)
+	if err != nil {
+		b.send(ctx, "⚠️ Запасной вход по TCP/443 включён, но ключ не читается: <code>"+
+			esc(err.Error())+"</code>", nil)
+		return
+	}
+	publicKey, err := domain.RealityPublicKey(privateRealityKey)
+	if err != nil {
+		b.logf("reality public key: %v", err)
+		return
+	}
+	uuid, err := domain.RealityUserUUID(privateRealityKey, deviceID)
+	if err != nil {
+		b.logf("reality credential: %v", err)
+		return
+	}
+	link, err := runtimeadapter.RealityProfileRenderer{}.Link(hub, deviceID, uuid, publicKey)
+	if err != nil {
+		b.logf("reality link: %v", err)
+		return
+	}
+
+	b.send(ctx, "🛡 Запасной вход по <b>TCP/443</b> — для сетей, где UDP не проходит вовсе. "+
+		"Импортировать в v2rayNG, Hiddify или sing-box:\n\n<code>"+esc(link)+"</code>", nil)
+	if image, err := b.QR.PNG(ctx, link); err != nil {
+		b.logf("reality qr: %v", err)
+	} else if _, err := b.API.SendPhoto(ctx, b.Cfg.AdminID, deviceID+"-reality.png", image,
+		"Сканировать в прокси-клиенте"); err != nil {
+		b.logf("sendPhoto: %v", err)
+	}
 }
 
 // --- reissue / revoke ------------------------------------------------------

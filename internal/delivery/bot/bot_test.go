@@ -467,6 +467,123 @@ func TestDeviceAddDialogDeliversProfileAndQR(t *testing.T) {
 	}
 }
 
+// With the fallbacks on, a device gets three things instead of one: the ordinary
+// profile, the same profile aimed at UDP/443, and a vless:// link with its QR. The
+// point of issuing them together is that nobody has to hand-edit a port on a phone
+// at the moment the ordinary path has stopped working.
+func TestDeviceAddDeliversTheFallbackProfiles(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	realityKey := filepath.Join(t.TempDir(), "reality.key")
+	if _, err := (linux.RealityKeyFile{Path: realityKey}).Create(); err != nil {
+		t.Fatal(err)
+	}
+	instance.RealityKey = linux.RealityKeyFile{Path: realityKey}
+
+	body := strings.Replace(read(t, instance.ConfigPath),
+		"  dns_address: \"10.80.0.1\"\n",
+		"  dns_address: \"10.80.0.1\"\n"+
+			"  fallback:\n"+
+			"    udp443: true\n"+
+			"    reality:\n"+
+			"      enabled: true\n"+
+			"      server_name: \"www.example.com\"\n", 1)
+	if err := os.WriteFile(instance.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "dev:add"))
+	instance.handleUpdate(ctx, message(adminID, "phone"))
+	suggestion := findButton(t, api.lastScreen(t).markup, "Использовать")
+	instance.handleUpdate(ctx, tap(adminID, suggestion))
+	egress := findButton(t, api.lastScreen(t).markup, "direct")
+	instance.handleUpdate(ctx, tap(adminID, egress))
+
+	api.mu.Lock()
+	docs, photos := append([]string(nil), api.docs...), append([]string(nil), api.photos...)
+	messages := append([]sent(nil), api.sent...)
+	api.mu.Unlock()
+
+	if len(docs) != 2 || docs[0] != "phone.conf" || docs[1] != "phone-443.conf" {
+		t.Fatalf("expected the ordinary and the UDP/443 profile, got %v", docs)
+	}
+	if len(photos) != 2 {
+		t.Fatalf("expected a QR for each way in, got %v", photos)
+	}
+
+	var link string
+	for _, message := range messages {
+		if strings.Contains(message.text, "vless://") {
+			link = message.text
+		}
+	}
+	if link == "" {
+		t.Fatal("no vless:// link was delivered")
+	}
+	// The credential in the chat has to be the one the listener will admit.
+	privateKey, err := instance.RealityKey.PrivateKey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uuid, err := domain.RealityUserUUID(privateKey, "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(link, uuid) {
+		t.Errorf("the link does not carry the device's derived credential:\n%s", link)
+	}
+	if strings.Contains(link, privateKey) {
+		t.Fatal("the hub's private key was sent to the chat")
+	}
+}
+
+// A missing key must not cost the operator the ordinary profile: the fallback is
+// an extra way in, and failing the whole flow over it would be a worse outcome
+// than not having it.
+func TestDeviceAddSurvivesAMissingRealityKey(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	instance.RealityKey = linux.RealityKeyFile{Path: filepath.Join(t.TempDir(), "absent.key")}
+	body := strings.Replace(read(t, instance.ConfigPath),
+		"  dns_address: \"10.80.0.1\"\n",
+		"  dns_address: \"10.80.0.1\"\n"+
+			"  fallback:\n"+
+			"    reality:\n"+
+			"      enabled: true\n"+
+			"      server_name: \"www.example.com\"\n", 1)
+	if err := os.WriteFile(instance.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "dev:add"))
+	instance.handleUpdate(ctx, message(adminID, "phone"))
+	suggestion := findButton(t, api.lastScreen(t).markup, "Использовать")
+	instance.handleUpdate(ctx, tap(adminID, suggestion))
+	egress := findButton(t, api.lastScreen(t).markup, "direct")
+	instance.handleUpdate(ctx, tap(adminID, egress))
+
+	api.mu.Lock()
+	docs, messages := append([]string(nil), api.docs...), append([]sent(nil), api.sent...)
+	api.mu.Unlock()
+
+	if len(docs) != 1 || docs[0] != "phone.conf" {
+		t.Fatalf("the ordinary profile did not survive the missing key: %v", docs)
+	}
+	warned := false
+	for _, message := range messages {
+		if strings.Contains(message.text, "ключ не читается") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Error("the admin was not told why no fallback link arrived")
+	}
+}
+
 // A hub edit that breaks validation must be reverted, and a good one must land.
 func TestHubEndpointEditWithRevert(t *testing.T) {
 	t.Parallel()
