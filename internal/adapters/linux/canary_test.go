@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,52 @@ func TestTryLeavesNoFirewallStateBehind(t *testing.T) {
 				t.Errorf("canary.nft was left behind (stat: %v)", err)
 			}
 		})
+	}
+}
+
+func TestSelectCandidateStopsAtTheFirstProven(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	var commands []string
+	curls := 0
+	run := func(_ context.Context, name string, args ...string) (string, error) {
+		line := name + " " + strings.Join(args, " ")
+		commands = append(commands, line)
+		if strings.Contains(line, "curl") {
+			curls++
+			if curls == 1 {
+				return "", fmt.Errorf("exit status 28")
+			}
+		}
+		return "", nil
+	}
+	canary := Canary{Egress: Egress{Run: run, SecretsDir: dir}, Run: run, Timeout: 5 * time.Second}
+
+	first := canaryCandidate()
+	second := canaryCandidate()
+	second.Server = "198.51.100.9"
+
+	var calls []string
+	progress := func(tried, total int, rejected []string) {
+		calls = append(calls, fmt.Sprintf("%d/%d rejected=%d", tried, total, len(rejected)))
+	}
+
+	chosen, reasons, err := canary.SelectCandidate(context.Background(),
+		[]domain.ProxyTunnel{first, second}, "eth0", progress)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if chosen.Server != second.Server {
+		t.Fatalf("chose %q, want %q", chosen.Server, second.Server)
+	}
+	if len(reasons) != 1 || !strings.Contains(reasons[0], "203.0.113.7:443") {
+		t.Fatalf("rejections = %v", reasons)
+	}
+	if want := []string{"1/2 rejected=0", "2/2 rejected=1"}; !slices.Equal(calls, want) {
+		t.Fatalf("progress calls = %v, want %v", calls, want)
+	}
+	if curls != 2 {
+		t.Fatalf("probed %d times, want 2", curls)
 	}
 }
 

@@ -294,7 +294,7 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 				Fetch: health.HTTPSSubscriptionFetcher{},
 				Parse: linux.ParseSubscription,
 				Prove: func(ctx context.Context, list []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
-					return canary.SelectCandidate(ctx, list, uplink)
+					return canary.SelectCandidate(ctx, list, uplink, nil)
 				},
 				Store: linux.UpstreamFile{Dir: configDir},
 			}.Refresh(cmd.Context(), subject)

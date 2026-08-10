@@ -162,8 +162,10 @@ const peerVethName = "uplink0"
 // SelectCandidate tries candidates in order and returns the first that carries
 // traffic, with the reasons the others were rejected. The lock is held across the
 // whole selection, not per candidate: interleaving two selections would still
-// thrash the shared namespace between them.
-func (c Canary) SelectCandidate(ctx context.Context, candidates []domain.ProxyTunnel, uplink string) (domain.ProxyTunnel, []string, error) {
+// thrash the shared namespace between them. progress, when non-nil, is called
+// before each attempt with the 1-based index, the total and the rejections so far.
+func (c Canary) SelectCandidate(ctx context.Context, candidates []domain.ProxyTunnel, uplink string,
+	progress func(tried, total int, rejected []string)) (domain.ProxyTunnel, []string, error) {
 	release, err := c.lock()
 	if err != nil {
 		return domain.ProxyTunnel{}, nil, err
@@ -171,7 +173,10 @@ func (c Canary) SelectCandidate(ctx context.Context, candidates []domain.ProxyTu
 	defer release()
 
 	var reasons []string
-	for _, candidate := range candidates {
+	for index, candidate := range candidates {
+		if progress != nil {
+			progress(index+1, len(candidates), reasons)
+		}
 		err := c.try(ctx, candidate, uplink)
 		if err == nil {
 			return candidate, reasons, nil

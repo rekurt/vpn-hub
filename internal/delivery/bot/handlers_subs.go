@@ -359,23 +359,13 @@ func (b *Bot) canaryRefresh(ctx context.Context, tunnel domain.Tunnel, progress 
 		Fetch: health.HTTPSSubscriptionFetcher{},
 		Parse: linux.ParseSubscription,
 		Prove: func(ctx context.Context, candidates []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
-			var reasons []string
-			for index, candidate := range candidates {
-				if progress != nil {
-					progress(index+1, len(candidates), reasons)
-				}
-				err := canary.Try(ctx, candidate, uplink)
-				if err == nil {
-					canary.Discard(ctx)
-					return candidate, reasons, nil
-				}
-				reasons = append(reasons, fmt.Sprintf("%s:%d: %v", candidate.Server, candidate.Port, err))
-				if ctx.Err() != nil {
-					break
-				}
+			chosen, reasons, err := canary.SelectCandidate(ctx, candidates, uplink, progress)
+			if err != nil {
+				// SelectCandidate's aggregate error repeats every rejection, and the
+				// screen renders the rejection list itself -- keep the one-line verdict.
+				err = fmt.Errorf("ни один кандидат не пропустил трафик")
 			}
-			canary.Discard(ctx)
-			return domain.ProxyTunnel{}, reasons, fmt.Errorf("ни один кандидат не пропустил трафик")
+			return chosen, reasons, err
 		},
 		Store: linux.UpstreamFile{Dir: b.ConfigDir},
 	}.Refresh(ctx, tunnel)

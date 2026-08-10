@@ -400,7 +400,7 @@ func TestCanaryRejectsAnUnreachableCandidateAndCleansUp(t *testing.T) {
 		{Protocol: "vless", Server: "192.0.2.11", Port: 443, UUID: "00000000-0000-4000-8000-000000000002"},
 	}
 
-	chosen, reasons, err := canary.SelectCandidate(context.Background(), dead, uplink)
+	chosen, reasons, err := canary.SelectCandidate(context.Background(), dead, uplink, nil)
 	if err == nil {
 		t.Fatalf("an unreachable candidate must not be promoted, got %+v", chosen)
 	}
