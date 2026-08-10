@@ -606,6 +606,64 @@ func TestCandidatePickPromotesOnlyProven(t *testing.T) {
 	}
 }
 
+// A manual pick goes through the real canary, whose temporary firewall table is
+// hooked into forward/postrouting outside the reconciled ruleset -- if a try leaks
+// it, nothing ever removes it. Stubs of Prove used to hide exactly this leak, so
+// this test wires the production Canary with a recording runner instead.
+func TestPickCandidateDiscardsTheCanaryFirewall(t *testing.T) {
+	t.Parallel()
+	instance, _ := hubFixture(t)
+	ctx := context.Background()
+
+	link := "vless://3b1c8a52-4b6e-4d8a-9f00-0123456789ab@1.2.3.4:443?encryption=none&type=tcp\n"
+	instance.Fetch = func(context.Context, string) ([]byte, error) { return []byte(link), nil }
+	instance.Uplink = func(context.Context) (string, error) { return "eth0", nil }
+
+	var mu sync.Mutex
+	var commands []string
+	run := func(_ context.Context, name string, args ...string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		return "", nil
+	}
+	instance.Prove = func(ctx context.Context, candidate domain.ProxyTunnel, uplink string) error {
+		return linux.Canary{
+			Egress: linux.Egress{Run: run, SecretsDir: instance.RuntimeDir},
+			Run:    run,
+		}.Try(ctx, candidate, uplink)
+	}
+
+	body := strings.Replace(read(t, instance.ConfigPath),
+		"    source: {kind: config, value: \"wg-nl.conf\"}",
+		"    source: {kind: subscription, value: \"https://provider.example/sub\"}", 1)
+	body = strings.Replace(body, "type: wireguard", "type: xray", 1)
+	if err := os.WriteFile(instance.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "sub:cand:wg-nl"))
+	instance.wg.Wait()
+	instance.handleUpdate(ctx, tap(adminID, "sub:pick:wg-nl:0"))
+	instance.wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	discarded := false
+	for _, command := range commands {
+		if strings.Contains(command, "nft delete table inet vpn_hub_canary") {
+			discarded = true
+			break
+		}
+	}
+	if !discarded {
+		t.Fatalf("the canary nft table was not discarded; commands:\n%s", strings.Join(commands, "\n"))
+	}
+	if _, err := os.Stat(filepath.Join(instance.RuntimeDir, "canary.nft")); !os.IsNotExist(err) {
+		t.Errorf("canary.nft was left behind (stat: %v)", err)
+	}
+}
+
 func TestAccessToggleRefusedWhenItStrandsADevice(t *testing.T) {
 	t.Parallel()
 	instance, api := hubFixture(t)

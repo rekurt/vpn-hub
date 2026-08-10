@@ -93,12 +93,16 @@ func (c Canary) try(ctx context.Context, candidate domain.ProxyTunnel, uplink st
 
 	defer func() {
 		// Torn down whatever happened: a candidate that failed must not leave a
-		// namespace behind for the next attempt to trip over.
+		// namespace behind for the next attempt to trip over. The temporary firewall
+		// hole goes with it -- a leaked vpn_hub_canary table would keep an accept and
+		// a masquerade hooked into forward/postrouting that no reconcile removes,
+		// because the agent only ever replaces its own inet vpn_hub table.
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		_, _ = c.run(cleanup, "systemctl", "stop", "vpn-hub-proxy-canary.service")
 		_ = c.Egress.namespaceLifecycle(cleanup, "del", canaryNamespace)
 		_, _ = c.run(cleanup, "ip", "link", "del", spec.HostVeth)
+		c.Discard(cleanup)
 	}()
 
 	if err := c.Egress.applyOne(ctx, spec); err != nil {
@@ -143,7 +147,9 @@ table inet vpn_hub_canary {
 	return err
 }
 
-// Discard removes the temporary ruleset once no candidate is being tried.
+// Discard removes the temporary ruleset. Every path through try runs it, so a
+// caller never needs to; it stays exported for callers that want to sweep up
+// after an interrupted run from a previous process.
 func (c Canary) Discard(ctx context.Context) {
 	_, _ = c.run(ctx, "nft", "delete", "table", "inet", "vpn_hub_canary")
 	_ = os.Remove(filepath.Join(c.Egress.secretsDir(), "canary.nft"))
@@ -168,7 +174,6 @@ func (c Canary) SelectCandidate(ctx context.Context, candidates []domain.ProxyTu
 	for _, candidate := range candidates {
 		err := c.try(ctx, candidate, uplink)
 		if err == nil {
-			c.Discard(ctx)
 			return candidate, reasons, nil
 		}
 		reasons = append(reasons, fmt.Sprintf("%s:%d: %v", candidate.Server, candidate.Port, err))
@@ -176,7 +181,6 @@ func (c Canary) SelectCandidate(ctx context.Context, candidates []domain.ProxyTu
 			break
 		}
 	}
-	c.Discard(ctx)
 	return domain.ProxyTunnel{}, reasons, fmt.Errorf("no candidate carried traffic:\n  %s",
 		strings.Join(reasons, "\n  "))
 }

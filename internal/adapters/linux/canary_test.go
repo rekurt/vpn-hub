@@ -1,0 +1,106 @@
+package linux
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"vpn-hub/internal/domain"
+)
+
+func testCanary(host *fakeHost, dir string) Canary {
+	return Canary{
+		Egress:  Egress{Run: host.run, SecretsDir: dir},
+		Run:     host.run,
+		Timeout: 5 * time.Second,
+	}
+}
+
+func canaryCandidate() domain.ProxyTunnel {
+	return domain.ProxyTunnel{
+		Protocol: "vless",
+		Server:   "203.0.113.7",
+		Port:     443,
+		UUID:     "0f7c04a8-8f5d-4b3e-9d3d-4a1f0e0c9b21",
+	}
+}
+
+const canaryProbeCommand = "ip netns exec vpn-hub-canary curl -sS --max-time 5 -o /dev/null https://1.1.1.1/cdn-cgi/trace"
+
+// The canary's firewall hole hooks into forward and postrouting outside the
+// reconciled table, so nothing else ever removes it: every path through a try must.
+func TestTryLeavesNoFirewallStateBehind(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		failures map[string]error
+		wantErr  bool
+	}{
+		"proven candidate": {failures: nil, wantErr: false},
+		"failed probe": {
+			failures: map[string]error{canaryProbeCommand: fmt.Errorf("exit status 28")},
+			wantErr:  true,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			host := &fakeHost{failures: tc.failures}
+			canary := testCanary(host, dir)
+
+			err := canary.Try(context.Background(), canaryCandidate(), "eth0")
+			if tc.wantErr && err == nil {
+				t.Fatal("expected the probe failure to surface")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("try: %v", err)
+			}
+			if !host.ran("nft delete table inet vpn_hub_canary") {
+				t.Error("the canary firewall table was not deleted")
+			}
+			if _, err := os.Stat(filepath.Join(dir, "canary.nft")); !os.IsNotExist(err) {
+				t.Errorf("canary.nft was left behind (stat: %v)", err)
+			}
+		})
+	}
+}
+
+func TestAllowCanaryOutRendersTheRuleset(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	host := &fakeHost{}
+	canary := testCanary(host, dir)
+	spec := domain.EgressSpec{HostVeth: "vh-canary", ClientCIDR: "10.91.0.0/30"}
+
+	if err := canary.allowCanaryOut(context.Background(), spec, "eth0"); err != nil {
+		t.Fatalf("allowCanaryOut: %v", err)
+	}
+
+	path := filepath.Join(dir, "canary.nft")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("canary.nft mode = %o, want 0600", got)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	for _, fragment := range []string{
+		`iifname "vh-canary" oifname "eth0" accept`,
+		`ip saddr 10.91.0.0/30 oifname "eth0" masquerade`,
+	} {
+		if !strings.Contains(string(content), fragment) {
+			t.Errorf("ruleset is missing %q:\n%s", fragment, content)
+		}
+	}
+	if !host.ran("nft -f " + path) {
+		t.Error("the ruleset was not loaded with nft -f")
+	}
+}
