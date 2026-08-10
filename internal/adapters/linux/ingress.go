@@ -150,7 +150,7 @@ func (i Ingress) syncPeers(ctx context.Context, spec domain.IngressSpec, observe
 func (i Ingress) writePrivateKey(spec domain.IngressSpec) (string, error) {
 	directory := i.SecretsDir
 	if directory == "" {
-		directory = "/run/vpn-hub"
+		directory = DefaultRuntimeDir
 	}
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return "", fmt.Errorf("create secrets directory: %w", err)

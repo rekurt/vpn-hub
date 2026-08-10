@@ -276,7 +276,7 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			canary := linux.Canary{Egress: linux.Egress{SecretsDir: "/run/vpn-hub"}}
+			canary := linux.Canary{Egress: linux.Egress{SecretsDir: linux.DefaultRuntimeDir}}
 
 			chosen, rejected, err := application.SubscriptionRefresher{
 				Fetch: health.HTTPSSubscriptionFetcher{},

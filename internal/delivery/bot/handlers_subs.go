@@ -175,7 +175,7 @@ func (b *Bot) showCandidates(ctx context.Context, cb *tg.CallbackQuery, tunnelID
 	b.show(ctx, cb, screen{text: "📋 Загружаю список кандидатов…"})
 	b.spawn("candidates-"+tunnelID, func() {
 		edit := func(view screen) {
-			if cb.Message == nil {
+			if cb == nil || cb.Message == nil {
 				b.sendScreen(ctx, view)
 				return
 			}

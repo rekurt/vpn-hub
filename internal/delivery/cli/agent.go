@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"vpn-hub/internal/adapters/linux"
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	"vpn-hub/internal/domain"
 	"vpn-hub/internal/ports"
@@ -34,7 +35,7 @@ type agentFlags struct {
 func (f *agentFlags) bind(command *cobra.Command) {
 	command.Flags().StringVar(&f.stateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
 	command.Flags().StringVar(&f.keyPath, "server-key", "/etc/vpn-hub/server.key", "path to the hub private key")
-	command.Flags().StringVar(&f.runtimeDir, "runtime-dir", "/run/vpn-hub", "tmpfs directory for material that must not reach disk")
+	command.Flags().StringVar(&f.runtimeDir, "runtime-dir", linux.DefaultRuntimeDir, "tmpfs directory for material that must not reach disk")
 	command.Flags().StringVar(&f.configDir, "config-dir", "/etc/vpn-hub", "directory holding upstream tunnel configurations")
 }
 

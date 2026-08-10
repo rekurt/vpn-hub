@@ -93,7 +93,7 @@ func (d Dnsmasq) configDir() string {
 	if d.ConfigDir != "" {
 		return d.ConfigDir
 	}
-	return "/run/vpn-hub"
+	return DefaultRuntimeDir
 }
 
 func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan, repopulate bool) error {

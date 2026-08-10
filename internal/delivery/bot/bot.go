@@ -205,6 +205,18 @@ func (b *Bot) init() {
 	if b.Out == nil {
 		b.Out = io.Discard
 	}
+	// LoadConfig rejects non-positive intervals, but a Bot built by hand can carry
+	// them, and time.NewTicker panics on zero -- which supervise would convert into
+	// a permanent panic-restart cycle instead of a working watcher.
+	if b.Cfg.Notifications.HealthInterval <= 0 {
+		b.Cfg.Notifications.HealthInterval = defaultHealthInterval
+	}
+	if b.Cfg.Notifications.DriftInterval <= 0 {
+		b.Cfg.Notifications.DriftInterval = defaultDriftInterval
+	}
+	if b.Cfg.Notifications.SubscriptionRefresh <= 0 {
+		b.Cfg.Notifications.SubscriptionRefresh = defaultSubscriptionRefresh
+	}
 }
 
 func (b *Bot) logf(format string, args ...any) {

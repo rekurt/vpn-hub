@@ -619,11 +619,17 @@ func (e Egress) applyNamespaceRuleset(ctx context.Context, namespace, ruleset st
 	return nil
 }
 
+// DefaultRuntimeDir is the tmpfs directory for material that must not reach disk:
+// rendered upstream configurations, keys, management sockets. Every adapter and
+// flag default names this one constant, because two processes disagreeing on the
+// directory means two different flocks -- and no cross-process serialization.
+const DefaultRuntimeDir = "/run/vpn-hub"
+
 func (e Egress) secretsDir() string {
 	if e.SecretsDir != "" {
 		return e.SecretsDir
 	}
-	return "/run/vpn-hub"
+	return DefaultRuntimeDir
 }
 
 func (e Egress) writeKey(name, value string) (string, error) {

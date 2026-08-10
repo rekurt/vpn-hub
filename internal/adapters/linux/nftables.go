@@ -358,7 +358,7 @@ func (n NFTables) runtimeDir() string {
 	if n.RuntimeDir != "" {
 		return n.RuntimeDir
 	}
-	return "/run/vpn-hub"
+	return DefaultRuntimeDir
 }
 
 func (n NFTables) binary() string {

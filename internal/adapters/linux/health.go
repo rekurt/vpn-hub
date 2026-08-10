@@ -37,7 +37,7 @@ func (h HealthChecker) runtimeDir() string {
 	if h.RuntimeDir != "" {
 		return h.RuntimeDir
 	}
-	return "/run/vpn-hub"
+	return DefaultRuntimeDir
 }
 
 func (h HealthChecker) run(ctx context.Context, name string, args ...string) (string, error) {

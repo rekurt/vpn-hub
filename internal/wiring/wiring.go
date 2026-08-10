@@ -29,7 +29,7 @@ func Service(configPath, stateDir string) application.Service {
 		RevisionStore:    runtimeadapter.FileRevisionStore{StateDir: stateDir},
 		// Probing from the host would measure the host's own connectivity, which is
 		// the path the tunnel exists to avoid.
-		HealthChecker: linux.HealthChecker{RuntimeDir: "/run/vpn-hub"},
+		HealthChecker: linux.HealthChecker{RuntimeDir: linux.DefaultRuntimeDir},
 	}
 }
 
