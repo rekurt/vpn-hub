@@ -142,11 +142,11 @@ func printFallback(cmd *cobra.Command, hub domain.Hub, deviceID, address, privat
 	if hub.Fallback.UDP443 {
 		profile, err := runtimeadapter.AltPortProfile(hub, address, privateKey)
 		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "no UDP/443 profile: %v\n", err)
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "no UDP/443 profile: %v\n", err)
 		} else {
 			path := output + ".443"
 			if err := os.WriteFile(path, []byte(profile), 0o600); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "no UDP/443 profile: %v\n", err)
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "no UDP/443 profile: %v\n", err)
 			} else if _, err := fmt.Fprintf(cmd.OutOrStdout(),
 				"wrote the UDP/443 fallback profile to %s\n", path); err != nil {
 				return err
@@ -159,7 +159,7 @@ func printFallback(cmd *cobra.Command, hub domain.Hub, deviceID, address, privat
 
 	realityKey, err := wiring.RealityKey("/etc/vpn-hub").PrivateKey(cmd.Context())
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(),
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
 			"no TCP/443 link: %v\n(the hub issues it itself; run this on the hub to print it here)\n", err)
 		return nil
 	}

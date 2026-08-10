@@ -50,7 +50,11 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 	path := filepath.Join(r.secretsDir(), RealityConfigName)
 
 	if !spec.Enabled {
-		_, _ = r.run(ctx, "systemctl", "stop", realityUnit+".service")
+		// Asked before stopping, so a hub that never turns the fallback on does not
+		// log a failed stop of a unit that does not exist on every single tick.
+		if _, err := r.run(ctx, "systemctl", "is-active", "--quiet", realityUnit+".service"); err == nil {
+			_, _ = r.run(ctx, "systemctl", "stop", realityUnit+".service")
+		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}

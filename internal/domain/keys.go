@@ -120,7 +120,8 @@ func RealityUserUUID(privateKey, deviceID string) (string, error) {
 		return "", fmt.Errorf("decode reality private key: %w", err)
 	}
 	mac := hmac.New(sha256.New, raw)
-	mac.Write([]byte("vpn-hub/reality-user/" + deviceID))
+	// hash.Hash documents that Write never returns an error.
+	_, _ = mac.Write([]byte("vpn-hub/reality-user/" + deviceID))
 	sum := mac.Sum(nil)
 
 	// Shaped as a version 4 UUID: the value is derived, but every client parses it
