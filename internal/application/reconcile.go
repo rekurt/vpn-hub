@@ -64,6 +64,14 @@ func (r HostReconciler) Plan(ctx context.Context, state domain.DesiredState) ([]
 	if err != nil {
 		return nil, err
 	}
+	// Reported here as well as in Apply, and for the same reason compile derives
+	// everything up front: a dry run must see the errors a real pass would. A
+	// fallback whose key is missing is deliberately not fatal, but a `reconcile
+	// --dry-run` that answered "nothing to do" would hide a failure repeating on
+	// every tick with TCP/443 staying shut.
+	if compiled.realityErr != nil {
+		return nil, fmt.Errorf("compile reality fallback: %w", compiled.realityErr)
+	}
 	observed, err := r.Observe(ctx)
 	if err != nil {
 		return nil, err

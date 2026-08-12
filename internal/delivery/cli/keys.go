@@ -102,24 +102,8 @@ func newDeviceAddCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// os.WriteFile applies the 0600 mode only when it creates the file; an
-			// existing target keeps its old, possibly world-readable, permissions.
-			// The profile carries the device private key, so open explicitly and
-			// chmod to guarantee 0600 whether or not the file already existed.
-			out, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-			if err != nil {
-				return fmt.Errorf("write profile: %w", err)
-			}
-			if err := out.Chmod(0o600); err != nil {
-				_ = out.Close()
-				return fmt.Errorf("secure profile permissions: %w", err)
-			}
-			if _, err := out.WriteString(profile); err != nil {
-				_ = out.Close()
-				return fmt.Errorf("write profile: %w", err)
-			}
-			if err := out.Close(); err != nil {
-				return fmt.Errorf("write profile: %w", err)
+			if err := writeProfile(output, profile); err != nil {
+				return err
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "\nwrote client profile to %s\n", output); err != nil {
 				return err
@@ -131,6 +115,33 @@ func newDeviceAddCommand(configPath *string) *cobra.Command {
 	command.Flags().StringVar(&address, "address", "", "host address inside hub.client_cidr, for example 10.80.0.2/32")
 	command.Flags().StringVar(&output, "output", "", "where to write the client profile; omit to print only the entry")
 	return command
+}
+
+// writeProfile writes a client profile at mode 0600, whether or not the target
+// already existed.
+//
+// os.WriteFile applies its mode only when it creates the file: an existing target
+// keeps its old, possibly world-readable, permissions. Every profile here carries
+// a device private key, so the mode is set explicitly rather than hoped for --
+// and it lives in one function because writing a profile the other way is a
+// mistake that reads as correct.
+func writeProfile(path, profile string) error {
+	out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("write profile: %w", err)
+	}
+	if err := out.Chmod(0o600); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("secure profile permissions: %w", err)
+	}
+	if _, err := out.WriteString(profile); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("write profile: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("write profile: %w", err)
+	}
+	return nil
 }
 
 // printFallback writes the alternative ways in beside the ordinary profile.
@@ -145,7 +156,7 @@ func printFallback(cmd *cobra.Command, hub domain.Hub, deviceID, address, privat
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "no UDP/443 profile: %v\n", err)
 		} else {
 			path := output + ".443"
-			if err := os.WriteFile(path, []byte(profile), 0o600); err != nil {
+			if err := writeProfile(path, profile); err != nil {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "no UDP/443 profile: %v\n", err)
 			} else if _, err := fmt.Fprintf(cmd.OutOrStdout(),
 				"wrote the UDP/443 fallback profile to %s\n", path); err != nil {

@@ -58,6 +58,24 @@ func TestAMissingRealityKeyStillConvergesEverythingElse(t *testing.T) {
 	}
 }
 
+// A dry run has to see what a real pass would hit. The fallback failure is
+// deliberately not fatal, but `reconcile --dry-run` answering "nothing to do"
+// would hide a failure that repeats on every tick with TCP/443 staying shut.
+func TestADryRunReportsTheMissingRealityKey(t *testing.T) {
+	t.Parallel()
+	reconciler, state, _, _, _ := fallbackReconciler(t, failingKeyStore{
+		err: errors.New("no REALITY key at /etc/vpn-hub/reality.key"),
+	})
+
+	_, err := reconciler.Plan(context.Background(), state)
+	if err == nil {
+		t.Fatal("the dry run reported success while the fallback could not be compiled")
+	}
+	if !strings.Contains(err.Error(), "REALITY key") {
+		t.Fatalf("the reason did not survive: %v", err)
+	}
+}
+
 // And the port follows: a listener that cannot run must not leave 443 accepted
 // with nothing behind it.
 func TestAMissingRealityKeyLeaves443Closed(t *testing.T) {
