@@ -55,6 +55,25 @@ func TestValidateFallback(t *testing.T) {
 			},
 			wantErr: "needs at least one dot",
 		},
+		// A hyphen may join a label but not open or close one. Such a name resolves
+		// nowhere, and the handshake target has to be a site that actually answers.
+		"a label opening with a hyphen is refused": {
+			fallback: domain.IngressFallback{
+				Reality: domain.RealityFallback{Enabled: true, ServerName: "-edge.example.com"},
+			},
+			wantErr: "hyphen",
+		},
+		"a label closing with a hyphen is refused": {
+			fallback: domain.IngressFallback{
+				Reality: domain.RealityFallback{Enabled: true, ServerName: "edge-.example.com"},
+			},
+			wantErr: "hyphen",
+		},
+		"a hyphen inside a label is fine": {
+			fallback: domain.IngressFallback{
+				Reality: domain.RealityFallback{Enabled: true, ServerName: "cdn-edge.example.com"},
+			},
+		},
 		"mimicking the hub itself is refused": {
 			fallback: domain.IngressFallback{
 				Reality: domain.RealityFallback{Enabled: true, ServerName: "vpn.example.test"},

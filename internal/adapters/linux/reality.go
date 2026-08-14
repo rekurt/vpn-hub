@@ -55,9 +55,10 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 		// Unconditional. `is-active` reports non-zero for a unit that is merely
 		// `activating`, which is exactly where a crash-looping listener sits during
 		// its RestartSec backoff -- asking first would skip the stop and leave it
-		// looping after the operator switched the fallback off. Stopping a unit that
-		// does not exist is harmless.
-		_, _ = r.run(ctx, "systemctl", "stop", realityUnit+".service")
+		// looping after the operator switched the fallback off.
+		if err := r.stopListener(ctx); err != nil {
+			return err
+		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}
@@ -103,6 +104,23 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 		return err
 	}
 	return r.confirmRunning(ctx)
+}
+
+// stopListener stops the unit and reports a stop that did not work.
+//
+// Only "there is no such unit" is not a failure -- systemd answers that with exit
+// 5 and says so, and it is the ordinary state of a hub that never turned the
+// fallback on. Anything else (a timeout, a lost connection to systemd, a
+// cancelled context) means the listener may still be accepting on 443, and
+// removing its configuration and reporting success would leave the operator
+// believing a port is shut while it is open. Every reconcile would repeat the
+// belief.
+func (r RealityIngress) stopListener(ctx context.Context) error {
+	_, err := r.run(ctx, "systemctl", "stop", realityUnit+".service")
+	if err == nil || strings.Contains(err.Error(), "not loaded") {
+		return nil
+	}
+	return fmt.Errorf("stop the listener: %w", err)
 }
 
 // confirmRunning reports a listener that died on startup.

@@ -3,6 +3,7 @@ package linux
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -198,6 +199,49 @@ func TestRealityIngressApply(t *testing.T) {
 		// otherwise become a unit that restarts forever with every pass reporting fine.
 		if !host.ran("sing-box check -c " + path) {
 			t.Errorf("the configuration was not checked before starting it:\n%s", strings.Join(host.commands, "\n"))
+		}
+	})
+
+	// A stop that did not work means the listener may still be accepting on 443.
+	// Removing its configuration and reporting success would leave the operator
+	// believing the port is shut, and every reconcile would repeat the belief.
+	t.Run("a stop that fails is reported, and the config is kept", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, RealityConfigName)
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		host := &fakeHost{failures: map[string]error{
+			"systemctl stop " + realityUnit + ".service": fmt.Errorf("Failed to stop: Connection timed out"),
+		}}
+		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
+
+		err := ingress.Apply(context.Background(), domain.RealityIngressSpec{})
+		if err == nil || !strings.Contains(err.Error(), "stop the listener") {
+			t.Fatalf("err = %v, want the failed stop reported", err)
+		}
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Error("the configuration was removed although the listener may still be running")
+		}
+	})
+
+	// The ordinary state of a hub that never turned the fallback on: systemd
+	// answers exit 5 and says the unit is not loaded, which is not a failure.
+	t.Run("stopping a unit that was never there is not a failure", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		// systemd's own wording, kept verbatim: recognising it is the whole point.
+		notLoaded := fmt.Sprintf(
+			"systemctl stop %s.service: exit status 5: Failed to stop %s.service: Unit %s.service not loaded.",
+			realityUnit, realityUnit, realityUnit)
+		host := &fakeHost{failures: map[string]error{
+			"systemctl stop " + realityUnit + ".service": errors.New(notLoaded),
+		}}
+		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
+
+		if err := ingress.Apply(context.Background(), domain.RealityIngressSpec{}); err != nil {
+			t.Fatalf("apply: %v", err)
 		}
 	})
 

@@ -160,6 +160,13 @@ func validateHostname(value string) error {
 		if label == "" || len(label) > 63 {
 			return fmt.Errorf("%q has an empty or over-long label", value)
 		}
+		// A hyphen may join a label but not open or close one. Accepting it would
+		// let a name through that no resolver will answer for, and the handshake
+		// target has to be a site that actually exists -- the whole disguise is
+		// handing unauthenticated connections to it.
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return fmt.Errorf("%q has a label starting or ending with a hyphen", value)
+		}
 		for _, symbol := range label {
 			isLetter := (symbol >= 'a' && symbol <= 'z') || (symbol >= 'A' && symbol <= 'Z')
 			isDigit := symbol >= '0' && symbol <= '9'
