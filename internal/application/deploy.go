@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"vpn-hub/internal/domain"
@@ -79,7 +81,13 @@ func (d Deployment) Apply(ctx context.Context, state domain.DesiredState, confir
 		// that was never written, and the agent would "roll back" to the already
 		// active one at the deadline. Clear it so nothing is armed over nothing.
 		if armed {
-			_ = d.Confirmations.Confirm()
+			// And say so when the clearing fails too -- a read-only state directory
+			// fails both. Reporting only the save would leave the operator believing
+			// the safety net was put back, while the agent reaches the deadline and
+			// starts rolling back to a revision that is already the active one.
+			if clearErr := d.Confirmations.Confirm(); clearErr != nil {
+				err = errors.Join(err, fmt.Errorf("the armed rollback could not be cleared: %w", clearErr))
+			}
 		}
 		return DeployResult{}, DeployError{Stage: DeployStageSave, Err: err}
 	}

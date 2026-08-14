@@ -76,7 +76,7 @@ stand-down:
 # cannot drift.
 deploy-lab: build-linux
 	@test -n "$(LAB_IP)" || { echo "no lab host; run make stand-up"; exit 1; }
-	$(SSH) 'mkdir -p /run/vpn-hub-stage/systemd'
+	$(SSH) 'rm -rf /run/vpn-hub-stage && mkdir -p /run/vpn-hub-stage/systemd'
 	scp bin/linux/hubctl bin/linux/vpn-hub-agent bin/linux/vpn-hub-bot deploy/install.sh root@$(LAB_IP):/run/vpn-hub-stage/
 	scp deploy/systemd/vpn-hub-agent.service deploy/systemd/vpn-hub-bot.service root@$(LAB_IP):/run/vpn-hub-stage/systemd/
 	$(SSH) 'sh /run/vpn-hub-stage/install.sh'

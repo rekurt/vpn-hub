@@ -27,9 +27,10 @@ func (s *deployRevisionStore) Load(context.Context) (domain.DesiredState, error)
 }
 
 type deployConfirmations struct {
-	armCalls  int
-	armResult bool
-	confirmed int
+	armCalls   int
+	armResult  bool
+	confirmed  int
+	confirmErr error
 }
 
 func (c *deployConfirmations) Arm(context.Context, time.Duration, string) (bool, error) {
@@ -39,7 +40,7 @@ func (c *deployConfirmations) Arm(context.Context, time.Duration, string) (bool,
 
 func (c *deployConfirmations) Confirm() error {
 	c.confirmed++
-	return nil
+	return c.confirmErr
 }
 
 // The compensation this test pins down: Arm ran but Save did not, so a pending
@@ -65,6 +66,29 @@ func TestApplyClearsTheArmWhenSaveFails(t *testing.T) {
 	if confirmations.armCalls != 1 || confirmations.confirmed != 1 {
 		t.Fatalf("arm=%d confirm=%d, want the arm compensated exactly once",
 			confirmations.armCalls, confirmations.confirmed)
+	}
+}
+
+// A read-only state directory fails the save and the clearing alike. Reporting
+// only the save would leave the operator believing the safety net was put back,
+// while the agent reaches the deadline and starts rolling back to the revision
+// that is already active.
+func TestApplyReportsAnArmItCouldNotClear(t *testing.T) {
+	t.Parallel()
+	saveErr := errors.New("read-only file system")
+	clearErr := errors.New("read-only file system: pending-confirmation.json")
+	confirmations := &deployConfirmations{armResult: true, confirmErr: clearErr}
+	deployment := Deployment{
+		Service:       Service{RevisionStore: &deployRevisionStore{saveErr: saveErr}},
+		Confirmations: confirmations,
+	}
+
+	_, err := deployment.Apply(context.Background(), domain.DesiredState{Revision: "abc"}, time.Minute)
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("the save failure was lost: %v", err)
+	}
+	if !errors.Is(err, clearErr) {
+		t.Fatalf("the operator was not told the rollback is still armed: %v", err)
 	}
 }
 

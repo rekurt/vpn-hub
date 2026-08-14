@@ -142,6 +142,36 @@ func TestRealityHandshakeCompletes(t *testing.T) {
 	}
 }
 
+// standInResolver runs dnsmasq on a private address and returns it, standing in
+// for the hub's own resolver. Private on purpose: hub.client_cidr makes
+// dns_address private on every real hub, and the listener refuses private
+// destinations, so the address has to be private for the test to be about
+// anything.
+func standInResolver(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("dnsmasq"); err != nil {
+		t.Skip("dnsmasq is not installed")
+	}
+	const address = "10.80.0.1"
+	try("ip addr add %s/32 dev lo", address)
+	try("systemctl stop reality-resolver.service")
+	t.Cleanup(func() {
+		try("systemctl stop reality-resolver.service")
+		try("ip addr del %s/32 dev lo", address)
+	})
+	sh(t, "systemd-run --quiet --unit=reality-resolver dnsmasq --keep-in-foreground "+
+		"--listen-address=%s --bind-interfaces --no-resolv --server=1.1.1.1", address)
+
+	for range 20 {
+		if exec.Command("dig", "+short", "+time=1", "+tries=1", "example.com", "@"+address).Run() == nil {
+			return address
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Skip("the stand-in resolver did not come up")
+	return ""
+}
+
 // assertUDPThroughProxy sends one DNS query over the proxy's SOCKS5 UDP
 // association. curl cannot speak UDP through a proxy, so the association is done
 // by hand: greeting, UDP ASSOCIATE, then a datagram with the SOCKS request header
@@ -271,14 +301,16 @@ func TestRealityIngressCarriesTraffic(t *testing.T) {
 			Reality: domain.RealityFallback{Enabled: true, ServerName: handshakeTarget},
 		},
 	}
+	// A resolver at a private address, as on a real hub, where hub.client_cidr
+	// makes dns_address private by construction. Pointing the listener at a public
+	// resolver instead would leave the interesting question unasked: the listener
+	// refuses private destinations, and whether that refusal also cuts off its own
+	// lookups is exactly what a public resolver hides.
+	resolver := standInResolver(t)
 	spec := domain.RealityIngressSpec{
 		Enabled: true, Port: domain.RealityPort, ServerName: handshakeTarget,
 		PrivateKey: privateKey, ShortID: domain.RealityShortID(publicKey),
-		// The hub's own resolver on a real host, which this machine does not run.
-		// The listener only consults it for destinations given as names, and the
-		// probe below is an address, so a reachable resolver keeps the test about
-		// the listener rather than about dnsmasq.
-		DNSAddress: "1.1.1.1",
+		DNSAddress: resolver,
 		Users:      []domain.RealityUser{{DeviceID: "macbook", UUID: uuid}},
 	}
 
@@ -356,6 +388,20 @@ func TestRealityIngressCarriesTraffic(t *testing.T) {
 			"journalctl -u vpn-hub-reality --no-pager -n 40;"+
 				"journalctl -u reality-device --no-pager -n 40").CombinedOutput()
 		t.Fatalf("no traffic passed through the issued link:\n%s", state)
+	}
+
+	// A name, not an address. The listener resolves it itself, at the hub's own
+	// resolver, on a private address the same configuration refuses as a
+	// destination -- so this is the assertion that says the refusal cuts off
+	// clients without cutting off the listener's own lookups. A probe by literal
+	// address would pass either way and prove nothing about it.
+	if out, err := exec.Command("bash", "-c", fmt.Sprintf(
+		"curl -sS --max-time 10 --proxy socks5h://127.0.0.1:%d -o /dev/null -w '%%{http_code}' https://example.com/",
+		socksPort)).Output(); err != nil || !strings.HasPrefix(string(out), "2") && !strings.HasPrefix(string(out), "3") {
+		state, _ := exec.Command("bash", "-c",
+			"journalctl -u vpn-hub-reality --no-pager -n 20;"+
+				"journalctl -u reality-resolver --no-pager -n 10").CombinedOutput()
+		t.Fatalf("a request by name did not pass (%q, %v):\n%s", out, err, state)
 	}
 
 	// UDP as well as TCP, and deliberately so: the `flow` setting the listener and
