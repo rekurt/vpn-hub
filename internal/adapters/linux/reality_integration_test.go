@@ -142,6 +142,66 @@ func TestRealityHandshakeCompletes(t *testing.T) {
 	}
 }
 
+// TestRealityIngressReportsAListenerThatCannotStart occupies the port and then
+// asks the adapter to bring the listener up.
+//
+// It exists because the first attempt at this check passed its unit tests and
+// did nothing here: it asked `systemctl is-active`, which answers a failed unit
+// with the word on stdout and exit 3, and a non-zero exit is where the runner
+// drops stdout. The empty string matched no state, so a listener that never
+// started read as one still starting, and the reconcile reported success. Only a
+// real systemd could tell the difference.
+func TestRealityIngressReportsAListenerThatCannotStart(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("binds a privileged port and needs root")
+	}
+	for _, binary := range []string{"sing-box", "systemd-run", "systemctl"} {
+		if _, err := exec.LookPath(binary); err != nil {
+			t.Skipf("%s is not installed", binary)
+		}
+	}
+
+	occupied, err := net.Listen("tcp", fmt.Sprintf(":%d", domain.RealityPort))
+	if err != nil {
+		t.Skipf("port %d is not available to hold: %v", domain.RealityPort, err)
+	}
+	defer func() { _ = occupied.Close() }()
+
+	runtimeDir, err := os.MkdirTemp("/run", "vpn-hub-reality")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+
+	keyFile := linux.RealityKeyFile{Path: filepath.Join(t.TempDir(), "reality.key")}
+	publicKey, err := keyFile.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey, err := keyFile.PrivateKey(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ingress := linux.RealityIngress{SecretsDir: runtimeDir}
+	t.Cleanup(func() { _ = ingress.Apply(context.Background(), domain.RealityIngressSpec{}) })
+
+	err = ingress.Apply(context.Background(), domain.RealityIngressSpec{
+		Enabled: true, Port: domain.RealityPort, ServerName: "www.cloudflare.com",
+		PrivateKey: privateKey, ShortID: domain.RealityShortID(publicKey),
+		DNSAddress: "10.80.0.1",
+		Users: []domain.RealityUser{{
+			DeviceID: "macbook", UUID: "3b1c8a52-4b6e-4d8a-9f00-0123456789ab",
+		}},
+	})
+	if err == nil {
+		t.Fatal("a listener that could not bind its port was reported as reconciled")
+	}
+	if !strings.Contains(err.Error(), "did not stay up") {
+		t.Errorf("the failure was reported as something else: %v", err)
+	}
+}
+
 // standInResolver runs dnsmasq on a private address and returns it, standing in
 // for the hub's own resolver. Private on purpose: hub.client_cidr makes
 // dns_address private on every real hub, and the listener refuses private

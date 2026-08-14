@@ -132,9 +132,24 @@ func (r RealityIngress) stopListener(ctx context.Context) error {
 // is not part of Observe, so no drift is reported -- and every reconcile would
 // claim success while the way in stayed shut.
 func (r RealityIngress) confirmRunning(ctx context.Context) error {
-	// Briefly, because the question is whether it survived starting, not whether it
-	// is still up minutes later. That is the next reconcile's business.
-	for attempt := range 6 {
+	// SubState, and neither `is-active` nor ActiveState.
+	//
+	// `is-active` answers a failed unit with the word on stdout and exit 3, and a
+	// non-zero exit is where execRunner drops stdout and returns the error instead:
+	// asking that way reads as an empty string, matches no state, and reports
+	// nothing. ActiveState is no better here, because a unit that starts, dies and
+	// is waiting out RestartSec reports `activating` -- the same word as one that
+	// is genuinely still starting. SubState separates them: `auto-restart` is a
+	// listener that ran and did not survive, `running` is one that did.
+	//
+	// Watched for a moment rather than asked once. A process that cannot bind its
+	// port is `running` for the instant between exec and its first syscall, so
+	// returning on the first `running` reports success on exactly the failure this
+	// is here to catch. The window is short because the question is whether it
+	// survived starting, not whether it is still up minutes later -- that is the
+	// next reconcile's business -- and it is only paid when the listener was
+	// actually (re)started, not on the passes that find it already up.
+	for attempt := range 8 {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
@@ -142,17 +157,21 @@ func (r RealityIngress) confirmRunning(ctx context.Context) error {
 			case <-time.After(250 * time.Millisecond):
 			}
 		}
-		state, _ := r.run(ctx, "systemctl", "is-active", realityUnit+".service")
+		state, err := r.run(ctx, "systemctl", "show", realityUnit+".service",
+			"--property=SubState", "--value")
+		if err != nil {
+			return fmt.Errorf("ask systemd about the listener: %w", err)
+		}
 		switch strings.TrimSpace(state) {
-		case "active":
-			return nil
-		case "failed", "inactive":
+		case "auto-restart", "failed", "dead":
+			// dead as well as failed: --collect garbage-collects a unit that stops,
+			// so one that died a moment ago may already read as dead.
 			journal, _ := r.run(ctx, "journalctl", "-u", realityUnit, "--no-pager", "-n", "10")
 			return fmt.Errorf("the listener did not stay up:\n%s", strings.TrimSpace(journal))
 		}
 	}
-	// Still activating after a second and a half. Not an error: it is allowed to
-	// take its time, and the next pass sees whether it settled.
+	// It has been running for two seconds without falling over. Anything later is
+	// the next pass's to notice.
 	return nil
 }
 

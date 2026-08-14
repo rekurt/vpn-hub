@@ -270,8 +270,8 @@ func TestRealityIngressApply(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		host := &fakeHost{replies: map[string]string{
-			"systemctl is-active " + realityUnit + ".service":    "failed\n",
-			"journalctl -u " + realityUnit + " --no-pager -n 10": "address already in use",
+			"systemctl show " + realityUnit + ".service --property=SubState --value": "auto-restart\n",
+			"journalctl -u " + realityUnit + " --no-pager -n 10":                     "address already in use",
 		}}
 		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
 
@@ -288,7 +288,7 @@ func TestRealityIngressApply(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		host := &fakeHost{replies: map[string]string{
-			"systemctl is-active " + realityUnit + ".service": "active\n",
+			"systemctl show " + realityUnit + ".service --property=SubState --value": "running\n",
 		}}
 		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
 
