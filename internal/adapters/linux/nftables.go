@@ -242,6 +242,25 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\tchain input {")
 	line("\t\ttype filter hook input priority filter; policy drop;")
 	line("\t\tct state established,related accept")
+	// The hub's own services are not a destination the fallback path may reach.
+	//
+	// Refusing private addresses in the listener's configuration does not cover
+	// them: the hub's endpoint is a *public* address, and a connection to it is
+	// resolved by the local table -- priority 0, ahead of every fwmark rule -- so it
+	// arrives here over loopback, which the next rule accepts. An authenticated
+	// device could otherwise reach SSH on the hub's own address without ever
+	// crossing the cloud firewall that decides who may.
+	//
+	// The socket mark survives the trip through loopback, and every connection the
+	// listener opens carries one, so the mark is what separates them from the hub's
+	// own traffic. This is also why devices on `direct` are marked: not to steer
+	// them, but to be recognisable here.
+	//
+	// The resolver is the exception, and the only one: the listener has to look
+	// names up somewhere, and that somewhere is the hub's own dnsmasq.
+	line("\t\tiif lo meta mark != 0x00000000 ip daddr %s udp dport 53 accept", plan.DNSAddress)
+	line("\t\tiif lo meta mark != 0x00000000 ip daddr %s tcp dport 53 accept", plan.DNSAddress)
+	line("\t\tiif lo meta mark != 0x00000000 drop")
 	line("\t\tiif lo accept")
 	line("\t\tip protocol icmp accept")
 	line("\t\ttcp dport %d accept", plan.ManagementPort)

@@ -32,6 +32,9 @@ table inet vpn_hub {
 	chain input {
 		type filter hook input priority filter; policy drop;
 		ct state established,related accept
+		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 udp dport 53 accept
+		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 tcp dport 53 accept
+		iif lo meta mark != 0x00000000 drop
 		iif lo accept
 		ip protocol icmp accept
 		tcp dport 22 accept

@@ -102,6 +102,38 @@ func TestRenderIngressFallback(t *testing.T) {
 	goldenTest(t, "ingress-fallback", plan)
 }
 
+// The hub's own address is public, so refusing private destinations in the
+// listener does not cover it -- and the local table resolves it over loopback,
+// which the input chain otherwise accepts. Without this an authenticated device
+// could reach SSH on the hub without crossing the cloud firewall that decides who
+// may.
+func TestLocalServicesAreClosedToMarkedTraffic(t *testing.T) {
+	t.Parallel()
+	rendered := RenderRuleset(directOnlyPlan())
+
+	chain := rendered[strings.Index(rendered, "chain input {"):]
+	chain = chain[:strings.Index(chain, "\t}")]
+
+	drop := `iif lo meta mark != 0x00000000 drop`
+	if !strings.Contains(chain, drop) {
+		t.Fatalf("marked traffic may still reach the hub's own services:\n%s", chain)
+	}
+	// Ahead of the blanket loopback accept, or it guards nothing.
+	if strings.Index(chain, drop) > strings.Index(chain, "iif lo accept") {
+		t.Errorf("the drop comes after the accept it is meant to precede:\n%s", chain)
+	}
+	// The resolver is the one local service this path legitimately needs.
+	for _, protocol := range []string{"udp", "tcp"} {
+		exception := fmt.Sprintf(`iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 %s dport 53 accept`, protocol)
+		if !strings.Contains(chain, exception) {
+			t.Errorf("the listener cannot resolve names over %s:\n%s", protocol, chain)
+		}
+		if strings.Index(chain, exception) > strings.Index(chain, drop) {
+			t.Errorf("the %s resolver exception comes after the drop:\n%s", protocol, chain)
+		}
+	}
+}
+
 // output_mark marks by destination alone -- it cannot see who asked -- so it must
 // not touch a socket that already chose its way out. The fallback listener's
 // connections carry the mark of their device's egress; re-marking them into a
