@@ -188,6 +188,22 @@ func TestAppliedReportsAFailureToObserve(t *testing.T) {
 	if _, err := ingress.Applied(context.Background()); err == nil {
 		t.Fatal("a listener whose state could not be read was reported as absent")
 	}
+
+	// Defensive, and deliberately narrow. systemd 255 answers a unit that never
+	// existed with exit 0 and `dead`, so this path is unreachable there -- but a
+	// release that reported not-found as an error would fail Observe on every fresh
+	// host, and an aborted Observe stops the firewall converging at all.
+	missing := &fakeHost{failures: map[string]error{
+		realitySubState: errors.New("Unit vpn-hub-reality.service could not be found."),
+	}}
+	applied, err := RealityIngress{Run: missing.run, SecretsDir: t.TempDir()}.
+		Applied(context.Background())
+	if err != nil {
+		t.Fatalf("a unit that does not exist was reported as a failure: %v", err)
+	}
+	if applied != "" {
+		t.Errorf("applied = %q, want empty for a unit that was never created", applied)
+	}
 }
 
 // A listener that is up but carries no record of what it was started from is not

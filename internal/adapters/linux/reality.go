@@ -184,6 +184,15 @@ func (r RealityIngress) Applied(ctx context.Context) (string, error) {
 	state, err := r.run(ctx, "systemctl", "show", realityUnit+".service",
 		"--property=SubState", "--value")
 	if err != nil {
+		// Measured on systemd 255: `show` answers a unit that never existed with
+		// exit 0 and `dead`, so this branch is about failures to ask. The one
+		// exception is defensive -- a release that reported not-found as an error
+		// would otherwise fail Observe on every fresh host, and an aborted Observe
+		// stops the firewall and the ordinary ingress from converging at all. That
+		// is too much to hang on one version's exit code.
+		if strings.Contains(err.Error(), "could not be found") {
+			return "", nil
+		}
 		return "", fmt.Errorf("ask systemd about the listener: %w", err)
 	}
 	// Absent means dead or failed, and nothing else. A unit waiting out RestartSec
