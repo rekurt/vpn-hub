@@ -124,11 +124,22 @@ func validateFallback(hub domain.Hub) error {
 	// hub, which answers nothing on 443 but this listener -- a loop that also makes
 	// the disguise pointless.
 	if host, _, err := net.SplitHostPort(hub.Endpoint); err == nil &&
-		strings.EqualFold(host, reality.ServerName) {
+		canonicalHostname(host) == canonicalHostname(reality.ServerName) {
 		return fmt.Errorf("hub.fallback.reality.server_name %q is the hub's own endpoint; "+
 			"name a real site elsewhere for the handshake to mimic", reality.ServerName)
 	}
 	return nil
+}
+
+// canonicalHostname puts a DNS name in the one form two names can be compared in.
+//
+// validateHostname accepts a fully qualified name with its root dot, so
+// "vpn.example.com." and "vpn.example.com" both pass and both mean the same host.
+// Comparing them as written would let the trailing dot slip the check that stops
+// the listener from mimicking the hub itself -- and handing unauthenticated
+// connections back to the hub is the loop that check exists to prevent.
+func canonicalHostname(value string) string {
+	return strings.ToLower(strings.TrimSuffix(value, "."))
 }
 
 // validateHostname accepts the shape of a DNS name. It deliberately does not

@@ -300,7 +300,7 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 			return err
 		},
 	}
-	refresh.Flags().StringVar(&configDir, "config-dir", "/etc/vpn-hub", "directory holding upstream configurations")
+	refresh.Flags().StringVar(&configDir, "config-dir", DefaultConfigDir, "directory holding upstream configurations")
 
 	var restoreConfigDir string
 	restore := &cobra.Command{
@@ -320,7 +320,7 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 			return err
 		},
 	}
-	restore.Flags().StringVar(&restoreConfigDir, "config-dir", "/etc/vpn-hub", "directory holding upstream configurations")
+	restore.Flags().StringVar(&restoreConfigDir, "config-dir", DefaultConfigDir, "directory holding upstream configurations")
 
 	command.AddCommand(refresh, restore)
 	return command

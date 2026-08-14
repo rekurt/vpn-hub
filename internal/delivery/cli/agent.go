@@ -34,9 +34,9 @@ type agentFlags struct {
 
 func (f *agentFlags) bind(command *cobra.Command) {
 	command.Flags().StringVar(&f.stateDir, "state-dir", "/var/lib/vpn-hub", "agent state directory")
-	command.Flags().StringVar(&f.keyPath, "server-key", "/etc/vpn-hub/server.key", "path to the hub private key")
+	command.Flags().StringVar(&f.keyPath, "server-key", DefaultConfigDir+"/server.key", "path to the hub private key")
 	command.Flags().StringVar(&f.runtimeDir, "runtime-dir", linux.DefaultRuntimeDir, "tmpfs directory for material that must not reach disk")
-	command.Flags().StringVar(&f.configDir, "config-dir", "/etc/vpn-hub", "directory holding upstream tunnel configurations")
+	command.Flags().StringVar(&f.configDir, "config-dir", DefaultConfigDir, "directory holding upstream tunnel configurations")
 }
 
 // reconciler wires the host-facing adapters. Everything it drives only formats or

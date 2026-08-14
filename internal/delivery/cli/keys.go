@@ -29,7 +29,7 @@ func newKeygenCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if reality {
 				if !cmd.Flags().Changed("output") {
-					output = wiring.RealityKeyPath("/etc/vpn-hub")
+					output = wiring.RealityKeyPath(DefaultConfigDir)
 				}
 				publicKey, err := linux.RealityKeyFile{Path: output}.Create()
 				if err != nil {
@@ -50,13 +50,13 @@ func newKeygenCommand() *cobra.Command {
 			return err
 		},
 	}
-	command.Flags().StringVar(&output, "output", "/etc/vpn-hub/server.key", "where to write the hub private key")
+	command.Flags().StringVar(&output, "output", DefaultConfigDir+"/server.key", "where to write the hub private key")
 	command.Flags().BoolVar(&reality, "reality", false, "generate the TCP/443 fallback key instead of the hub key")
 	return command
 }
 
 func newDeviceAddCommand(configPath *string) *cobra.Command {
-	var egress, address, output string
+	var egress, address, output, configDir string
 	command := &cobra.Command{
 		Use:   "add <device>",
 		Short: "Generate a device key pair, print its entry and write its client profile",
@@ -108,14 +108,26 @@ func newDeviceAddCommand(configPath *string) *cobra.Command {
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "\nwrote client profile to %s\n", output); err != nil {
 				return err
 			}
-			return printFallback(cmd, cfg.Hub, deviceID, address, privateKey, output)
+			return printFallback(cmd, cfg.Hub, deviceID, address, privateKey, output, configDir)
 		},
 	}
 	command.Flags().StringVar(&egress, "egress", "", "tunnel carrying this device's internet traffic, or direct")
 	command.Flags().StringVar(&address, "address", "", "host address inside hub.client_cidr, for example 10.80.0.2/32")
 	command.Flags().StringVar(&output, "output", "", "where to write the client profile; omit to print only the entry")
+	// Named rather than assumed, and with the agent's own default: the fallback key
+	// lives beside the upstream configurations, so a hub told to keep them elsewhere
+	// would otherwise have its links issued from a key nothing reads -- or from a
+	// stale one left at the default path.
+	command.Flags().StringVar(&configDir, "config-dir", DefaultConfigDir,
+		"directory holding the hub's own keys and upstream tunnel configurations")
 	return command
 }
+
+// DefaultConfigDir holds the hub's own keys, the bot's credentials and the
+// upstream tunnel configurations. Every command that reaches into it names this
+// one constant: the agent reading a key from one directory while hubctl issues
+// links from another is a mismatch that produces credentials nothing admits.
+const DefaultConfigDir = "/etc/vpn-hub"
 
 // writeProfile writes a client profile at mode 0600, whether or not the target
 // already existed.
@@ -149,7 +161,7 @@ func writeProfile(path, profile string) error {
 // Every failure is reported on stderr and stepped over: the profile has already
 // been written, and a hub whose fallback key is missing is still a hub that works
 // on every network that does not need one.
-func printFallback(cmd *cobra.Command, hub domain.Hub, deviceID, address, privateKey, output string) error {
+func printFallback(cmd *cobra.Command, hub domain.Hub, deviceID, address, privateKey, output, configDir string) error {
 	if hub.Fallback.UDP443 {
 		profile, err := runtimeadapter.AltPortProfile(hub, address, privateKey)
 		if err != nil {
@@ -168,7 +180,7 @@ func printFallback(cmd *cobra.Command, hub domain.Hub, deviceID, address, privat
 		return nil
 	}
 
-	realityKey, err := wiring.RealityKey("/etc/vpn-hub").PrivateKey(cmd.Context())
+	realityKey, err := wiring.RealityKey(configDir).PrivateKey(cmd.Context())
 	if err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
 			"no TCP/443 link: %v\n(the hub issues it itself; run this on the hub to print it here)\n", err)

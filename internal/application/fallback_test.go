@@ -61,6 +61,21 @@ func TestValidateFallback(t *testing.T) {
 			},
 			wantErr: "the hub's own endpoint",
 		},
+		// validateHostname accepts the root dot, so without normalising it the same
+		// name written fully qualified would slip past the check above and point the
+		// listener's handshake back at the hub.
+		"the hub's own endpoint written fully qualified is refused too": {
+			fallback: domain.IngressFallback{
+				Reality: domain.RealityFallback{Enabled: true, ServerName: "vpn.example.test."},
+			},
+			wantErr: "the hub's own endpoint",
+		},
+		"and in a different case": {
+			fallback: domain.IngressFallback{
+				Reality: domain.RealityFallback{Enabled: true, ServerName: "VPN.Example.Test."},
+			},
+			wantErr: "the hub's own endpoint",
+		},
 		"udp443 is refused when the hub already listens on 443": {
 			fallback: domain.IngressFallback{UDP443: true},
 			endpoint: "vpn.example.test:443",
