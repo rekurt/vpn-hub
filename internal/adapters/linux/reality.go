@@ -186,8 +186,20 @@ func (r RealityIngress) Applied(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ask systemd about the listener: %w", err)
 	}
-	if strings.TrimSpace(state) != "running" {
+	// Absent means dead or failed, and nothing else. A unit waiting out RestartSec
+	// reports `auto-restart`, and one still coming up reports `start`: systemd will
+	// have a listener on 443 either way, so calling them absent would let a hub
+	// that no longer wants the fallback agree with itself while the port stayed
+	// open -- and a real Apply stopped it on the same pass. Naming the two states
+	// that mean gone is also steadier than listing the many that mean present.
+	switch strings.TrimSpace(state) {
+	case "dead", "failed", "":
 		return "", nil
+	case "running":
+	default:
+		// Present, but not serving the configuration on disk: it is starting,
+		// stopping, or looping. Which one is the journal's business, not the diff's.
+		return RealityRunningUnknown, nil
 	}
 
 	fingerprint, err := os.ReadFile(r.appliedPath())

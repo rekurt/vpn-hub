@@ -206,14 +206,31 @@ func TestAppliedSeparatesAnUnknownListenerFromNone(t *testing.T) {
 		t.Errorf("applied = %q, want %q", applied, RealityRunningUnknown)
 	}
 
-	stopped := &fakeHost{replies: map[string]string{realitySubState: "dead\n"}}
-	applied, err = RealityIngress{Run: stopped.run, SecretsDir: t.TempDir()}.
-		Applied(context.Background())
-	if err != nil {
-		t.Fatalf("applied: %v", err)
+	// A unit waiting out RestartSec, or still coming up, is present: systemd will
+	// have a listener on 443 either way, and a hub that no longer wants one has to
+	// see that rather than agree with itself while the port stays open.
+	for _, substate := range []string{"auto-restart", "start", "stop-sigterm"} {
+		host := &fakeHost{replies: map[string]string{realitySubState: substate + "\n"}}
+		applied, err := RealityIngress{Run: host.run, SecretsDir: t.TempDir()}.
+			Applied(context.Background())
+		if err != nil {
+			t.Fatalf("applied(%s): %v", substate, err)
+		}
+		if applied != RealityRunningUnknown {
+			t.Errorf("applied(%s) = %q, want %q", substate, applied, RealityRunningUnknown)
+		}
 	}
-	if applied != "" {
-		t.Errorf("applied = %q, want empty for a listener that is not running", applied)
+
+	for _, substate := range []string{"dead", "failed"} {
+		host := &fakeHost{replies: map[string]string{realitySubState: substate + "\n"}}
+		applied, err := RealityIngress{Run: host.run, SecretsDir: t.TempDir()}.
+			Applied(context.Background())
+		if err != nil {
+			t.Fatalf("applied(%s): %v", substate, err)
+		}
+		if applied != "" {
+			t.Errorf("applied(%s) = %q, want empty: nothing is there", substate, applied)
+		}
 	}
 }
 
