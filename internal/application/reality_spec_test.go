@@ -78,10 +78,22 @@ func TestRealitySpecTakesItsMarksFromTheFirewallPlan(t *testing.T) {
 	if got := byDevice["macbook"].Mark; got != want {
 		t.Errorf("macbook's mark = %#x, want the plan's %#x", got, want)
 	}
-	// A device on direct leaves by the uplink, which is where an unmarked socket
-	// goes anyway; marking it would only add a rule that changes nothing.
-	if got := byDevice["phone"].Mark; got != 0 {
-		t.Errorf("a device on direct got mark %#x", got)
+	// A device on direct is marked too, and not because the mark changes its route
+	// -- it leaves by the uplink either way. The mark is what tells the packet
+	// filter this connection has already chosen its way out, so output_mark leaves
+	// it alone instead of re-marking it by destination into a private network's
+	// tunnel that allowed_devices may not admit it to.
+	var direct uint32
+	for _, group := range plan.Egresses {
+		if group.ID == domain.EgressDirect {
+			direct = group.Mark
+		}
+	}
+	if direct == 0 {
+		t.Fatal("the plan has no mark for the direct egress")
+	}
+	if got := byDevice["phone"].Mark; got != direct {
+		t.Errorf("a device on direct got mark %#x, want the plan's %#x", got, direct)
 	}
 	if byDevice["macbook"].UUID == "" || byDevice["macbook"].UUID == byDevice["phone"].UUID {
 		t.Error("credentials are missing or shared between devices")

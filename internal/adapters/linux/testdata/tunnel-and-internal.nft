@@ -65,6 +65,7 @@ table inet vpn_hub {
 
 	chain output_mark {
 		type route hook output priority mangle; policy accept;
+		meta mark != 0x00000000 return
 		ip daddr @internal_corp_a meta mark set 0x00000102
 	}
 

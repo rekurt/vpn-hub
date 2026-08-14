@@ -30,11 +30,12 @@ func BuildRealityIngressSpec(state domain.DesiredState, plan domain.FirewallPlan
 
 	marks := make(map[string]uint32, len(plan.Egresses))
 	for _, group := range plan.Egresses {
-		// direct keeps mark zero here: its traffic leaves by the uplink, which is
-		// where an unmarked socket goes anyway.
-		if group.ID != domain.EgressDirect {
-			marks[group.ID] = group.Mark
-		}
+		// direct is marked too, although its traffic leaves by the uplink either
+		// way. The mark is what tells the packet filter's output_mark chain that
+		// this connection has already chosen its way out: an unmarked one would be
+		// re-marked by destination into a private network's tunnel, which is how a
+		// device excluded from that network by allowed_devices could still reach it.
+		marks[group.ID] = group.Mark
 	}
 
 	users := make([]domain.RealityUser, 0, len(state.Devices))

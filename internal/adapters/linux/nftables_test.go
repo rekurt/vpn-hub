@@ -102,6 +102,34 @@ func TestRenderIngressFallback(t *testing.T) {
 	goldenTest(t, "ingress-fallback", plan)
 }
 
+// output_mark marks by destination alone -- it cannot see who asked -- so it must
+// not touch a socket that already chose its way out. The fallback listener's
+// connections carry the mark of their device's egress; re-marking them into a
+// private network's tunnel would hand a device access that allowed_devices denies
+// it, because that list is enforced in the forward chain and this traffic never
+// reaches it. Refusing private addresses in the listener is not enough on its own:
+// a private network may route a public prefix, and split DNS adds whatever its
+// zones resolve to.
+func TestOutputMarkLeavesAlreadyMarkedTrafficAlone(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.Internals = []domain.InternalNetwork{{
+		TunnelID: "corp", Mark: 0x102, Interface: "vh-corp", Routes: []string{"10.20.0.0/16"},
+	}}
+	rendered := RenderRuleset(plan)
+
+	chain := rendered[strings.Index(rendered, "chain output_mark {"):]
+	chain = chain[:strings.Index(chain, "\t}")]
+	guard := "meta mark != 0x00000000 return"
+	if !strings.Contains(chain, guard) {
+		t.Fatalf("output_mark does not spare already-marked traffic:\n%s", chain)
+	}
+	// Ahead of the marking, or it would guard nothing.
+	if strings.Index(chain, guard) > strings.Index(chain, "meta mark set") {
+		t.Errorf("the guard comes after the marking it is supposed to precede:\n%s", chain)
+	}
+}
+
 // The kill switch has to cover traffic the hub originates on a client's behalf,
 // not only forwarded traffic. `ip rule fwmark N lookup N` fails OPEN -- a table
 // with no matching route falls through to main and the packet leaves by the hub's

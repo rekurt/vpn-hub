@@ -3,6 +3,7 @@ package linux
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -191,6 +192,64 @@ func TestRealityIngressApply(t *testing.T) {
 		}
 		if !host.ran("systemd-run") || !host.ran("sing-box run -c "+path) {
 			t.Errorf("the listener was not started; commands:\n%s", strings.Join(host.commands, "\n"))
+		}
+		// Checked before starting: systemd-run answers "the job was accepted", not
+		// "the process survived", so a configuration this release rejects would
+		// otherwise become a unit that restarts forever with every pass reporting fine.
+		if !host.ran("sing-box check -c " + path) {
+			t.Errorf("the configuration was not checked before starting it:\n%s", strings.Join(host.commands, "\n"))
+		}
+	})
+
+	t.Run("a rejected configuration is reported, not started", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, RealityConfigName)
+		host := &fakeHost{failures: map[string]error{
+			"sing-box check -c " + path: fmt.Errorf("exit status 1"),
+		}}
+		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
+
+		err := ingress.Apply(context.Background(), realitySpec())
+		if err == nil || !strings.Contains(err.Error(), "rejected") {
+			t.Fatalf("err = %v, want the rejection reported", err)
+		}
+		if host.ran("systemd-run") {
+			t.Error("a configuration known to be bad was started anyway")
+		}
+	})
+
+	// A port already in use, a missing binary, capabilities the kernel refuses:
+	// each leaves a unit that dies right after systemd-run reports success. The
+	// fallback is not part of Observe, so nothing else would ever notice.
+	t.Run("a listener that dies on startup is reported", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		host := &fakeHost{replies: map[string]string{
+			"systemctl is-active " + realityUnit + ".service":    "failed\n",
+			"journalctl -u " + realityUnit + " --no-pager -n 10": "address already in use",
+		}}
+		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
+
+		err := ingress.Apply(context.Background(), realitySpec())
+		if err == nil {
+			t.Fatal("a dead listener was reported as a success")
+		}
+		if !strings.Contains(err.Error(), "address already in use") {
+			t.Errorf("the journal did not reach the operator: %v", err)
+		}
+	})
+
+	t.Run("a listener that comes up is not reported", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		host := &fakeHost{replies: map[string]string{
+			"systemctl is-active " + realityUnit + ".service": "active\n",
+		}}
+		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
+
+		if err := ingress.Apply(context.Background(), realitySpec()); err != nil {
+			t.Fatalf("apply: %v", err)
 		}
 	})
 

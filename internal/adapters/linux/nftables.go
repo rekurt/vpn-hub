@@ -265,6 +265,16 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	if len(plan.Internals) > 0 {
 		line("\tchain output_mark {")
 		line("\t\ttype route hook output priority mangle; policy accept;")
+		// A socket that already chose its way out keeps it. This marks by destination
+		// alone -- it cannot see who asked -- so without this guard it would also
+		// re-mark the fallback listener's connections, which carry the mark of the
+		// egress their device was assigned. A device excluded from a private network
+		// by allowed_devices would then reach it anyway, because that list is enforced
+		// in the forward chain and this traffic never passes through it. Refusing
+		// private destinations in the listener's own configuration is not enough on
+		// its own: a private network may legitimately route a public prefix, and split
+		// DNS adds whatever addresses its zones resolve to.
+		line("\t\tmeta mark != 0x00000000 return")
 		for _, network := range plan.Internals {
 			line("\t\tip daddr @%s meta mark set 0x%08x", internalSetName(network.TunnelID), network.Mark)
 		}

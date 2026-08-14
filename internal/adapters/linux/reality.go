@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"vpn-hub/internal/domain"
 )
@@ -77,8 +79,17 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 		}
 	}
 
+	// Asked before starting, because systemd-run cannot answer it. It returns once
+	// the job is accepted, and a Type=simple process that dies a moment later --
+	// over a configuration this release rejects -- still looks like a success. A
+	// rejected configuration is deterministic, so it is worth catching here rather
+	// than as a unit that restarts forever while every reconcile reports fine.
+	if _, err := r.run(ctx, "sing-box", "check", "-c", path); err != nil {
+		return fmt.Errorf("the rendered listener configuration was rejected: %w", err)
+	}
+
 	_, _ = r.run(ctx, "systemctl", "stop", realityUnit+".service")
-	_, err = r.run(ctx, "systemd-run", "--quiet", "--collect", "--unit="+realityUnit,
+	if _, err := r.run(ctx, "systemd-run", "--quiet", "--collect", "--unit="+realityUnit,
 		"--property=Restart=on-failure", "--property=RestartSec=5s",
 		// Confined like the agent that starts it. CAP_NET_BIND_SERVICE for :443 and
 		// CAP_NET_ADMIN for the socket marks that steer each device into its egress;
@@ -88,8 +99,43 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 		"--property=PrivateTmp=true",
 		"--property=CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN",
 		"--property=AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN",
-		"sing-box", "run", "-c", path)
-	return err
+		"sing-box", "run", "-c", path); err != nil {
+		return err
+	}
+	return r.confirmRunning(ctx)
+}
+
+// confirmRunning reports a listener that died on startup.
+//
+// Everything systemd-run's success means is that the job was accepted. A port
+// already in use, a missing binary, a kernel that refuses the capabilities: all
+// of them leave a unit that fails immediately afterwards, and with Restart
+// on-failure it then fails on a timer. Nothing else would notice -- the fallback
+// is not part of Observe, so no drift is reported -- and every reconcile would
+// claim success while the way in stayed shut.
+func (r RealityIngress) confirmRunning(ctx context.Context) error {
+	// Briefly, because the question is whether it survived starting, not whether it
+	// is still up minutes later. That is the next reconcile's business.
+	for attempt := range 6 {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
+		state, _ := r.run(ctx, "systemctl", "is-active", realityUnit+".service")
+		switch strings.TrimSpace(state) {
+		case "active":
+			return nil
+		case "failed", "inactive":
+			journal, _ := r.run(ctx, "journalctl", "-u", realityUnit, "--no-pager", "-n", "10")
+			return fmt.Errorf("the listener did not stay up:\n%s", strings.TrimSpace(journal))
+		}
+	}
+	// Still activating after a second and a half. Not an error: it is allowed to
+	// take its time, and the next pass sees whether it settled.
+	return nil
 }
 
 // RenderRealityServerConfig builds the listener's configuration.
