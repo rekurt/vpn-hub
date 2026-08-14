@@ -70,6 +70,49 @@ func TestTryLeavesNoFirewallStateBehind(t *testing.T) {
 	}
 }
 
+// The firewall hole is the one leftover nothing else ever clears: the agent
+// replaces its own table and no other. So it has to be removed even when the
+// teardown around it is out of time -- a namespace deletion that hangs used to
+// eat the shared budget and leave the hole open with the context cancelled.
+func TestTheFirewallHoleIsClosedEvenWhenTheTeardownRunsOut(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	host := &fakeHost{}
+	canary := testCanary(host, dir)
+
+	// Already cancelled when the teardown begins, which is the worst case: every
+	// step has to work from a budget of its own.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = canary.Try(ctx, canaryCandidate(), "eth0")
+
+	if !host.ran("nft delete table inet vpn_hub_canary") {
+		t.Fatalf("the firewall hole was left open; commands:\n%s", strings.Join(host.commands, "\n"))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "canary.nft")); !os.IsNotExist(err) {
+		t.Errorf("canary.nft was left behind (stat: %v)", err)
+	}
+
+	// And ahead of the steps that can block, not after them: a namespace deletion
+	// that hangs must not be able to consume the time the removal needs.
+	// `netns del` only ever happens in the teardown -- the setup adds -- so it
+	// marks where the blocking part begins without matching the commands the
+	// bring-up issues along the way.
+	removal, teardown := -1, -1
+	for index, command := range host.commands {
+		if removal < 0 && strings.Contains(command, "nft delete table inet vpn_hub_canary") {
+			removal = index
+		}
+		if teardown < 0 && strings.Contains(command, "netns del") {
+			teardown = index
+		}
+	}
+	if teardown >= 0 && removal > teardown {
+		t.Errorf("the firewall removal waits on the teardown; commands:\n%s",
+			strings.Join(host.commands, "\n"))
+	}
+}
+
 func TestSelectCandidateStopsAtTheFirstProven(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

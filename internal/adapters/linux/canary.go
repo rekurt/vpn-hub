@@ -92,17 +92,25 @@ func (c Canary) try(ctx context.Context, candidate domain.ProxyTunnel, uplink st
 	}
 
 	defer func() {
-		// Torn down whatever happened: a candidate that failed must not leave a
-		// namespace behind for the next attempt to trip over. The temporary firewall
-		// hole goes with it -- a leaked vpn_hub_canary table would keep an accept and
-		// a masquerade hooked into forward/postrouting that no reconcile removes,
-		// because the agent only ever replaces its own inet vpn_hub table.
+		// The firewall hole goes first, and on a deadline of its own.
+		//
+		// It is the one piece of this teardown that nothing else ever cleans up: a
+		// leaked vpn_hub_canary table keeps an accept and a masquerade hooked into
+		// forward/postrouting, and the agent only replaces its own inet vpn_hub
+		// table. Sharing one budget with the steps above it meant a namespace
+		// deletion that hung could eat the whole timeout and leave the hole open
+		// with the context already cancelled.
+		discard, cancelDiscard := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancelDiscard()
+		c.Discard(discard)
+
+		// Then the rest: a candidate that failed must not leave a namespace behind
+		// for the next attempt to trip over.
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		_, _ = c.run(cleanup, "systemctl", "stop", "vpn-hub-proxy-canary.service")
 		_ = c.Egress.namespaceLifecycle(cleanup, "del", canaryNamespace)
 		_, _ = c.run(cleanup, "ip", "link", "del", spec.HostVeth)
-		c.Discard(cleanup)
 	}()
 
 	if err := c.Egress.applyOne(ctx, spec); err != nil {

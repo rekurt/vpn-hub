@@ -60,7 +60,19 @@ fi
 # Migration from units this repository no longer ships. The 443 fallbacks live in
 # the reconciled ruleset and a transient unit now, gated by hub.fallback in
 # hub.yaml. Drop these lines once every host has taken one deploy past them.
-systemctl disable --now vpn-hub-alt-udp443.service vpn-hub-vless-reality.service >/dev/null 2>&1 || true
+# Stopped before their files are deleted, and the stop has to work. The retired
+# REALITY listener holds TCP/443 with a device list of its own: left running, it
+# would keep admitting devices this revision removed and would also stop the
+# reconciled listener from binding the port -- while the deploy reported success
+# and its configuration, key included, was already gone from disk.
+for retired in vpn-hub-alt-udp443 vpn-hub-vless-reality; do
+	if ! stop_output=$(systemctl stop "$retired.service" 2>&1) &&
+		! echo "$stop_output" | grep -q "not loaded"; then
+		echo "cannot stop the retired $retired, so its files are left alone: $stop_output" >&2
+		exit 1
+	fi
+	systemctl disable "$retired.service" >/dev/null 2>&1 || true
+done
 rm -f /etc/systemd/system/vpn-hub-alt-udp443.service \
 	/etc/systemd/system/vpn-hub-vless-reality.service \
 	/etc/vpn-hub/vpn-hub-alt-udp443.nft
