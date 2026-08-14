@@ -79,9 +79,15 @@ if [ "$staged_bot" = yes ]; then
 	rm -f /etc/systemd/system/timers.target.wants/vpn-hub-subscription@*.timer
 	rm -f /etc/systemd/system/vpn-hub-subscription@.service \
 		/etc/systemd/system/vpn-hub-subscription@.timer
-elif [ ! -f /etc/systemd/system/vpn-hub-subscription@.timer ]; then
-	echo "note: this artifact ships no bot and the subscription timer is already gone;" >&2
-	echo "      nothing schedules refreshes -- run 'hubctl subscription refresh <id>' as needed" >&2
+elif ! ls /etc/systemd/system/timers.target.wants/vpn-hub-subscription@*.timer >/dev/null 2>&1; then
+	# Asked of the enablement symlinks rather than the template, because the
+	# template alone never scheduled anything: enabling an instance per tunnel was
+	# always an operator's step, which is also why this script cannot put the
+	# schedule back by itself -- it would have to know the tunnels.
+	echo "warning: this artifact ships no bot and no subscription timer is enabled." >&2
+	echo "         Nothing refreshes subscriptions on a schedule. Either run" >&2
+	echo "         'hubctl subscription refresh <tunnel>' when a provider rotates," >&2
+	echo "         or enable a timer per subscription tunnel." >&2
 fi
 # The retired listener's configuration holds a REALITY private key and a UUID per
 # device. A secret must not outlive the thing that justified it.
