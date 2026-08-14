@@ -22,6 +22,13 @@ const realityUnit = "vpn-hub-reality"
 // RealityConfigName is the rendered listener configuration inside the runtime dir.
 const RealityConfigName = "reality-singbox.json"
 
+// RealityRunningUnknown is what Applied reports for a listener that is up but
+// whose configuration this hub has no record of applying. It cannot collide with
+// a real fingerprint, which is 64 hex characters, and it must not be the empty
+// string: that means "no listener", and the difference decides whether a hub
+// with the fallback off notices one still running.
+const RealityRunningUnknown = "running-unknown"
+
 // RealityIngress runs the TCP/443 fallback listener on the hub itself.
 //
 // Unlike an egress it lives in the main namespace: it is a way *in*, and the
@@ -168,15 +175,30 @@ func (r RealityIngress) Fingerprint(spec domain.RealityIngressSpec) string {
 // while a real pass would restart it, and the drift watcher never mentioned a
 // listener that had been stopped.
 func (r RealityIngress) Applied(ctx context.Context) (string, error) {
-	if _, err := r.run(ctx, "systemctl", "is-active", "--quiet", realityUnit+".service"); err != nil {
+	// `systemctl show` rather than `is-active`, whose non-zero exit means "not
+	// active" and "I could not tell you" alike -- an unreachable bus, a cancelled
+	// context, a permission it lacks. Reading those as "nothing is running" would
+	// have Observe report an absence it never established, and a hub with the
+	// fallback switched off would look converged while a listener stayed up.
+	// `show` exits zero and prints the state, so a failure from it is a real one.
+	state, err := r.run(ctx, "systemctl", "show", realityUnit+".service",
+		"--property=SubState", "--value")
+	if err != nil {
+		return "", fmt.Errorf("ask systemd about the listener: %w", err)
+	}
+	if strings.TrimSpace(state) != "running" {
 		return "", nil
 	}
+
 	fingerprint, err := os.ReadFile(r.appliedPath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Running, but from a configuration this hub did not record applying:
-			// started by hand, or left over from a pass that died between the two.
-			return "", nil
+			// started by hand, or left over from a pass that died between the start
+			// and the record. Deliberately not the empty string, which means "no
+			// listener at all" -- with the fallback switched off the two would then
+			// agree, and a live TCP/443 listener would be reported as converged.
+			return RealityRunningUnknown, nil
 		}
 		return "", fmt.Errorf("read %s: %w", r.appliedPath(), err)
 	}

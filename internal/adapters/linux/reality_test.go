@@ -171,6 +171,52 @@ func TestRenderRealityRefusesAnIncompleteSpec(t *testing.T) {
 	}
 }
 
+// realitySubState is how the adapter asks systemd what the listener is doing.
+var realitySubState = "systemctl show " + realityUnit + ".service --property=SubState --value"
+
+// A failure to ask is not an answer. `is-active` reports "not active" and "I
+// could not tell you" with the same non-zero exit, and reading the second as the
+// first would have Observe report an absence it never established -- and a hub
+// with the fallback switched off look converged while a listener stayed up.
+func TestAppliedReportsAFailureToObserve(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{failures: map[string]error{
+		realitySubState: errors.New("Failed to connect to bus: No such file or directory"),
+	}}
+	ingress := RealityIngress{Run: host.run, SecretsDir: t.TempDir()}
+
+	if _, err := ingress.Applied(context.Background()); err == nil {
+		t.Fatal("a listener whose state could not be read was reported as absent")
+	}
+}
+
+// A listener that is up but carries no record of what it was started from is not
+// the same as no listener. With the fallback switched off the two would agree,
+// and a live TCP/443 listener would be reported as converged.
+func TestAppliedSeparatesAnUnknownListenerFromNone(t *testing.T) {
+	t.Parallel()
+
+	running := &fakeHost{replies: map[string]string{realitySubState: "running\n"}}
+	applied, err := RealityIngress{Run: running.run, SecretsDir: t.TempDir()}.
+		Applied(context.Background())
+	if err != nil {
+		t.Fatalf("applied: %v", err)
+	}
+	if applied != RealityRunningUnknown {
+		t.Errorf("applied = %q, want %q", applied, RealityRunningUnknown)
+	}
+
+	stopped := &fakeHost{replies: map[string]string{realitySubState: "dead\n"}}
+	applied, err = RealityIngress{Run: stopped.run, SecretsDir: t.TempDir()}.
+		Applied(context.Background())
+	if err != nil {
+		t.Fatalf("applied: %v", err)
+	}
+	if applied != "" {
+		t.Errorf("applied = %q, want empty for a listener that is not running", applied)
+	}
+}
+
 // writeAppliedReality puts a runtime directory in the state a successful pass
 // leaves behind: the rendered configuration, and the fingerprint recording that
 // the running listener was started from it.
@@ -340,7 +386,7 @@ func TestRealityIngressApply(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeAppliedReality(t, dir, realitySpec())
-		host := &fakeHost{} // is-active succeeds
+		host := &fakeHost{replies: map[string]string{realitySubState: "running\n"}}
 		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
 
 		if err := ingress.Apply(context.Background(), realitySpec()); err != nil {

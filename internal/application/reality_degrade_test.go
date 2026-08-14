@@ -142,6 +142,36 @@ func TestTheFallbackListenerIsPartOfThePlan(t *testing.T) {
 	}
 }
 
+// A listener that is up while the revision asks for none has to be reported, and
+// that includes one whose configuration the hub has no record of: started by
+// hand, or left from a pass that died between starting it and recording it.
+// Reporting nothing there would leave TCP/443 open with the fallback switched
+// off and every dry run calling the host clean.
+func TestAListenerNobodyAskedForIsReported(t *testing.T) {
+	t.Parallel()
+	privateKey, state := hubKeyPair(t)
+	// The revision does not ask for a fallback at all.
+	reality := &recordingReality{applied: "running-unknown"}
+	reconciler := newReconciler(privateKey, &recordingFirewall{live: "wanted"}, &recordingIngress{
+		observed: domain.IngressObservation{Exists: true},
+	})
+	reconciler.Reality = reality
+
+	operations, err := reconciler.Plan(context.Background(), state)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	for _, operation := range operations {
+		if operation.Resource.Type == "reality" {
+			if operation.Kind != domain.OpDelete {
+				t.Errorf("kind = %q, want %q", operation.Kind, domain.OpDelete)
+			}
+			return
+		}
+	}
+	t.Fatalf("a running listener was not reported against a revision that wants none: %v", operations)
+}
+
 // And a hub whose listener is running exactly what the revision asks for has
 // nothing to report -- otherwise every pass would claim drift forever.
 func TestAConvergedFallbackIsNotDrift(t *testing.T) {
