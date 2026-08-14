@@ -2,6 +2,7 @@ package linux
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -62,6 +63,9 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}
+		if err := os.Remove(r.appliedPath()); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", r.appliedPath(), err)
+		}
 		return nil
 	}
 
@@ -70,11 +74,23 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 		return err
 	}
 	// 0600: the file holds the listener's private key and every device's credential.
-	changed, err := writeIfChanged(path, config, 0o600)
-	if err != nil {
+	if _, err := writeIfChanged(path, config, 0o600); err != nil {
 		return err
 	}
-	if !changed {
+
+	// Whether the rendered configuration is already *running* -- which is not the
+	// same question as whether it is already written.
+	//
+	// The file has to be on disk before the unit can be started from it, so a pass
+	// that writes it and then fails to replace the process leaves the new bytes
+	// beside the old listener. Reading the file back would call that applied, skip
+	// the work and report success, while the running process kept serving the user
+	// list it started with: a revoked device would stay admitted until something
+	// else happened to change the configuration again. The fingerprint below is
+	// written only after a replacement that worked, so a failed one is retried on
+	// the next pass instead of being remembered as done.
+	fingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(config)))
+	if applied, err := os.ReadFile(r.appliedPath()); err == nil && string(applied) == fingerprint {
 		if _, err := r.run(ctx, "systemctl", "is-active", "--quiet", realityUnit+".service"); err == nil {
 			return nil
 		}
@@ -111,7 +127,21 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 		"sing-box", "run", "-c", path); err != nil {
 		return err
 	}
-	return r.confirmRunning(ctx)
+	if err := r.confirmRunning(ctx); err != nil {
+		return err
+	}
+	// Recorded last, so it means "this is what is running" rather than "this is
+	// what was rendered".
+	if _, err := writeIfChanged(r.appliedPath(), fingerprint, 0o600); err != nil {
+		return err
+	}
+	return nil
+}
+
+// appliedPath holds the fingerprint of the configuration the running listener
+// was actually started from.
+func (r RealityIngress) appliedPath() string {
+	return filepath.Join(r.secretsDir(), RealityConfigName+".applied")
 }
 
 // stopListener stops the unit and reports a stop that did not work.

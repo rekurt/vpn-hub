@@ -2,6 +2,7 @@ package linux
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -170,6 +171,24 @@ func TestRenderRealityRefusesAnIncompleteSpec(t *testing.T) {
 	}
 }
 
+// writeAppliedReality puts a runtime directory in the state a successful pass
+// leaves behind: the rendered configuration, and the fingerprint recording that
+// the running listener was started from it.
+func writeAppliedReality(t *testing.T, dir string, spec domain.RealityIngressSpec) {
+	t.Helper()
+	rendered, err := RenderRealityServerConfig(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, RealityConfigName), []byte(rendered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(rendered)))
+	if err := os.WriteFile(filepath.Join(dir, RealityConfigName+".applied"), []byte(fingerprint), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRealityIngressApply(t *testing.T) {
 	t.Parallel()
 
@@ -320,13 +339,7 @@ func TestRealityIngressApply(t *testing.T) {
 	t.Run("an unchanged config leaves a running listener alone", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		rendered, err := RenderRealityServerConfig(realitySpec())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, RealityConfigName), []byte(rendered), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeAppliedReality(t, dir, realitySpec())
 		host := &fakeHost{} // is-active succeeds
 		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
 
@@ -335,6 +348,34 @@ func TestRealityIngressApply(t *testing.T) {
 		}
 		if host.ran("systemd-run") {
 			t.Errorf("a healthy listener was restarted; commands:\n%s", strings.Join(host.commands, "\n"))
+		}
+	})
+
+	// A written configuration is not an applied one. The file has to be on disk
+	// before the unit can start from it, so a pass that wrote it and then failed to
+	// replace the process leaves the new bytes beside the old listener -- still
+	// serving the user list it started with, a revoked device included. Reading the
+	// file back would call that done and never retry.
+	t.Run("a config written but never started is retried", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		rendered, err := RenderRealityServerConfig(realitySpec())
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Written, but no record of a replacement that worked.
+		if err := os.WriteFile(filepath.Join(dir, RealityConfigName), []byte(rendered), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		host := &fakeHost{} // is-active succeeds: the *old* listener is still up
+		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
+
+		if err := ingress.Apply(context.Background(), realitySpec()); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		if !host.ran("systemd-run") {
+			t.Errorf("the listener was not replaced, so the old user list stands:\n%s",
+				strings.Join(host.commands, "\n"))
 		}
 	})
 
