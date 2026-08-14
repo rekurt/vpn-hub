@@ -77,16 +77,25 @@ rm -f /etc/systemd/system/vpn-hub-alt-udp443.service \
 	/etc/systemd/system/vpn-hub-vless-reality.service \
 	/etc/vpn-hub/vpn-hub-alt-udp443.nft
 
+# Whether a bot will actually be running when this script finishes -- which is
+# not the same as whether the artifact shipped one. A host with no telegram.yaml
+# gets the binary and no scheduler, and that is the condition the timer has to
+# answer to as well.
+bot_will_run=no
+if [ "$staged_bot" = yes ] && [ -f /etc/vpn-hub/telegram.yaml ] && [ -x /usr/local/bin/vpn-hub-bot ]; then
+	bot_will_run=yes
+fi
+
 # The subscription timer goes only when something replaces it. Its job moved into
-# the bot's scheduler, so removing it from an artifact that ships no bot would
-# leave a host with neither -- subscriptions would quietly stop refreshing on
-# exactly the rollback path this script is meant to support.
+# the bot's scheduler, so removing it where no bot will run leaves a host with
+# neither, and subscriptions quietly stop refreshing -- on the rollback path this
+# script exists to support, and equally on a hub that simply has no bot token.
 #
 # `systemctl stop` expands a glob over loaded units; `systemctl disable` does not
 # -- it mangles the `*` into a literal instance name and quietly does nothing. So
 # the enablement symlinks go by hand, or a real instance would keep its dangling
 # symlink and a not-found unit after the template is deleted.
-if [ "$staged_bot" = yes ]; then
+if [ "$bot_will_run" = yes ]; then
 	systemctl stop 'vpn-hub-subscription@*.timer' >/dev/null 2>&1 || true
 	rm -f /etc/systemd/system/timers.target.wants/vpn-hub-subscription@*.timer
 	rm -f /etc/systemd/system/vpn-hub-subscription@.service \
@@ -96,7 +105,7 @@ elif ! ls /etc/systemd/system/timers.target.wants/vpn-hub-subscription@*.timer >
 	# template alone never scheduled anything: enabling an instance per tunnel was
 	# always an operator's step, which is also why this script cannot put the
 	# schedule back by itself -- it would have to know the tunnels.
-	echo "warning: this artifact ships no bot and no subscription timer is enabled." >&2
+	echo "warning: no bot will run here and no subscription timer is enabled." >&2
 	echo "         Nothing refreshes subscriptions on a schedule. Either run" >&2
 	echo "         'hubctl subscription refresh <tunnel>' when a provider rotates," >&2
 	echo "         or enable a timer per subscription tunnel." >&2
@@ -110,11 +119,10 @@ systemctl daemon-reload
 systemctl enable --now vpn-hub-agent
 systemctl restart vpn-hub-agent
 
-# The bot starts only where its config and binary exist: a host without a token
-# must not grow a crash-looping unit. The binary is gone by now if this artifact
-# shipped none, so a bot-less rollback falls out of the same condition rather
-# than needing its own.
-if [ -f /etc/vpn-hub/telegram.yaml ] && [ -x /usr/local/bin/vpn-hub-bot ]; then
+# The same condition the timer answered to, asked once and used twice: a host
+# without a token must not grow a crash-looping unit, and whatever decides that
+# has to be what decides whether the timer it replaces may go.
+if [ "$bot_will_run" = yes ]; then
 	systemctl enable --now vpn-hub-bot
 	systemctl restart vpn-hub-bot
 else
