@@ -90,10 +90,8 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 	// written only after a replacement that worked, so a failed one is retried on
 	// the next pass instead of being remembered as done.
 	fingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(config)))
-	if applied, err := os.ReadFile(r.appliedPath()); err == nil && string(applied) == fingerprint {
-		if _, err := r.run(ctx, "systemctl", "is-active", "--quiet", realityUnit+".service"); err == nil {
-			return nil
-		}
+	if applied, err := r.Applied(ctx); err == nil && applied == fingerprint {
+		return nil
 	}
 
 	// Asked before starting, because systemd-run cannot answer it. It returns once
@@ -142,6 +140,47 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 // was actually started from.
 func (r RealityIngress) appliedPath() string {
 	return filepath.Join(r.secretsDir(), RealityConfigName+".applied")
+}
+
+// Fingerprint is what Applied returns for a listener started from this spec.
+//
+// Taken over the rendered configuration rather than the spec, because that is
+// what the process actually reads: two specs that render alike are the same
+// listener, and a spec field that reaches the file -- the key included, which the
+// spec deliberately keeps out of its own JSON -- changes it.
+func (r RealityIngress) Fingerprint(spec domain.RealityIngressSpec) string {
+	if !spec.Enabled {
+		return ""
+	}
+	config, err := RenderRealityServerConfig(spec)
+	if err != nil {
+		// A spec that will not render is one no listener can be running from.
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(config)))
+}
+
+// Applied reports what the running listener was started from.
+//
+// Empty when nothing is running, and deliberately so: a listener someone stopped
+// is a difference from the revision, not the absence of one. Without this the
+// fallback was invisible to Observe and Diff, so a dry run reported a clean host
+// while a real pass would restart it, and the drift watcher never mentioned a
+// listener that had been stopped.
+func (r RealityIngress) Applied(ctx context.Context) (string, error) {
+	if _, err := r.run(ctx, "systemctl", "is-active", "--quiet", realityUnit+".service"); err != nil {
+		return "", nil
+	}
+	fingerprint, err := os.ReadFile(r.appliedPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Running, but from a configuration this hub did not record applying:
+			// started by hand, or left over from a pass that died between the two.
+			return "", nil
+		}
+		return "", fmt.Errorf("read %s: %w", r.appliedPath(), err)
+	}
+	return strings.TrimSpace(string(fingerprint)), nil
 }
 
 // stopListener stops the unit and reports a stop that did not work.

@@ -54,6 +54,18 @@ func (r HostReconciler) Observe(ctx context.Context) (domain.ObservedState, erro
 		return domain.ObservedState{}, fmt.Errorf("observe ingress: %w", err)
 	}
 	state.Ingress = ingress
+
+	// The fallback listener, when the hub has one to manage. Without this it was
+	// the one component nothing observed: a dry run reported a clean host while a
+	// real pass would restart it, and a listener someone stopped was never
+	// mentioned as drift.
+	if r.Reality != nil {
+		fingerprint, err := r.Reality.Applied(ctx)
+		if err != nil {
+			return domain.ObservedState{}, fmt.Errorf("observe reality fallback: %w", err)
+		}
+		state.RealityFingerprint = fingerprint
+	}
 	return state, nil
 }
 
@@ -76,7 +88,18 @@ func (r HostReconciler) Plan(ctx context.Context, state domain.DesiredState) ([]
 	if err != nil {
 		return nil, err
 	}
-	return Diff(compiled.ingress, r.Firewall.Fingerprint(compiled.firewall), observed), nil
+	return Diff(compiled.ingress, r.Firewall.Fingerprint(compiled.firewall),
+		r.realityFingerprint(compiled.reality), observed), nil
+}
+
+// realityFingerprint is what a listener running this spec would report, and the
+// empty string on a hub with no fallback configured at all -- which is what an
+// unobserved listener reports too, so the two agree and nothing is reported.
+func (r HostReconciler) realityFingerprint(spec domain.RealityIngressSpec) string {
+	if r.Reality == nil {
+		return ""
+	}
+	return r.Reality.Fingerprint(spec)
 }
 
 // Apply converges the host and returns the differences it closed.
@@ -97,7 +120,7 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 	if err != nil {
 		return nil, err
 	}
-	operations := Diff(spec, r.Firewall.Fingerprint(plan), observed)
+	operations := Diff(spec, r.Firewall.Fingerprint(plan), r.realityFingerprint(compiled.reality), observed)
 
 	// The packet filter goes in first. Doing it the other way round would leave a
 	// window where the ingress interface is up and forwarding under whatever rules

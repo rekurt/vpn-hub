@@ -42,8 +42,17 @@ type Ingress interface {
 
 // RealityIngress runs the TCP/443 fallback listener. A spec with Enabled false
 // asks for it to be gone, which is how turning the fallback off closes the port.
+//
+// It also reports what it is running, so a dry run says the same thing a real
+// pass would do and a listener someone stopped shows up as drift.
 type RealityIngress interface {
 	Apply(context.Context, domain.RealityIngressSpec) error
+	// Fingerprint is what Applied returns for a listener started from this spec.
+	Fingerprint(domain.RealityIngressSpec) string
+	// Applied reports the fingerprint the running listener was started from, and
+	// the empty string when none is running -- a listener someone stopped is a
+	// difference from the revision, not the absence of one.
+	Applied(context.Context) (string, error)
 }
 
 // EgressManager runs upstream tunnels, each isolated in its own namespace.
