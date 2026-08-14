@@ -89,7 +89,15 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 		return fmt.Errorf("the rendered listener configuration was rejected: %w", err)
 	}
 
-	_, _ = r.run(ctx, "systemctl", "stop", realityUnit+".service")
+	// Checked here as much as on the way out, and for a sharper reason. The user
+	// list lives in the running process, so replacing it is how a revoked device
+	// stops being admitted. A stop that quietly failed would leave systemd-run
+	// unable to reuse the unit name, the old process still serving the old list,
+	// and the reconcile reporting that it had applied the revision that removed
+	// the device.
+	if err := r.stopListener(ctx); err != nil {
+		return err
+	}
 	if _, err := r.run(ctx, "systemd-run", "--quiet", "--collect", "--unit="+realityUnit,
 		"--property=Restart=on-failure", "--property=RestartSec=5s",
 		// Confined like the agent that starts it. CAP_NET_BIND_SERVICE for :443 and

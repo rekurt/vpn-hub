@@ -18,19 +18,20 @@ for binary in hubctl vpn-hub-agent vpn-hub-bot; do
 	fi
 done
 
-# An artifact that ships no bot means this deploy runs no bot. The rollback path
-# reaches for a build that predates it, and the bot block below would otherwise
-# find the newer binary still installed and start it beside a rolled-back agent
-# -- mixing the versions the rollback exists to separate. Stopped and disabled
-# rather than deleted: rolling forward is then one deploy away, and a deploy
-# does not quietly remove something an operator may have put there by hand.
-staged_bot=yes
-if [ ! -f "$STAGE/vpn-hub-bot" ]; then
-	staged_bot=no
-	if [ -x /usr/local/bin/vpn-hub-bot ]; then
-		echo "this artifact ships no bot; stopping the one already installed"
-		systemctl disable --now vpn-hub-bot >/dev/null 2>&1 || true
-	fi
+# An artifact that ships no bot means this host runs no bot. The rollback path
+# reaches for a build that predates it, and leaving the newer binary installed
+# would have it started again beside a rolled-back agent -- mixing the versions
+# the rollback exists to separate.
+#
+# Removed, not merely disabled. The presence of this binary is what every other
+# step reads as "this hub has a bot", including the deploy workflow's own
+# verification, so a disabled unit beside an executable that is still there
+# leaves the two disagreeing. One rule instead: the artifact decides. Rolling
+# forward reinstalls it in one deploy.
+if [ ! -f "$STAGE/vpn-hub-bot" ] && [ -x /usr/local/bin/vpn-hub-bot ]; then
+	echo "this artifact ships no bot; removing the one already installed"
+	systemctl disable --now vpn-hub-bot >/dev/null 2>&1 || true
+	rm -f /usr/local/bin/vpn-hub-bot
 fi
 
 # Guarded on the glob matching, not just the directory existing: an unexpanded
@@ -67,13 +68,14 @@ systemctl daemon-reload
 systemctl enable --now vpn-hub-agent
 systemctl restart vpn-hub-agent
 
-# The bot starts only where this artifact shipped one and its config exists: a
-# host without a token must not grow a crash-looping unit, and a rollback that
-# ships no bot must not start the newer one it did not install.
-if [ "$staged_bot" = yes ] && [ -f /etc/vpn-hub/telegram.yaml ] && [ -x /usr/local/bin/vpn-hub-bot ]; then
+# The bot starts only where its config and binary exist: a host without a token
+# must not grow a crash-looping unit. The binary is gone by now if this artifact
+# shipped none, so a bot-less rollback falls out of the same condition rather
+# than needing its own.
+if [ -f /etc/vpn-hub/telegram.yaml ] && [ -x /usr/local/bin/vpn-hub-bot ]; then
 	systemctl enable --now vpn-hub-bot
 	systemctl restart vpn-hub-bot
-elif [ "$staged_bot" = yes ]; then
+else
 	echo "no /etc/vpn-hub/telegram.yaml or no bot binary; vpn-hub-bot not enabled"
 fi
 

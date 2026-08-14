@@ -245,6 +245,26 @@ func TestRealityIngressApply(t *testing.T) {
 		}
 	})
 
+	// The user list lives in the running process, so replacing it is how a revoked
+	// device stops being admitted. A stop that quietly failed would leave the old
+	// process serving the old list while the pass reported the revision applied.
+	t.Run("a stop that fails on the update path is reported", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		host := &fakeHost{failures: map[string]error{
+			"systemctl stop " + realityUnit + ".service": errors.New("Failed to stop: Connection timed out"),
+		}}
+		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
+
+		err := ingress.Apply(context.Background(), realitySpec())
+		if err == nil || !strings.Contains(err.Error(), "stop the listener") {
+			t.Fatalf("err = %v, want the failed stop reported", err)
+		}
+		if host.ran("systemd-run") {
+			t.Error("a replacement was started although the old listener may still be running")
+		}
+	})
+
 	t.Run("a rejected configuration is reported, not started", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
