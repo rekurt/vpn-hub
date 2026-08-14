@@ -193,9 +193,9 @@ func TestAppliedReportsAFailureToObserve(t *testing.T) {
 	// existed with exit 0 and `dead`, so this path is unreachable there -- but a
 	// release that reported not-found as an error would fail Observe on every fresh
 	// host, and an aborted Observe stops the firewall converging at all.
-	missing := &fakeHost{failures: map[string]error{
-		realitySubState: errors.New("Unit vpn-hub-reality.service could not be found."),
-	}}
+	// systemd's own wording, kept verbatim: recognising it is the whole point.
+	notFound := fmt.Sprintf("Unit %s.service could not be found.", realityUnit)
+	missing := &fakeHost{failures: map[string]error{realitySubState: errors.New(notFound)}}
 	applied, err := RealityIngress{Run: missing.run, SecretsDir: t.TempDir()}.
 		Applied(context.Background())
 	if err != nil {
