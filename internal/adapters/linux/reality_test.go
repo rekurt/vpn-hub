@@ -413,8 +413,11 @@ func TestRealityIngressApply(t *testing.T) {
 	})
 
 	// A port already in use, a missing binary, capabilities the kernel refuses:
-	// each leaves a unit that dies right after systemd-run reports success. The
-	// fallback is not part of Observe, so nothing else would ever notice.
+	// each leaves a unit that dies right after systemd-run reports success, and the
+	// pass that started it would report the revision applied. Observe does read the
+	// listener's state now, so the next pass would see the drift -- but only the
+	// next one, and only as "something is running and this hub does not know what".
+	// The pass that caused it is where it can still be named.
 	t.Run("a listener that dies on startup is reported", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
