@@ -126,22 +126,26 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 		return rejected
 	}
 
+	// The record of what is running goes before the thing it describes changes, and
+	// is only rewritten once the replacement is up. Before the *file* changes, not
+	// merely before the process does: the file is what the unit reads, and
+	// `Restart=on-failure` means it can be re-read without this hub doing anything.
+	//
+	// An agent that dies between the write below and this removal would otherwise
+	// leave configuration B on disk, the old process still serving A, and a marker
+	// still saying A. Let the old process crash once and systemd restarts it from B
+	// -- and if the confirmation deadline has meanwhile restored revision A, every
+	// later pass renders A, reads marker A, calls it applied and returns, while the
+	// listener serves B's user list for as long as the hub stays up. Removing the
+	// marker first makes that window read as "something is running and this hub does
+	// not know what", which is what it is, and the next pass rebuilds the listener.
+	if err := os.Remove(r.appliedPath()); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove %s: %w", r.appliedPath(), err)
+	}
+
 	// 0600: the file holds the listener's private key and every device's credential.
 	if _, err := writeIfChanged(path, config, 0o600); err != nil {
 		return err
-	}
-
-	// The record of what is running goes before the thing it describes changes,
-	// and is only rewritten once the replacement is up.
-	//
-	// Leaving the old one in place makes an interrupted update invisible: the agent
-	// dies after starting configuration B but before recording it, the confirmation
-	// deadline restores revision A, and the next pass writes A to disk, reads the
-	// marker still saying A, and returns -- while the process serving B carries on
-	// with B's user list. Absent means "something is running and this hub does not
-	// know what", which is exactly the state an interrupted update leaves behind.
-	if err := os.Remove(r.appliedPath()); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove %s: %w", r.appliedPath(), err)
 	}
 
 	// Checked here as much as on the way out, and for a sharper reason. The user

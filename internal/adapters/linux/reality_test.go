@@ -412,6 +412,38 @@ func TestRealityIngressApply(t *testing.T) {
 		}
 	})
 
+	// The marker has to stop describing the listener before the file the listener
+	// reads changes -- not merely before the process is replaced.
+	//
+	// The unit restarts on failure, so systemd can re-read that file without this
+	// hub doing anything: a pass that died between the write and the removal would
+	// leave configuration B on disk, the old process serving A and a marker saying
+	// A. One crash later the listener serves B, and if the confirmation deadline
+	// restored revision A in the meantime, every later pass renders A, reads marker
+	// A, calls it applied and returns -- with B's user list still admitted.
+	t.Run("the marker is dropped before the file the listener reads", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		host := &fakeHost{}
+		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
+		marker := filepath.Join(dir, RealityConfigName+".applied")
+		if err := os.WriteFile(marker, []byte("the fingerprint of what is running"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Stands in for dying at the write: a directory where the configuration goes
+		// fails the write and nothing else, so what survives it is the ordering.
+		if err := os.Mkdir(filepath.Join(dir, RealityConfigName), 0o700); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := ingress.Apply(context.Background(), realitySpec()); err == nil {
+			t.Fatal("a configuration that could not be written was reported as applied")
+		}
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Errorf("the marker outlived the configuration it describes (stat: %v)", err)
+		}
+	})
+
 	// A port already in use, a missing binary, capabilities the kernel refuses:
 	// each leaves a unit that dies right after systemd-run reports success, and the
 	// pass that started it would report the revision applied. Observe does read the

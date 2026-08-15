@@ -139,9 +139,18 @@ else
 	# And stopped, not merely left unstarted. A bot whose telegram.yaml was removed
 	# is still running on the credentials it loaded at boot, and still enabled to
 	# crash-loop after the next restart -- so "will not run" has to be made true
-	# rather than announced. Absent and already-stopped units both answer here, so
-	# neither is an error.
-	systemctl disable --now vpn-hub-bot >/dev/null 2>&1 || true
+	# rather than announced, which means a stop that failed cannot be discarded.
+	#
+	# Measured on systemd 255: `disable --now` answers exit 0 for a unit that is
+	# already stopped, already disabled, or both, and exit 1 with those words only
+	# when there is no unit file at all. So that is the one tolerated case, and a
+	# bus timeout or a refusal is a bot still running on credentials this host no
+	# longer has -- reported rather than installed over.
+	if ! stop_output=$(systemctl disable --now vpn-hub-bot 2>&1) &&
+		! echo "$stop_output" | grep -q "does not exist"; then
+		echo "cannot stop the bot this host is no longer configured for: $stop_output" >&2
+		exit 1
+	fi
 fi
 
 rm -rf "$STAGE"
