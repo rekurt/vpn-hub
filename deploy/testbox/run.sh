@@ -26,10 +26,35 @@ docker run -d --name "$name" --privileged --cgroupns=host \
 	-v "$PWD":/src:ro "$image" >/dev/null
 trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
 
+# Waited on by state, not by exit status. `is-system-running` exits non-zero for
+# anything short of "fully running", and `degraded` -- systemd's word for "booted,
+# with a unit that failed" -- is among those. A box that grows one failing unit
+# would otherwise spin here for the whole minute and then carry on regardless,
+# which is the second half of the problem: the loop had no way to say it gave up,
+# so a systemd that never came up surfaced as confusing errors from the commands
+# after it rather than as "systemd never came up".
+state=
 for _ in $(seq 60); do
-	if docker exec "$name" systemctl is-system-running >/dev/null 2>&1; then break; fi
+	state=$(docker exec "$name" systemctl is-system-running 2>&1 || true)
+	case "$state" in
+	running | degraded) break ;;
+	esac
 	sleep 1
 done
+case "$state" in
+running) ;;
+degraded)
+	# Usable, and worth naming: the failed unit is rarely the hub's, but a suite
+	# that behaves oddly afterwards should not be the first hint that it exists.
+	echo "note: the box booted degraded; failed units:" >&2
+	docker exec "$name" systemctl list-units --state=failed --no-legend --no-pager >&2 || true
+	;;
+*)
+	echo "systemd did not come up in the box (last state: ${state:-none})" >&2
+	docker logs --tail 20 "$name" >&2 || true
+	exit 1
+	;;
+esac
 
 # Copied out of the read-only mount: the suite writes beside the sources, and the
 # host's own tree is not its to touch.
