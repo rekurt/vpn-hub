@@ -142,9 +142,8 @@ func (b *Bot) handleHubEditInput(ctx context.Context, dialog *dialog, text strin
 	}
 	b.dialogs.clear()
 
-	release, busyWith, ok := b.gate.Acquire("правка хаба: " + field)
-	if !ok {
-		b.send(ctx, "⏳ Занято: "+esc(busyWith)+". Повторите позже.", nil)
+	release := b.claimForDialog(ctx, "правка хаба: "+field)
+	if release == nil {
 		return
 	}
 	defer release()
@@ -199,9 +198,8 @@ func (b *Bot) handleAWGSetInput(ctx context.Context, _ *dialog, text string) {
 	}
 	b.dialogs.clear()
 
-	release, busyWith, ok := b.gate.Acquire("правка AWG-параметра " + canonical)
-	if !ok {
-		b.send(ctx, "⏳ Занято: "+esc(busyWith)+". Повторите позже.", nil)
+	release := b.claimForDialog(ctx, "правка AWG-параметра "+canonical)
+	if release == nil {
 		return
 	}
 	defer release()
@@ -243,9 +241,9 @@ func (b *Bot) afterHubChange(text string) screen {
 }
 
 func (b *Bot) removeAWGParameter(ctx context.Context, cb *tg.CallbackQuery, key string) result {
-	release, busyWith, ok := b.gate.Acquire("удаление AWG-параметра " + key)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("удаление AWG-параметра " + key)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -291,9 +289,9 @@ func (b *Bot) routeKeyRotation(ctx context.Context, cb *tg.CallbackQuery, args [
 		return result{toast: "Не понимаю эту кнопку"}
 	}
 
-	release, busyWith, ok := b.gate.Acquire("ротация ключа хаба")
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("ротация ключа хаба")
+	if busy != nil {
+		return *busy
 	}
 
 	progress, err := b.API.SendMessage(ctx, b.Cfg.AdminID, "🔑 Ротация: генерирую новый ключ…", nil)
@@ -506,9 +504,8 @@ func (b *Bot) handleProbeSetInput(ctx context.Context, dialog *dialog, text stri
 	}
 	b.dialogs.clear()
 
-	release, busyWith, ok := b.gate.Acquire("проба " + title + " у " + tunnelID)
-	if !ok {
-		b.send(ctx, "⏳ Занято: "+esc(busyWith)+". Повторите позже.", nil)
+	release := b.claimForDialog(ctx, "проба "+title+" у "+tunnelID)
+	if release == nil {
 		return
 	}
 	defer release()
@@ -531,9 +528,9 @@ func (b *Bot) removeProbe(ctx context.Context, cb *tg.CallbackQuery, tunnelID, k
 	if !ok {
 		return result{toast: "Не понимаю вид пробы"}
 	}
-	release, busyWith, ok := b.gate.Acquire("удаление пробы " + title + " у " + tunnelID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("удаление пробы " + title + " у " + tunnelID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 

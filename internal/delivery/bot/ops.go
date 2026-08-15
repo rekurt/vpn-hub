@@ -1,6 +1,9 @@
 package bot
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // busyResult is the standard answer to a tap that arrives while a mutation is
 // running: name what holds the gate so the admin knows what to wait for.
@@ -23,6 +26,35 @@ type opsGate struct {
 	mu      sync.Mutex
 	busy    bool
 	current string
+}
+
+// claim takes the gate for a named operation, or hands back the refusal to answer
+// with. release is nil exactly when the gate was busy, which is what makes
+// forgetting the check a nil dereference at the first tap rather than two
+// mutations interleaving in production.
+//
+// The caller still writes `defer release()` itself: a helper that ran the body in
+// a closure would hold the gate for exactly the same span while re-indenting
+// every handler in the package, which buys nothing the deferred call does not.
+func (b *Bot) claim(name string) (release func(), busy *result) {
+	release, busyWith, ok := b.gate.Acquire(name)
+	if !ok {
+		refusal := busyResult(busyWith)
+		return nil, &refusal
+	}
+	return release, nil
+}
+
+// claimForDialog is claim for the handlers a typed message drives rather than a
+// tap: they answer with a message of their own, so there is no result to return.
+// release is nil when the gate was busy, and the refusal has already been sent.
+func (b *Bot) claimForDialog(ctx context.Context, name string) (release func()) {
+	release, busyWith, ok := b.gate.Acquire(name)
+	if !ok {
+		b.send(ctx, "⏳ Занято: "+esc(busyWith)+". Повторите позже.", nil)
+		return nil
+	}
+	return release
 }
 
 // Acquire claims the gate for a named operation. When the gate is taken it returns

@@ -111,9 +111,9 @@ func (b *Bot) routeSubs(ctx context.Context, cb *tg.CallbackQuery, action string
 // --- last-known-good -------------------------------------------------------
 
 func (b *Bot) restoreLastGood(ctx context.Context, cb *tg.CallbackQuery, tunnelID string) result {
-	release, busyWith, ok := b.gate.Acquire("возврат last-known-good " + tunnelID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("возврат last-known-good " + tunnelID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -226,9 +226,9 @@ func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID 
 	}
 	candidate := candidates[index]
 
-	release, busyWith, ok := b.gate.Acquire(fmt.Sprintf("проверка кандидата %s:%d", candidate.Server, candidate.Port))
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim(fmt.Sprintf("проверка кандидата %s:%d", candidate.Server, candidate.Port))
+	if busy != nil {
+		return *busy
 	}
 
 	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,
@@ -286,9 +286,9 @@ func (b *Bot) startManualRefresh(ctx context.Context, cb *tg.CallbackQuery, tunn
 		return result{toast: "Это не подписочный туннель", alert: true}
 	}
 
-	release, busyWith, ok := b.gate.Acquire("обновление подписки " + tunnelID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("обновление подписки " + tunnelID)
+	if busy != nil {
+		return *busy
 	}
 
 	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,

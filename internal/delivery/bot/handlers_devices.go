@@ -166,9 +166,9 @@ func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args 
 	if target == current {
 		return result{toast: "Уже так"}
 	}
-	release, busyWith, ok := b.gate.Acquire("смена egress " + deviceID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("смена egress " + deviceID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -333,6 +333,13 @@ func nextFreeAddress(cfg domain.Config) string {
 		if !prefix.Contains(address) {
 			return ""
 		}
+		// The last address of an IPv4 prefix is its broadcast address, and the hub
+		// carries the whole prefix on its ingress interface -- so handing it to a
+		// device would give it one the kernel treats as broadcast on that link. The
+		// first is the network address, which the Next() above already stepped past.
+		if address.Is4() && !prefix.Contains(address.Next()) {
+			return ""
+		}
 		if used[address.String()] {
 			continue
 		}
@@ -351,9 +358,9 @@ func (b *Bot) finishDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, egress 
 	}
 	deviceID, address := dialog.data["id"], dialog.data["address"]
 
-	release, busyWith, ok := b.gate.Acquire("добавление устройства " + deviceID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("добавление устройства " + deviceID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -401,9 +408,9 @@ func (b *Bot) saveProfileKey(ctx context.Context, deviceID, privateKey string) e
 // profile issued before key storage was introduced cannot be reconstructed, so the
 // operator gets an explicit, safe reissue path instead of a different profile.
 func (b *Bot) sendCurrentProfile(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busyWith, ok := b.gate.Acquire("отправка профиля " + deviceID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("отправка профиля " + deviceID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -541,9 +548,9 @@ func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID
 // --- reissue / revoke ------------------------------------------------------
 
 func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busyWith, ok := b.gate.Acquire("перевыпуск профиля " + deviceID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("перевыпуск профиля " + deviceID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -593,9 +600,9 @@ func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID 
 }
 
 func (b *Bot) revokeDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busyWith, ok := b.gate.Acquire("отзыв устройства " + deviceID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("отзыв устройства " + deviceID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 

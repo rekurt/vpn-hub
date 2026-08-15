@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"vpn-hub/internal/domain"
 )
 
 // Every configuration edit in the bot is a write-validate-revert dance, and each
@@ -49,4 +51,25 @@ func TestRevertEditTellsTheTruthWhenTheUndoFails(t *testing.T) {
 			t.Errorf("one of the two reasons is missing:\n%s", view.text)
 		}
 	})
+}
+
+// The hub carries the whole client prefix on its ingress interface, so the last
+// IPv4 address in it is that link's broadcast address. Suggesting it would hand a
+// device an address the kernel treats as broadcast -- reachable only when the
+// prefix is nearly full, which is exactly when nobody is watching.
+func TestNextFreeAddressSkipsNetworkAndBroadcast(t *testing.T) {
+	t.Parallel()
+	cfg := domain.Config{Hub: domain.Hub{ClientCIDR: "10.80.0.0/29", DNSAddress: "10.80.0.1"}}
+	// .0 is the network, .1 the hub, .7 the broadcast: .2 through .6 are assignable.
+	for _, taken := range []string{"10.80.0.2/32", "10.80.0.3/32", "10.80.0.4/32", "10.80.0.5/32"} {
+		cfg.Devices = append(cfg.Devices, domain.Device{Address: taken})
+	}
+	if got := nextFreeAddress(cfg); got != "10.80.0.6/32" {
+		t.Fatalf("nextFreeAddress = %q, want the last assignable address", got)
+	}
+
+	cfg.Devices = append(cfg.Devices, domain.Device{Address: "10.80.0.6/32"})
+	if got := nextFreeAddress(cfg); got != "" {
+		t.Errorf("nextFreeAddress = %q, want none: only the broadcast address is left", got)
+	}
 }
