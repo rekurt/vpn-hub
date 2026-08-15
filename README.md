@@ -186,13 +186,17 @@ State OpenTofu лежит локально и не коммитится: он с
 ## Разработка
 
 ```sh
-make lint              # gofmt + go vet
-make test              # go test -race ./...
-make test-integration  # реальные интерфейсы и трафик; Linux, нужен root
+make lint                  # gofmt + go vet
+make test                  # go test -race ./...
+make ci                    # всё, что делает CI, кроме интеграционного джоба
+make test-integration      # реальные интерфейсы и трафик; Linux, нужен root
+make test-integration-box  # тот же набор в одноразовом контейнере; работает не на Linux
 make build-linux
 ```
 
 `make test-integration` поднимает клиента в отдельном network namespace, применяет настоящий ruleset и проверяет, что трафик идёт, а kill switch блокирует. На стенде перед запуском остановите агента: он реконсилит по таймеру и вернёт свой ruleset поверх тестового.
+
+`make test-integration-box` — то же самое для рабочей машины, которая не является тем самым Linux-хостом: контейнер с systemd первым процессом, тем же sing-box той же пиновой версии и теми же пакетами, что ставит раннер. Внутри набор делает то же, что и на хосте, включая снос default route, поэтому контейнер каждый раз новый. Подмножество — `make test-integration-box ARGS='-run Reality'`; тесты, которым нужен интернет, пропускаются после того, как более ранний сценарий убрал маршрут, так что смотреть их надо именно так.
 
 ## CI/CD
 

@@ -38,6 +38,30 @@ test:
 test-integration:
 	sudo -E env "PATH=$$PATH" go test -tags=integration -count=1 -timeout 15m ./internal/adapters/linux/
 
+## test-integration-box: the same suite in a throwaway container (works off Linux)
+# For a workstation that is not the Linux host those tests need. Same suite, same
+# sing-box, same systemd. Extra arguments reach go test: make test-integration-box
+# ARGS='-run Reality'.
+test-integration-box:
+	deploy/testbox/run.sh $(ARGS)
+
+## ci: run what CI runs, locally -- everything but the integration job
+# Worth having on its own: the four jobs are spread across a workflow file, and
+# finding out which of them a change breaks should not require pushing.
+ci: lint golangci terraform-check test build-linux
+	@echo "build, lint and terraform pass locally; integration is make test-integration-box"
+
+## golangci: the linter CI runs, with the repository's own configuration
+golangci:
+	golangci-lint run
+
+## terraform-check: formatting and validation, as the terraform job does them
+terraform-check:
+	$(TF) fmt -check -diff
+	# Validation contacts no provider API, so this needs no credentials.
+	$(TF) init -backend=false
+	$(TF) validate
+
 ## build: build both binaries for the host platform
 build:
 	go build -o bin/ ./cmd/...
@@ -93,4 +117,4 @@ logs:
 logs-bot:
 	$(SSH) 'journalctl -u vpn-hub-bot -f'
 
-.PHONY: help fmt lint test test-integration build build-linux $(STAND_TARGETS) deploy-lab ssh logs logs-bot
+.PHONY: help fmt lint test test-integration test-integration-box ci golangci terraform-check build build-linux $(STAND_TARGETS) deploy-lab ssh logs logs-bot
