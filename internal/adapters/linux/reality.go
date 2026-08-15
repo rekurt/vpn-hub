@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,6 +56,9 @@ func (r RealityIngress) secretsDir() string {
 // configuration has to close the port on the next reconcile.
 func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpec) error {
 	path := filepath.Join(r.secretsDir(), RealityConfigName)
+	// Where a rendered configuration is checked before it is allowed to become the
+	// live one. It holds the same private key, so it is cleaned up on both paths.
+	probe := path + ".check"
 
 	if !spec.Enabled {
 		// Unconditional. `is-active` reports non-zero for a unit that is merely
@@ -64,11 +68,14 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 		if err := r.stopListener(ctx); err != nil {
 			return err
 		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove %s: %w", path, err)
-		}
-		if err := os.Remove(r.appliedPath()); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove %s: %w", r.appliedPath(), err)
+		// The probe is ordinarily gone already -- the pass that writes it removes it
+		// on the way out -- but a pass killed in between leaves one behind, and it
+		// carries the listener's private key. A fallback that is off must not leave
+		// the key of the fallback that was on.
+		for _, leftover := range []string{path, probe, r.appliedPath()} {
+			if err := os.Remove(leftover); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove %s: %w", leftover, err)
+			}
 		}
 		return nil
 	}
@@ -77,10 +84,7 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 	if err != nil {
 		return err
 	}
-	// 0600: the file holds the listener's private key and every device's credential.
-	if _, err := writeIfChanged(path, config, 0o600); err != nil {
-		return err
-	}
+	fingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(config)))
 
 	// Whether the rendered configuration is already *running* -- which is not the
 	// same question as whether it is already written.
@@ -93,18 +97,38 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 	// else happened to change the configuration again. The fingerprint below is
 	// written only after a replacement that worked, so a failed one is retried on
 	// the next pass instead of being remembered as done.
-	fingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(config)))
 	if applied, err := r.Applied(ctx); err == nil && applied == fingerprint {
 		return nil
 	}
 
-	// Asked before starting, because systemd-run cannot answer it. It returns once
+	// Asked before starting, because systemd-run cannot answer it: it returns once
 	// the job is accepted, and a Type=simple process that dies a moment later --
-	// over a configuration this release rejects -- still looks like a success. A
-	// rejected configuration is deterministic, so it is worth catching here rather
-	// than as a unit that restarts forever while every reconcile reports fine.
-	if _, err := r.run(ctx, "sing-box", "check", "-c", path); err != nil {
-		return fmt.Errorf("the rendered listener configuration was rejected: %w", err)
+	// over a configuration this release rejects -- still looks like a success.
+	//
+	// Asked of a file beside the live one, because the live one is what the running
+	// unit reads. Writing first and checking after put the rejected bytes where a
+	// restart would load them, so a listener that was working became one that could
+	// not start.
+	if _, err := writeIfChanged(probe, config, 0o600); err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(probe) }()
+	if _, err := r.run(ctx, "sing-box", "check", "-c", probe); err != nil {
+		rejected := fmt.Errorf("the rendered listener configuration was rejected: %w", err)
+		// And the listener still running is serving the configuration this revision
+		// replaces -- including credentials the revision may have just revoked. A
+		// fallback that cannot be made to match the revision must not go on
+		// admitting what the revision no longer admits, so it stops. It is the
+		// secondary way in; the ordinary one is untouched.
+		if stopErr := r.stopListener(ctx); stopErr != nil {
+			return errors.Join(rejected, stopErr)
+		}
+		return rejected
+	}
+
+	// 0600: the file holds the listener's private key and every device's credential.
+	if _, err := writeIfChanged(path, config, 0o600); err != nil {
+		return err
 	}
 
 	// The record of what is running goes before the thing it describes changes,

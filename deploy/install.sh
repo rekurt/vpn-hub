@@ -95,8 +95,17 @@ fi
 # -- it mangles the `*` into a literal instance name and quietly does nothing. So
 # the enablement symlinks go by hand, or a real instance would keep its dangling
 # symlink and a not-found unit after the template is deleted.
+#
+# And the stop has to work, with nothing tolerated: a glob that matches nothing is
+# already exit 0, so anything else is a stop that did not happen. A timer left
+# loaded goes on firing after its template and symlink are deleted, and each shot
+# starts a refresh from a unit systemd can no longer find -- one that would race
+# the bot's own scheduler over the same subscription if it could still run at all.
 if [ "$bot_will_run" = yes ]; then
-	systemctl stop 'vpn-hub-subscription@*.timer' >/dev/null 2>&1 || true
+	if ! stop_output=$(systemctl stop 'vpn-hub-subscription@*.timer' 2>&1); then
+		echo "cannot stop the subscription timers, so their units are left in place: $stop_output" >&2
+		exit 1
+	fi
 	rm -f /etc/systemd/system/timers.target.wants/vpn-hub-subscription@*.timer
 	rm -f /etc/systemd/system/vpn-hub-subscription@.service \
 		/etc/systemd/system/vpn-hub-subscription@.timer

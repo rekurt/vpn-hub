@@ -295,8 +295,13 @@ func TestRealityIngressApply(t *testing.T) {
 		// Checked before starting: systemd-run answers "the job was accepted", not
 		// "the process survived", so a configuration this release rejects would
 		// otherwise become a unit that restarts forever with every pass reporting fine.
-		if !host.ran("sing-box check -c " + path) {
+		// Checked on a file beside the live one, so the bytes under test are never the
+		// bytes a restart would load.
+		if !host.ran("sing-box check -c " + path + ".check") {
 			t.Errorf("the configuration was not checked before starting it:\n%s", strings.Join(host.commands, "\n"))
+		}
+		if _, err := os.Stat(path + ".check"); !os.IsNotExist(err) {
+			t.Errorf("the file the check ran against was left behind (stat: %v)", err)
 		}
 	})
 
@@ -363,12 +368,19 @@ func TestRealityIngressApply(t *testing.T) {
 		}
 	})
 
+	// A rejected configuration must leave nothing of itself behind: not on the file
+	// the running unit reads, and not as a listener still admitting the users the
+	// revision just took away.
 	t.Run("a rejected configuration is reported, not started", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		path := filepath.Join(dir, RealityConfigName)
+		// What the listener is serving right now, and what a restart would reload.
+		if err := os.WriteFile(path, []byte("{\"the\":\"previous one\"}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		host := &fakeHost{failures: map[string]error{
-			"sing-box check -c " + path: fmt.Errorf("exit status 1"),
+			"sing-box check -c " + path + ".check": fmt.Errorf("exit status 1"),
 		}}
 		ingress := RealityIngress{Run: host.run, SecretsDir: dir}
 
@@ -378,6 +390,25 @@ func TestRealityIngressApply(t *testing.T) {
 		}
 		if host.ran("systemd-run") {
 			t.Error("a configuration known to be bad was started anyway")
+		}
+		// The live file is what the unit reads. Overwriting it with bytes this
+		// release rejects turns a listener that was working into one that cannot
+		// start again -- the next restart, reboot or crash-loop loads them.
+		live, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", path, readErr)
+		}
+		if string(live) != "{\"the\":\"previous one\"}" {
+			t.Errorf("the rejected configuration replaced the live one:\n%s", live)
+		}
+		if _, statErr := os.Stat(path + ".check"); !os.IsNotExist(statErr) {
+			t.Errorf("the rejected bytes were left on disk (stat: %v)", statErr)
+		}
+		// And the listener that is still up is serving the revision this pass was
+		// replacing -- including any device it revoked.
+		if !host.ran("systemctl stop " + realityUnit + ".service") {
+			t.Errorf("the listener kept serving the superseded user list:\n%s",
+				strings.Join(host.commands, "\n"))
 		}
 	})
 

@@ -64,12 +64,32 @@ func (k keyFile) create() (publicKey string, err error) {
 		}
 		return "", fmt.Errorf("write %s key: %w", k.noun, err)
 	}
-	if _, err := handle.WriteString(private + "\n"); err != nil {
-		_ = handle.Close()
-		return "", fmt.Errorf("write %s key: %w", k.noun, err)
-	}
-	if err := handle.Close(); err != nil {
+	// A write that fails takes the file with it. What O_EXCL left behind is empty
+	// or half a key, and nothing here can tell that from a real one later: `read`
+	// would call it unusable and `create` would refuse to replace it, leaving a hub
+	// that can only be recovered by an operator who knows to delete the file. It is
+	// ours -- created exclusively a line ago -- so removing it is safe.
+	//
+	// Synced for the same reason: this key is the one piece of hub state that
+	// cannot be regenerated once anything depends on it, and a power loss between
+	// the write and the flush would leave exactly the same empty file.
+	if err := writeAndSync(handle, private+"\n"); err != nil {
+		_ = os.Remove(k.path)
 		return "", fmt.Errorf("write %s key: %w", k.noun, err)
 	}
 	return public, nil
+}
+
+// writeAndSync writes the whole of content, flushes it to the disk and closes the
+// handle, reporting the first thing that went wrong.
+func writeAndSync(handle *os.File, content string) error {
+	if _, err := handle.WriteString(content); err != nil {
+		_ = handle.Close()
+		return err
+	}
+	if err := handle.Sync(); err != nil {
+		_ = handle.Close()
+		return err
+	}
+	return handle.Close()
 }
