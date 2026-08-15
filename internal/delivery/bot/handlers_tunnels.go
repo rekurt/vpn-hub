@@ -134,11 +134,11 @@ func (b *Bot) toggleTunnel(ctx context.Context, cb *tg.CallbackQuery, tunnelID s
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.SetTunnelField(tunnelID, "enabled", fmt.Sprint(!enable))
-		return b.show(ctx, cb, screen{
-			text:   "↩️ Отменено, конфигурация не проходит проверку:\n<code>" + esc(err.Error()) + "</code>",
-			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID)}),
+		view := revertEdit("Отменено, конфигурация не проходит проверку", err, func() error {
+			return b.Editor.SetTunnelField(tunnelID, "enabled", fmt.Sprint(!enable))
 		})
+		view.markup = keyboard([]tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID)})
+		return b.show(ctx, cb, view)
 	}
 	state := "выключен"
 	if enable {
@@ -332,13 +332,14 @@ func (b *Bot) toggleAccess(ctx context.Context, cb *tg.CallbackQuery, tunnelID, 
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		if allowed {
-			_ = b.Editor.AppendListItem(tunnelID, "allowed_devices", deviceID)
-		} else {
-			_ = b.Editor.RemoveListItem(tunnelID, "allowed_devices", deviceID)
-		}
+		view := revertEdit("Отменено, конфигурация не проходит проверку", err, func() error {
+			if allowed {
+				return b.Editor.AppendListItem(tunnelID, "allowed_devices", deviceID)
+			}
+			return b.Editor.RemoveListItem(tunnelID, "allowed_devices", deviceID)
+		})
 		return b.show(ctx, cb, screen{
-			text:   "↩️ Отменено, конфигурация не проходит проверку:\n<code>" + esc(err.Error()) + "</code>",
+			text:   view.text,
 			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К доступу", "tun:ac:"+tunnelID)}),
 		})
 	}

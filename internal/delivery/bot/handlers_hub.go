@@ -165,8 +165,9 @@ func (b *Bot) handleHubEditInput(ctx context.Context, dialog *dialog, text strin
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.SetHubField(field, previous)
-		b.sendScreen(ctx, renderFailure("отменено: конфигурация не проходит проверку", err))
+		b.sendScreen(ctx, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+			return b.Editor.SetHubField(field, previous)
+		}))
 		return
 	}
 	b.sendScreen(ctx, screen{
@@ -219,12 +220,12 @@ func (b *Bot) handleAWGSetInput(ctx context.Context, _ *dialog, text string) {
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		if existed {
-			_ = b.Editor.SetHubMapField("awg_interface", key, previous)
-		} else {
-			_ = b.Editor.RemoveHubMapField("awg_interface", key)
-		}
-		b.sendScreen(ctx, renderFailure("отменено: конфигурация не проходит проверку", err))
+		b.sendScreen(ctx, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+			if existed {
+				return b.Editor.SetHubMapField("awg_interface", key, previous)
+			}
+			return b.Editor.RemoveHubMapField("awg_interface", key)
+		}))
 		return
 	}
 	b.sendScreen(ctx, b.afterHubChange(fmt.Sprintf("✅ <code>%s = %s</code> записан.", esc(canonical), esc(value))))
@@ -261,8 +262,9 @@ func (b *Bot) removeAWGParameter(ctx context.Context, cb *tg.CallbackQuery, key 
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.SetHubMapField("awg_interface", key, previous)
-		return b.show(ctx, cb, renderFailure("отменено: конфигурация не проходит проверку", err))
+		return b.show(ctx, cb, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+			return b.Editor.SetHubMapField("awg_interface", key, previous)
+		}))
 	}
 	outcome := b.show(ctx, cb, b.buildHub(ctx))
 	name, _ := domain.CanonicalAWGParameter(key)
@@ -516,8 +518,9 @@ func (b *Bot) handleProbeSetInput(ctx context.Context, dialog *dialog, text stri
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.RemoveTunnelMapField(tunnelID, "health", field)
-		b.sendScreen(ctx, renderFailure("отменено: конфигурация не проходит проверку", err))
+		b.sendScreen(ctx, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+			return b.Editor.RemoveTunnelMapField(tunnelID, "health", field)
+		}))
 		return
 	}
 	b.sendScreen(ctx, b.buildProbes(ctx, tunnelID))
@@ -551,10 +554,13 @@ func (b *Bot) removeProbe(ctx context.Context, cb *tg.CallbackQuery, tunnelID, k
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		if previous != "" {
-			_ = b.Editor.SetTunnelMapField(tunnelID, "health", field, previous)
-		}
-		return b.show(ctx, cb, renderFailure("отменено: удаление пробы сделало конфигурацию невалидной", err))
+		return b.show(ctx, cb, revertEdit("отменено: удаление пробы сделало конфигурацию невалидной", err, func() error {
+			if previous == "" {
+				// Nothing to put back: the probe had no value to begin with.
+				return nil
+			}
+			return b.Editor.SetTunnelMapField(tunnelID, "health", field, previous)
+		}))
 	}
 	outcome := b.show(ctx, cb, b.buildProbes(ctx, tunnelID))
 	outcome.toast = "Удалена " + title + "-проба"

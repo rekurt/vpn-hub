@@ -178,9 +178,11 @@ func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args 
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.SetDeviceField(deviceID, "egress", current)
+		view := revertEdit("Изменение отменено, конфигурация не проходит проверку", err, func() error {
+			return b.Editor.SetDeviceField(deviceID, "egress", current)
+		})
 		return b.show(ctx, cb, screen{
-			text:   fmt.Sprintf("↩️ Изменение отменено, конфигурация не проходит проверку:\n<code>%s</code>", esc(err.Error())),
+			text:   view.text,
 			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К устройству", "dev:c:"+deviceID)}),
 		})
 	}
@@ -369,13 +371,14 @@ func (b *Bot) finishDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, egress 
 	if err := b.Editor.AddDevice(deviceID, address, publicKey, egress); err != nil {
 		return b.show(ctx, cb, renderFailure("устройство не добавилось", err))
 	}
+	undoAdd := func() error { return b.Editor.RemoveDevice(deviceID) }
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.RemoveDevice(deviceID)
-		return b.show(ctx, cb, renderFailure("отменено: конфигурация с новым устройством не проходит проверку", err))
+		return b.show(ctx, cb, revertEdit(
+			"отменено: конфигурация с новым устройством не проходит проверку", err, undoAdd))
 	}
 	if err := b.saveProfileKey(ctx, deviceID, privateKey); err != nil {
-		_ = b.Editor.RemoveDevice(deviceID)
-		return b.show(ctx, cb, renderFailure("устройство отменено: ключ профиля не сохранился", err))
+		return b.show(ctx, cb, revertEdit(
+			"устройство отменено: ключ профиля не сохранился", err, undoAdd))
 	}
 	b.dialogs.clear()
 
@@ -565,13 +568,14 @@ func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID 
 	if err := b.Editor.SetDeviceField(deviceID, "public_key", publicKey); err != nil {
 		return b.show(ctx, cb, renderFailure("ключ не записался", err))
 	}
+	undoKey := func() error {
+		return b.Editor.SetDeviceField(deviceID, "public_key", device.PublicKey)
+	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.SetDeviceField(deviceID, "public_key", device.PublicKey)
-		return b.show(ctx, cb, renderFailure("отменено: конфигурация не проходит проверку", err))
+		return b.show(ctx, cb, revertEdit("отменено: конфигурация не проходит проверку", err, undoKey))
 	}
 	if err := b.saveProfileKey(ctx, deviceID, privateKey); err != nil {
-		_ = b.Editor.SetDeviceField(deviceID, "public_key", device.PublicKey)
-		return b.show(ctx, cb, renderFailure("отменено: ключ профиля не сохранился", err))
+		return b.show(ctx, cb, revertEdit("отменено: ключ профиля не сохранился", err, undoKey))
 	}
 	// A re-issued device is meant to work again: lifting the revocation is part of
 	// the same operation, not a separate thing to remember.
