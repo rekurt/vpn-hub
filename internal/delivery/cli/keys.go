@@ -95,8 +95,12 @@ func newDeviceAddCommand(configPath *string) *cobra.Command {
 				return err
 			}
 
+			// The fallback link is printed either way: it is text, not a file, and
+			// omitting --output asks for the entry rather than for less of the device's
+			// credentials. Skipping it here left an operator on a hub with the TCP/443
+			// fallback on believing they had everything the device needed.
 			if output == "" {
-				return nil
+				return printFallback(cmd, cfg.Hub, deviceID, address, privateKey, "", configDir)
 			}
 			profile, err := runtimeadapter.AmneziaProfileRenderer{}.Render(cfg.Hub, address, privateKey)
 			if err != nil {
@@ -163,7 +167,9 @@ func writeProfile(path, profile string) error {
 // been written, and a hub whose fallback key is missing is still a hub that works
 // on every network that does not need one.
 func printFallback(cmd *cobra.Command, hub domain.Hub, deviceID, address, privateKey, output, configDir string) error {
-	if hub.Fallback.UDP443 {
+	// The UDP/443 profile is a file, so it needs somewhere to go; the link below is
+	// text and does not.
+	if hub.Fallback.UDP443 && output != "" {
 		profile, err := runtimeadapter.AltPortProfile(hub, address, privateKey)
 		if err != nil {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "no UDP/443 profile: %v\n", err)

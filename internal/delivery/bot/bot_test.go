@@ -173,6 +173,7 @@ tunnels:
 	}
 	stateDir := t.TempDir()
 	configDir := t.TempDir()
+	runtimeDir := t.TempDir()
 	serverKeyPath := filepath.Join(t.TempDir(), "server.key")
 	if _, err := (linux.ServerKeyFile{Path: serverKeyPath}).Create(); err != nil {
 		t.Fatal(err)
@@ -185,8 +186,8 @@ tunnels:
 		ConfigPath:    configPath,
 		StateDir:      stateDir,
 		ConfigDir:     configDir,
-		RuntimeDir:    t.TempDir(),
-		Service:       wiring.Service(configPath, stateDir),
+		RuntimeDir:    runtimeDir,
+		Service:       wiring.Service(configPath, stateDir, runtimeDir),
 		Reconciler:    fakeReconciler{},
 		Editor:        configadapter.Editor{Root: configPath},
 		Revisions:     runtimeadapter.FileRevisionStore{StateDir: stateDir},
@@ -588,14 +589,17 @@ func TestDeviceAddSurvivesAMissingRealityKey(t *testing.T) {
 	if len(docs) != 1 || docs[0] != "phone.conf" {
 		t.Fatalf("the ordinary profile did not survive the missing key: %v", docs)
 	}
+	// Told in the chat, and told why: the ordinary profile arrives either way, so
+	// without this the screen reads as success and the device is handed over as if
+	// it could also come in on 443.
 	warned := false
 	for _, message := range messages {
-		if strings.Contains(message.text, "ключ не читается") {
+		if strings.Contains(message.text, "Запасной вход") && strings.Contains(message.text, "keygen --reality") {
 			warned = true
 		}
 	}
 	if !warned {
-		t.Error("the admin was not told why no fallback link arrived")
+		t.Errorf("the admin was not told why no fallback link arrived:\n%v", messages)
 	}
 }
 

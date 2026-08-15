@@ -72,7 +72,7 @@ func (c Canary) Try(ctx context.Context, candidate domain.ProxyTunnel, uplink st
 	return c.try(ctx, candidate, uplink)
 }
 
-func (c Canary) try(ctx context.Context, candidate domain.ProxyTunnel, uplink string) error {
+func (c Canary) try(ctx context.Context, candidate domain.ProxyTunnel, uplink string) (err error) {
 	spec := domain.EgressSpec{
 		TunnelID:  "canary",
 		Namespace: canaryNamespace,
@@ -99,7 +99,12 @@ func (c Canary) try(ctx context.Context, candidate domain.ProxyTunnel, uplink st
 		// with the context already cancelled.
 		discard, cancelDiscard := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancelDiscard()
-		c.Discard(discard)
+		// Reported through the named return: a candidate that carried traffic is of
+		// no use if proving it left a hole open, and the caller is the only one in a
+		// position to say so.
+		if discardErr := c.Discard(discard); discardErr != nil && err == nil {
+			err = discardErr
+		}
 
 		// Then the rest: a candidate that failed must not leave a namespace behind
 		// for the next attempt to trip over.
@@ -155,9 +160,21 @@ table inet vpn_hub_canary {
 // Discard removes the temporary ruleset. Every path through try runs it, so a
 // caller never needs to; it stays exported for callers that want to sweep up
 // after an interrupted run from a previous process.
-func (c Canary) Discard(ctx context.Context) {
-	_, _ = c.run(ctx, "nft", "delete", "table", "inet", "vpn_hub_canary")
+//
+// A table that was never created is not a failure -- most tries end that way when
+// the candidate died before the ruleset went in. Anything else is: the hole it
+// leaves is hooked into forward and postrouting, no reconcile removes it, and
+// reporting a candidate as proven while it is still open would trade a working
+// upstream for a permanent gap nobody is looking for.
+func (c Canary) Discard(ctx context.Context) error {
 	_ = os.Remove(filepath.Join(c.Egress.secretsDir(), "canary.nft"))
+	if _, err := c.run(ctx, "nft", "delete", "table", "inet", "vpn_hub_canary"); err != nil {
+		if strings.Contains(err.Error(), "No such file or directory") {
+			return nil
+		}
+		return fmt.Errorf("remove the canary firewall table: %w", err)
+	}
+	return nil
 }
 
 // peerVethName mirrors the application layer's choice so a canary namespace looks

@@ -215,13 +215,18 @@ func newStatusCommand() *cobra.Command {
 
 func newTestCommand(configPath *string) *cobra.Command {
 	command := newParentCommand("test", "Run preflight probes")
+	var probeRuntimeDir string
 	tunnel := &cobra.Command{
 		Use:   "tunnel <id>",
 		Short: "Run configured preflight probes for one tunnel",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tunnelID := args[0]
-			service := newService(*configPath, "")
+			// The probes run inside the tunnel namespaces and read the management
+			// sockets the agent writes, so this has to name the same directory the
+			// agent was given or every OpenVPN tunnel reports a socket that is not
+			// answering while carrying traffic perfectly well.
+			service := wiring.Service(*configPath, "", probeRuntimeDir)
 			cfg, err := service.LoadAndValidate(cmd.Context())
 			if err != nil {
 				return err
@@ -243,6 +248,8 @@ func newTestCommand(configPath *string) *cobra.Command {
 			}
 		},
 	}
+	tunnel.Flags().StringVar(&probeRuntimeDir, "runtime-dir", linux.DefaultRuntimeDir,
+		"tmpfs directory the agent writes tunnel management sockets to")
 	command.AddCommand(tunnel)
 	return command
 }
@@ -370,6 +377,9 @@ func newDeviceCommand(configPath *string) *cobra.Command {
 	return command
 }
 
+// newService builds the operator-facing service for commands that only validate
+// and compile. Those never probe, so the runtime directory they would probe in is
+// the default; `tunnel test` is the one command that does, and it takes a flag.
 func newService(configPath, stateDir string) application.Service {
-	return wiring.Service(configPath, stateDir)
+	return wiring.Service(configPath, stateDir, linux.DefaultRuntimeDir)
 }

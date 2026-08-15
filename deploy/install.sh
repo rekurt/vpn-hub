@@ -127,6 +127,12 @@ if [ "$bot_will_run" = yes ]; then
 	systemctl restart vpn-hub-bot
 else
 	echo "no /etc/vpn-hub/telegram.yaml or no bot binary; vpn-hub-bot not enabled"
+	# And stopped, not merely left unstarted. A bot whose telegram.yaml was removed
+	# is still running on the credentials it loaded at boot, and still enabled to
+	# crash-loop after the next restart -- so "will not run" has to be made true
+	# rather than announced. Absent and already-stopped units both answer here, so
+	# neither is an error.
+	systemctl disable --now vpn-hub-bot >/dev/null 2>&1 || true
 fi
 
 rm -rf "$STAGE"

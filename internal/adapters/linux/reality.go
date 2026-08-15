@@ -107,6 +107,19 @@ func (r RealityIngress) Apply(ctx context.Context, spec domain.RealityIngressSpe
 		return fmt.Errorf("the rendered listener configuration was rejected: %w", err)
 	}
 
+	// The record of what is running goes before the thing it describes changes,
+	// and is only rewritten once the replacement is up.
+	//
+	// Leaving the old one in place makes an interrupted update invisible: the agent
+	// dies after starting configuration B but before recording it, the confirmation
+	// deadline restores revision A, and the next pass writes A to disk, reads the
+	// marker still saying A, and returns -- while the process serving B carries on
+	// with B's user list. Absent means "something is running and this hub does not
+	// know what", which is exactly the state an interrupted update leaves behind.
+	if err := os.Remove(r.appliedPath()); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove %s: %w", r.appliedPath(), err)
+	}
+
 	// Checked here as much as on the way out, and for a sharper reason. The user
 	// list lives in the running process, so replacing it is how a revoked device
 	// stops being admitted. A stop that quietly failed would leave systemd-run

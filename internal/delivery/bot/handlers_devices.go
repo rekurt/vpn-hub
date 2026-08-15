@@ -490,15 +490,29 @@ func (b *Bot) sendProfile(ctx context.Context, hub domain.Hub, deviceID, address
 // Every failure here is reported and stepped over: the ordinary profile has
 // already been delivered, and a device that cannot use the fallback is still a
 // device that works everywhere the fallback is not needed.
+// fallbackFailed says a way in was not delivered, in the chat rather than the
+// journal.
+//
+// The distinction matters more here than it looks: the ordinary profile arrives
+// either way, so the screen reads as success, and an operator who was never told
+// otherwise hands over a device believing it can also come in on 443. They find
+// out on the network where that was the point -- which is the one place the
+// journal is not.
+func (b *Bot) fallbackFailed(ctx context.Context, way string, err error) {
+	b.logf("%s fallback: %v", way, err)
+	b.send(ctx, "⚠️ Запасной вход <b>"+way+"</b> включён, но выдать его не удалось: <code>"+
+		esc(err.Error())+"</code>\nУстройство работает обычным профилем.", nil)
+}
+
 func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID, address, privateKey string) {
 	if hub.Fallback.UDP443 {
 		if profile, err := runtimeadapter.AltPortProfile(hub, address, privateKey); err != nil {
-			b.logf("alt-port profile: %v", err)
+			b.fallbackFailed(ctx, "UDP/443", err)
 		} else if _, err := b.API.SendDocument(ctx, b.Cfg.AdminID,
 			runtimeadapter.RealityProfileName(deviceID), []byte(profile),
 			"Запасной профиль на <b>UDP/443</b> — для сетей, где режут порт 51820. "+
 				"Тот же профиль, другой порт."); err != nil {
-			b.logf("alt-port profile: %v", err)
+			b.fallbackFailed(ctx, "UDP/443", err)
 		}
 	}
 
@@ -507,13 +521,12 @@ func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID
 	}
 	privateRealityKey, err := b.RealityKey.PrivateKey(ctx)
 	if err != nil {
-		b.send(ctx, "⚠️ Запасной вход по TCP/443 включён, но ключ не читается: <code>"+
-			esc(err.Error())+"</code>", nil)
+		b.fallbackFailed(ctx, "TCP/443", err)
 		return
 	}
 	publicKey, err := domain.RealityPublicKey(privateRealityKey)
 	if err != nil {
-		b.logf("reality public key: %v", err)
+		b.fallbackFailed(ctx, "TCP/443", err)
 		return
 	}
 	// Derived from the device's public half, so a re-issued profile carries a new
@@ -521,12 +534,12 @@ func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID
 	// the hub itself only ever stores the public one.
 	devicePublicKey, err := domain.PublicKeyFromPrivate(privateKey)
 	if err != nil {
-		b.logf("reality credential: %v", err)
+		b.fallbackFailed(ctx, "TCP/443", err)
 		return
 	}
 	uuid, err := domain.RealityUserUUID(privateRealityKey, deviceID, devicePublicKey)
 	if err != nil {
-		b.logf("reality credential: %v", err)
+		b.fallbackFailed(ctx, "TCP/443", err)
 		return
 	}
 	link, err := runtimeadapter.RealityProfileRenderer{}.Link(hub, deviceID, uuid, publicKey)

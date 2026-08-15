@@ -159,7 +159,7 @@ func New(cfg Config, client *tg.Client, configPath, stateDir, configDir, runtime
 		ConfigDir:  configDir,
 		RuntimeDir: runtimeDir,
 
-		Service:       wiring.Service(configPath, stateDir),
+		Service:       wiring.Service(configPath, stateDir, runtimeDir),
 		Reconciler:    wiring.Reconciler(serverKey, runtimeDir, configDir),
 		Editor:        configadapter.Editor{Root: configPath},
 		Revisions:     runtimeadapter.FileRevisionStore{StateDir: stateDir},

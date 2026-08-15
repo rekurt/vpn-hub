@@ -25,13 +25,19 @@ func ConfigRepository(path string) ports.ConfigRepository {
 }
 
 // Service assembles the operator-facing side: validate, compile, save, probe.
-func Service(configPath, stateDir string) application.Service {
+//
+// runtimeDir is where the agent puts the management sockets an OpenVPN tunnel
+// reports its state through, so a hub told to keep them elsewhere is probed
+// there too. Hardcoding the default meant `hubctl tunnel test` and the bot's
+// health board reported every OpenVPN tunnel as "socket not answering" on such a
+// hub, while the tunnels carried traffic perfectly well.
+func Service(configPath, stateDir, runtimeDir string) application.Service {
 	return application.Service{
 		ConfigRepository: ConfigRepository(configPath),
 		RevisionStore:    runtimeadapter.FileRevisionStore{StateDir: stateDir},
 		// Probing from the host would measure the host's own connectivity, which is
 		// the path the tunnel exists to avoid.
-		HealthChecker: linux.HealthChecker{RuntimeDir: linux.DefaultRuntimeDir},
+		HealthChecker: linux.HealthChecker{RuntimeDir: runtimeDir},
 	}
 }
 
