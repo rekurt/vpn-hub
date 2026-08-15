@@ -482,3 +482,205 @@ func TestRealityIngressCarriesTraffic(t *testing.T) {
 		t.Errorf("the rendered configuration, which holds the key, was left behind (stat: %v)", err)
 	}
 }
+
+// TestRealityListenerMarksADevicesConnections asks the one question the per-device
+// egress on this path rests on and that nothing else asks: does sing-box actually
+// put the device's mark on the socket it opens?
+//
+// Everything around it is already covered -- the spec takes its marks from the
+// firewall plan, the renderer turns them into one outbound per mark, and
+// `ip rule fwmark N lookup N` is proven to select a tunnel's table elsewhere in
+// this suite. Between the rendered configuration and the kernel's routing decision
+// sits a step no unit test can reach: sing-box honouring `routing_mark`, which
+// needs CAP_NET_ADMIN and therefore needs the real unit with its real capability
+// set. A silent failure here does not break anything visibly -- the connection
+// still works -- it just leaves by the hub's uplink instead of the device's
+// tunnel, which is the difference the feature exists to make.
+//
+// The mark deliberately has no `ip rule` behind it: this test is about the mark
+// reaching the wire, not about where the mark then steers. A counter in the output
+// hook is what sees it.
+func TestRealityListenerMarksADevicesConnections(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("runs a listener on a privileged port and needs root")
+	}
+	for _, binary := range []string{"sing-box", "curl", "systemd-run", "nft"} {
+		if _, err := exec.LookPath(binary); err != nil {
+			t.Skipf("%s is not installed", binary)
+		}
+	}
+	const handshakeTarget = "www.cloudflare.com"
+	if err := exec.Command("curl", "-sS", "--max-time", "10", "-o", "/dev/null",
+		"https://"+handshakeTarget).Run(); err != nil {
+		t.Skipf("%s is unreachable from here: %v", handshakeTarget, err)
+	}
+
+	// Outside every mark the hub allocates -- direct is 0x100, tunnels count up from
+	// 0x101, and sing-box's own outbound mark is 0x2 -- so what the counter sees can
+	// only have come from the device's own configuration.
+	const deviceMark = 0x7e57
+
+	try("nft delete table inet vpn_hub_marktest")
+	t.Cleanup(func() { try("nft delete table inet vpn_hub_marktest") })
+	sh(t, `nft -f - <<'EOF'
+table inet vpn_hub_marktest {
+	chain output {
+		type filter hook output priority filter; policy accept;
+		meta mark %#x counter
+	}
+}
+EOF`, deviceMark)
+
+	runtimeDir, err := os.MkdirTemp("/run", "vpn-hub-reality-mark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+
+	keyFile := linux.RealityKeyFile{Path: filepath.Join(t.TempDir(), "reality.key")}
+	publicKey, err := keyFile.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey, err := keyFile.PrivateKey(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, devicePublic, err := domain.GenerateX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uuid, err := domain.RealityUserUUID(privateKey, "macbook", devicePublic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ingress := linux.RealityIngress{SecretsDir: runtimeDir}
+	t.Cleanup(func() { _ = ingress.Apply(context.Background(), domain.RealityIngressSpec{}) })
+	if err := ingress.Apply(context.Background(), domain.RealityIngressSpec{
+		Enabled: true, Port: domain.RealityPort, ServerName: handshakeTarget,
+		PrivateKey: privateKey, ShortID: domain.RealityShortID(publicKey),
+		DNSAddress: standInResolver(t),
+		Users: []domain.RealityUser{{
+			DeviceID: "macbook", UUID: uuid, Mark: deviceMark,
+		}},
+	}); err != nil {
+		t.Fatalf("the listener did not come up: %v", err)
+	}
+
+	// Before, so the assertion below is about this test's traffic and not about
+	// whatever else the machine happens to be doing.
+	if before := markedPackets(t); before != 0 {
+		t.Fatalf("the counter saw %d packets before the client ran", before)
+	}
+
+	const socksPort = 18447
+	hub := domain.Hub{
+		Endpoint:   "127.0.0.1:51820",
+		DNSAddress: "10.80.0.1",
+		Fallback: domain.IngressFallback{
+			Reality: domain.RealityFallback{Enabled: true, ServerName: handshakeTarget},
+		},
+	}
+	link, err := runtimeadapter.RealityProfileRenderer{}.Link(hub, "macbook", uuid, publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startRealityClient(t, link, socksPort, "reality-mark-device")
+
+	var body string
+	for range 15 {
+		out, _ := exec.Command("bash", "-c", fmt.Sprintf(
+			"curl -sS --max-time 8 --proxy socks5h://127.0.0.1:%d https://1.1.1.1/cdn-cgi/trace || true",
+			socksPort)).Output()
+		if strings.Contains(string(out), "ip=") {
+			body = string(out)
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if body == "" {
+		state, _ := exec.Command("bash", "-c",
+			"journalctl -u vpn-hub-reality --no-pager -n 40").CombinedOutput()
+		t.Fatalf("no traffic passed through the marked device's link:\n%s", state)
+	}
+
+	// The connection working proves nothing on its own: an unmarked one works too,
+	// and leaves by the uplink. The counter is the difference.
+	if after := markedPackets(t); after == 0 {
+		state, _ := exec.Command("bash", "-c",
+			"nft list table inet vpn_hub_marktest;"+
+				"journalctl -u vpn-hub-reality --no-pager -n 40").CombinedOutput()
+		t.Fatalf("the device's connections left unmarked, so its egress choice was ignored:\n%s", state)
+	}
+}
+
+// markedPackets reads the counter the mark test installed in the output hook.
+func markedPackets(t *testing.T) int {
+	t.Helper()
+	var listing struct {
+		Nftables []struct {
+			Rule struct {
+				Expr []struct {
+					Counter *struct {
+						Packets int `json:"packets"`
+					} `json:"counter"`
+				} `json:"expr"`
+			} `json:"rule"`
+		} `json:"nftables"`
+	}
+	raw := sh(t, "nft -j list table inet vpn_hub_marktest")
+	if err := json.Unmarshal([]byte(raw), &listing); err != nil {
+		t.Fatalf("read the counter: %v\n%s", err, raw)
+	}
+	for _, entry := range listing.Nftables {
+		for _, expression := range entry.Rule.Expr {
+			if expression.Counter != nil {
+				return expression.Counter.Packets
+			}
+		}
+	}
+	t.Fatalf("no counter in the table:\n%s", raw)
+	return 0
+}
+
+// startRealityClient runs a sing-box client built from an issued link, offering a
+// SOCKS port to probe through. It is what a device's application does with the link
+// the bot sends it.
+func startRealityClient(t *testing.T, link string, socksPort int, unit string) {
+	t.Helper()
+	parsed, err := linux.ParseVLESS(link)
+	if err != nil {
+		t.Fatalf("the issued link does not parse: %v", err)
+	}
+	client := map[string]any{
+		"log": map[string]any{"level": "warn"},
+		"inbounds": []any{map[string]any{
+			"type": "mixed", "listen": "127.0.0.1", "listen_port": socksPort,
+		}},
+		"outbounds": []any{map[string]any{
+			"type": "vless", "server": parsed.Server, "server_port": parsed.Port,
+			"uuid": parsed.UUID, "flow": parsed.Flow,
+			"tls": map[string]any{
+				"enabled": true, "server_name": parsed.TLS.ServerName,
+				"utls": map[string]any{"enabled": true, "fingerprint": parsed.TLS.Fingerprint},
+				"reality": map[string]any{
+					"enabled":    true,
+					"public_key": parsed.TLS.Reality.PublicKey,
+					"short_id":   parsed.TLS.Reality.ShortID,
+				},
+			},
+		}},
+	}
+	encoded, err := json.MarshalIndent(client, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConfig := filepath.Join(t.TempDir(), "client.json")
+	if err := os.WriteFile(clientConfig, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	try("systemctl stop %s.service", unit)
+	t.Cleanup(func() { try("systemctl stop %s.service", unit) })
+	sh(t, "systemd-run --quiet --collect --unit=%s sing-box run -c %s", unit, clientConfig)
+}
