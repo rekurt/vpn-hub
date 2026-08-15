@@ -44,10 +44,24 @@ func BuildRealityIngressSpec(state domain.DesiredState, plan domain.FirewallPlan
 		if err != nil {
 			return domain.RealityIngressSpec{}, fmt.Errorf("device %q: %w", device.ID, err)
 		}
+		// Asked rather than taken, because the zero value is a working mark: it means
+		// "unmarked", and an unmarked connection leaves by the uplink and is re-marked
+		// by destination. So a plan that does not name this device's egress would not
+		// fail here -- it would quietly hand the device the ordinary way out instead
+		// of the tunnel it chose, and let it into private networks its allowed_devices
+		// excludes it from. The plan is built from this same state, so this cannot
+		// happen today; it is guarded because nothing about the types says so, and
+		// because the way it would fail is silent.
+		mark, planned := marks[device.Egress]
+		if !planned {
+			return domain.RealityIngressSpec{}, fmt.Errorf(
+				"device %q leaves through %q, which the firewall plan does not know",
+				device.ID, device.Egress)
+		}
 		users = append(users, domain.RealityUser{
 			DeviceID: device.ID,
 			UUID:     uuid,
-			Mark:     marks[device.Egress],
+			Mark:     mark,
 		})
 	}
 	// Ordered so an unchanged revision renders byte-identically and the listener is

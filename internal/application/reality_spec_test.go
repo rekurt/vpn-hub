@@ -153,3 +153,30 @@ func TestRealitySpecDropsRevokedDevices(t *testing.T) {
 		}
 	}
 }
+
+// The mark a device is given must come from a plan that actually knows about its
+// egress. The zero value is a working mark -- it means "unmarked" -- so a plan
+// compiled from a different state than the device list would not fail: it would
+// hand the device the ordinary way out and let it into private networks its
+// allowed_devices excludes it from, with nothing reporting anything.
+func TestRealitySpecRefusesAnEgressTheFirewallPlanDoesNotKnow(t *testing.T) {
+	t.Parallel()
+	state := realityState(t)
+	plan, err := BuildFirewallPlan(state, "eth0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey, _, err := domain.GenerateRealityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The device list moves on; the plan does not. Structurally impossible today --
+	// both are compiled from one state in one pass -- and silent if it ever stops
+	// being true, which is what makes it worth pinning.
+	state.Devices[0].Egress = "an-egress-added-after-the-plan"
+
+	if _, err := BuildRealityIngressSpec(state, plan, privateKey); err == nil {
+		t.Fatal("a device was given the unmarked way out instead of the egress it chose")
+	}
+}
