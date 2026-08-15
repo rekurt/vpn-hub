@@ -32,6 +32,15 @@ func parseNetworkPrefix(value string) (netip.Prefix, error) {
 	return prefix.Masked(), nil
 }
 
+// ValidateProfileAddress is validateProfileAddress for callers outside this
+// package -- the bot, which allocates the next free address and must refuse the
+// same addresses validation would. Exported so the rule is written once: an
+// allocator that handed out an address the deploy then rejected would be a screen
+// that offers a device and a deploy that will not take it.
+func ValidateProfileAddress(value, clientCIDR string) error {
+	return validateProfileAddress(value, clientCIDR)
+}
+
 // validateProfileAddress requires a host route inside the hub's client subnet. An
 // address outside it would be handed to a client that then cannot route back.
 func validateProfileAddress(value, clientCIDR string) error {
@@ -53,6 +62,23 @@ func validateProfileAddress(value, clientCIDR string) error {
 	}
 	if !subnet.Contains(prefix.Addr()) {
 		return fmt.Errorf("profile address %q is outside hub client_cidr %s", value, clientCIDR)
+	}
+	// The two addresses inside the subnet that are not usable host addresses. The
+	// hub carries the whole prefix on its ingress interface, so the last one is
+	// broadcast on that link and the first names the network -- a device given
+	// either gets an address the kernel treats as something other than its own, and
+	// the symptom is traffic that half works.
+	//
+	// Checked here rather than only where the bot picks the next free address,
+	// because `hubctl device add --address` and a hand-edited hub.yaml reach the
+	// same field without passing the allocator at all.
+	if prefix.Addr().Is4() && subnet.Bits() < 31 {
+		if prefix.Addr() == subnet.Addr() {
+			return fmt.Errorf("profile address %q is the network address of %s", value, clientCIDR)
+		}
+		if !subnet.Contains(prefix.Addr().Next()) {
+			return fmt.Errorf("profile address %q is the broadcast address of %s", value, clientCIDR)
+		}
 	}
 	return nil
 }

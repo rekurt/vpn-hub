@@ -333,20 +333,25 @@ func nextFreeAddress(cfg domain.Config) string {
 		if !prefix.Contains(address) {
 			return ""
 		}
-		// The last address of an IPv4 prefix is its broadcast address, and the hub
-		// carries the whole prefix on its ingress interface -- so handing it to a
-		// device would give it one the kernel treats as broadcast on that link. The
-		// first is the network address, which the Next() above already stepped past.
-		if address.Is4() && !prefix.Contains(address.Next()) {
-			return ""
-		}
 		if used[address.String()] {
 			continue
 		}
+		candidate := address.String() + "/32"
 		if address.Is6() {
-			return address.String() + "/128"
+			candidate = address.String() + "/128"
 		}
-		return address.String() + "/32"
+		// Asked of the same rule the deploy will apply, rather than repeated here.
+		// The addresses a prefix cannot hand out -- its broadcast address, which the
+		// hub's ingress interface makes broadcast on the link -- are a property of
+		// the subnet, not of this screen, and an allocator that disagreed with
+		// validation would offer a device the deploy then refuses to take.
+		//
+		// Ascending, so the first refusal past the last usable address ends the
+		// search: nothing above it can be free.
+		if err := application.ValidateProfileAddress(candidate, cfg.Hub.ClientCIDR); err != nil {
+			return ""
+		}
+		return candidate
 	}
 	return ""
 }
