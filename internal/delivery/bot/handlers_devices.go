@@ -544,7 +544,7 @@ func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID
 	}
 	link, err := runtimeadapter.RealityProfileRenderer{}.Link(hub, deviceID, uuid, publicKey)
 	if err != nil {
-		b.logf("reality link: %v", err)
+		b.fallbackFailed(ctx, "TCP/443", err)
 		return
 	}
 
