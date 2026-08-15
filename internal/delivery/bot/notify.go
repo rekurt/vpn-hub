@@ -37,10 +37,35 @@ func (b *Bot) emit(ev event) {
 type notifierState struct {
 	lastSent     map[string]time.Time
 	lastRollback time.Time
+	// longestDebounce is the widest window any event has asked for, which is how
+	// far back lastSent has to remember. See forget.
+	longestDebounce time.Duration
 }
 
 func newNotifierState() *notifierState {
 	return &notifierState{lastSent: map[string]time.Time{}}
+}
+
+// forget drops the entries that can no longer suppress anything.
+//
+// The debounce key carries the event's text, and an agent-error's text is a line
+// from the journal -- so every distinct failure the agent ever reports adds a key
+// that was never removed. The bot runs for months between deploys, which made this
+// a map that only grew.
+//
+// Nothing is lost: an entry older than the longest window any event has asked for
+// would compare as "long enough ago" for every event that could match it, so
+// dropping it and finding nothing are the same answer. The sweep is O(entries) and
+// happens once per window rather than per event.
+func (st *notifierState) forget(now time.Time) {
+	if st.longestDebounce == 0 {
+		return
+	}
+	for key, sent := range st.lastSent {
+		if now.Sub(sent) >= st.longestDebounce {
+			delete(st.lastSent, key)
+		}
+	}
 }
 
 // shouldDeliver decides whether one event reaches the admin: category toggle,
@@ -63,6 +88,13 @@ func (b *Bot) shouldDeliver(st *notifierState, ev event, now time.Time) bool {
 		if last, ok := st.lastSent[key]; ok && now.Sub(last) < ev.debounce {
 			return false
 		}
+		if ev.debounce > st.longestDebounce {
+			st.longestDebounce = ev.debounce
+		}
+		// Swept on the way in rather than on a timer of its own: this map is only
+		// ever touched from the notifier goroutine, and a ticker would be a second
+		// writer to guard for a map that grows a few entries an hour at worst.
+		st.forget(now)
 		st.lastSent[key] = now
 	}
 	return true
