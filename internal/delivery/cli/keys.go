@@ -193,24 +193,38 @@ func printFallback(cmd *cobra.Command, hub domain.Hub, deviceID, address, privat
 			"no TCP/443 link: %v\n(the hub issues it itself; run this on the hub to print it here)\n", err)
 		return nil
 	}
-	publicKey, err := domain.RealityPublicKey(realityKey)
+	// Derived and rendered under the same rule as the read above: reported and
+	// stepped over. None of these can fail from here -- the key was validated as it
+	// was read, and the device's key was generated a moment ago -- but the rule is
+	// what makes that safe to say. Returning an error would have `device add` exit
+	// non-zero over the bonus half of its output, after the entry is on stdout and
+	// the profile is on disk, and an operator reading that failure would reasonably
+	// run it again and add the device twice.
+	link, err := realityLink(hub, deviceID, privateKey, realityKey)
 	if err != nil {
-		return err
-	}
-	devicePublicKey, err := domain.PublicKeyFromPrivate(privateKey)
-	if err != nil {
-		return err
-	}
-	uuid, err := domain.RealityUserUUID(realityKey, deviceID, devicePublicKey)
-	if err != nil {
-		return err
-	}
-	link, err := runtimeadapter.RealityProfileRenderer{}.Link(hub, deviceID, uuid, publicKey)
-	if err != nil {
-		return err
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "no TCP/443 link: %v\n", err)
+		return nil
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "\nTCP/443 fallback link:\n%s\n", link)
 	return err
+}
+
+// realityLink derives a device's credential from the hub's fallback key and
+// renders the link that carries it.
+func realityLink(hub domain.Hub, deviceID, privateKey, realityKey string) (string, error) {
+	publicKey, err := domain.RealityPublicKey(realityKey)
+	if err != nil {
+		return "", err
+	}
+	devicePublicKey, err := domain.PublicKeyFromPrivate(privateKey)
+	if err != nil {
+		return "", err
+	}
+	uuid, err := domain.RealityUserUUID(realityKey, deviceID, devicePublicKey)
+	if err != nil {
+		return "", err
+	}
+	return runtimeadapter.RealityProfileRenderer{}.Link(hub, deviceID, uuid, publicKey)
 }
 
 func validateHostAddress(value string) error {
