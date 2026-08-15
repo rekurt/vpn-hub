@@ -2,6 +2,7 @@ package linux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -99,11 +100,14 @@ func (c Canary) try(ctx context.Context, candidate domain.ProxyTunnel, uplink st
 		// with the context already cancelled.
 		discard, cancelDiscard := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancelDiscard()
-		// Reported through the named return: a candidate that carried traffic is of
-		// no use if proving it left a hole open, and the caller is the only one in a
-		// position to say so.
-		if discardErr := c.Discard(discard); discardErr != nil && err == nil {
-			err = discardErr
+		// Reported through the named return, and joined rather than preferred: a
+		// candidate that carried traffic is of no use if proving it left a hole
+		// open, and one that failed does not make the hole less open. Keeping only
+		// the first error hid the leak in exactly the case it matters most -- a
+		// rejected candidate, where the ordinary "did not carry traffic" would be
+		// the whole of what the operator saw.
+		if discardErr := c.Discard(discard); discardErr != nil {
+			err = errors.Join(err, discardErr)
 		}
 
 		// Then the rest: a candidate that failed must not leave a namespace behind

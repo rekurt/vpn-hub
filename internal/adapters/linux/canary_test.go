@@ -113,6 +113,30 @@ func TestTheFirewallHoleIsClosedEvenWhenTheTeardownRunsOut(t *testing.T) {
 	}
 }
 
+// A candidate that failed does not make the hole it left less open, and that is
+// the case where the leak hides best: "did not carry traffic" is an ordinary,
+// expected answer, so an operator reading it has no reason to look further.
+func TestAFailedTeardownSurvivesAFailedCandidate(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	host := &fakeHost{failures: map[string]error{
+		canaryProbeCommand:                     fmt.Errorf("exit status 28"),
+		"nft delete table inet vpn_hub_canary": fmt.Errorf("netlink: Connection timed out"),
+	}}
+	canary := testCanary(host, dir)
+
+	err := canary.Try(context.Background(), canaryCandidate(), "eth0")
+	if err == nil {
+		t.Fatal("both failures went unreported")
+	}
+	if !strings.Contains(err.Error(), "did not carry traffic") {
+		t.Errorf("the candidate's own failure was lost: %v", err)
+	}
+	if !strings.Contains(err.Error(), "canary firewall table") {
+		t.Errorf("the firewall table was left behind and nothing said so: %v", err)
+	}
+}
+
 func TestSelectCandidateStopsAtTheFirstProven(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
