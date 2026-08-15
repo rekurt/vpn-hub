@@ -18,6 +18,18 @@ import (
 // fake so the adapter's command sequence can be asserted without root or Linux.
 type runner func(ctx context.Context, name string, args ...string) (string, error)
 
+// or returns the runner to use: the one an adapter was given, or the real one.
+//
+// Every adapter here takes an optional Run so tests can record what it would have
+// executed, and each used to spell the same four-line fallback out for itself.
+// Nine copies of a nil check is nine chances for one of them to drift.
+func (r runner) or() runner {
+	if r != nil {
+		return r
+	}
+	return execRunner
+}
+
 func execRunner(ctx context.Context, name string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
@@ -65,10 +77,7 @@ func (i Ingress) tool() string {
 }
 
 func (i Ingress) run(ctx context.Context, name string, args ...string) (string, error) {
-	if i.Run != nil {
-		return i.Run(ctx, name, args...)
-	}
-	return execRunner(ctx, name, args...)
+	return i.Run.or()(ctx, name, args...)
 }
 
 // Observe reports what the host currently has. A missing interface is not an error:

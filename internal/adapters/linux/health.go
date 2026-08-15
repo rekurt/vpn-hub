@@ -41,10 +41,7 @@ func (h HealthChecker) runtimeDir() string {
 }
 
 func (h HealthChecker) run(ctx context.Context, name string, args ...string) (string, error) {
-	if h.Run != nil {
-		return h.Run(ctx, name, args...)
-	}
-	return execRunner(ctx, name, args...)
+	return h.Run.or()(ctx, name, args...)
 }
 
 func (h HealthChecker) now() time.Time {

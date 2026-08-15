@@ -33,10 +33,7 @@ type Canary struct {
 }
 
 func (c Canary) run(ctx context.Context, name string, args ...string) (string, error) {
-	if c.Run != nil {
-		return c.Run(ctx, name, args...)
-	}
-	return execRunner(ctx, name, args...)
+	return c.Run.or()(ctx, name, args...)
 }
 
 func (c Canary) probe() string {

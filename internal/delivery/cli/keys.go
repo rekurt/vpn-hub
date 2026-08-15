@@ -127,7 +127,8 @@ func newDeviceAddCommand(configPath *string) *cobra.Command {
 // upstream tunnel configurations. Every command that reaches into it names this
 // one constant: the agent reading a key from one directory while hubctl issues
 // links from another is a mismatch that produces credentials nothing admits.
-const DefaultConfigDir = "/etc/vpn-hub"
+// It is the adapter's constant, so the two cannot drift apart.
+const DefaultConfigDir = linux.DefaultConfigDir
 
 // writeProfile writes a client profile at mode 0600, whether or not the target
 // already existed.

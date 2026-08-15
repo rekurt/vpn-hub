@@ -40,10 +40,7 @@ type RealityIngress struct {
 }
 
 func (r RealityIngress) run(ctx context.Context, name string, args ...string) (string, error) {
-	if r.Run != nil {
-		return r.Run(ctx, name, args...)
-	}
-	return execRunner(ctx, name, args...)
+	return r.Run.or()(ctx, name, args...)
 }
 
 func (r RealityIngress) secretsDir() string {

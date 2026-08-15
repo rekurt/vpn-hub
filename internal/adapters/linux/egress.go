@@ -1,13 +1,11 @@
 package linux
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -34,10 +32,7 @@ type Egress struct {
 }
 
 func (e Egress) run(ctx context.Context, name string, args ...string) (string, error) {
-	if e.Run != nil {
-		return e.Run(ctx, name, args...)
-	}
-	return execRunner(ctx, name, args...)
+	return e.Run.or()(ctx, name, args...)
 }
 
 // inNS prefixes a command so it runs inside the tunnel's namespace.
@@ -585,14 +580,10 @@ func (e Egress) applyRuleset(ctx context.Context, ruleset string) error {
 		_, err := e.Run(ctx, "nft-main", ruleset)
 		return err
 	}
-	command := exec.CommandContext(ctx, "nft", "-f", "-")
-	command.Stdin = strings.NewReader(ruleset)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		if message := strings.TrimSpace(stderr.String()); message != "" {
-			return fmt.Errorf("apply ruleset: %w: %s", err, message)
-		}
+	// execStdin, not a hand-rolled exec: a ruleset travels on stdin, and that is
+	// the one thing the ordinary runner cannot carry. It already folds stderr into
+	// the error, which is where nft says what it disliked.
+	if _, err := execStdin(ctx, ruleset, "nft", "-f", "-"); err != nil {
 		return fmt.Errorf("apply ruleset: %w", err)
 	}
 	return nil
@@ -606,14 +597,7 @@ func (e Egress) applyNamespaceRuleset(ctx context.Context, namespace, ruleset st
 		_, err := e.Run(ctx, "nft-in-netns", namespace, ruleset)
 		return err
 	}
-	command := exec.CommandContext(ctx, "ip", "netns", "exec", namespace, "nft", "-f", "-")
-	command.Stdin = strings.NewReader(ruleset)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		if message := strings.TrimSpace(stderr.String()); message != "" {
-			return fmt.Errorf("apply ruleset in %s: %w: %s", namespace, err, message)
-		}
+	if _, err := execStdin(ctx, ruleset, "ip", "netns", "exec", namespace, "nft", "-f", "-"); err != nil {
 		return fmt.Errorf("apply ruleset in %s: %w", namespace, err)
 	}
 	return nil
@@ -624,6 +608,11 @@ func (e Egress) applyNamespaceRuleset(ctx context.Context, namespace, ruleset st
 // flag default names this one constant, because two processes disagreeing on the
 // directory means two different flocks -- and no cross-process serialization.
 const DefaultRuntimeDir = "/run/vpn-hub"
+
+// DefaultConfigDir holds the hub's own keys, the bot's credentials and the
+// upstream tunnel configurations. It lives beside DefaultRuntimeDir so the two
+// directories the hub owns are named in one place.
+const DefaultConfigDir = "/etc/vpn-hub"
 
 func (e Egress) secretsDir() string {
 	if e.SecretsDir != "" {
