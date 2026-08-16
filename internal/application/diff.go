@@ -14,8 +14,9 @@ import (
 // part worth testing exhaustively, and it needs no host to do so. The adapters are
 // left with formatting and execution.
 //
-// firewallRevision is the fingerprint the desired ruleset would carry.
-func Diff(spec domain.IngressSpec, firewallRevision string, observed domain.ObservedState) []domain.Operation {
+// firewallRevision is the fingerprint the desired ruleset would carry;
+// realityRevision the one a listener running the revision would report.
+func Diff(spec domain.IngressSpec, firewallRevision, realityRevision string, observed domain.ObservedState) []domain.Operation {
 	var operations []domain.Operation
 
 	switch {
@@ -36,7 +37,35 @@ func Diff(spec domain.IngressSpec, firewallRevision string, observed domain.Obse
 
 	operations = append(operations, diffIngress(spec, observed.Ingress)...)
 	operations = append(operations, diffPeers(spec, observed.Ingress)...)
+	operations = append(operations, diffReality(realityRevision, observed.RealityFingerprint)...)
 	return operations
+}
+
+// diffReality reports a fallback listener that is not the one the revision asks
+// for. Both fingerprints are empty on a hub that does not use the fallback, which
+// is agreement rather than absence.
+func diffReality(wanted, running string) []domain.Operation {
+	if wanted == running {
+		return nil
+	}
+	reference := domain.ResourceRef{Type: "reality", ID: "vpn-hub-reality"}
+	switch {
+	case wanted == "":
+		return []domain.Operation{{
+			Kind: domain.OpDelete, Resource: reference,
+			Reason: "a fallback listener is running and the revision does not ask for one",
+		}}
+	case running == "":
+		return []domain.Operation{{
+			Kind: domain.OpCreate, Resource: reference,
+			Reason: "the revision asks for a fallback listener and none is running",
+		}}
+	default:
+		return []domain.Operation{{
+			Kind: domain.OpUpdate, Resource: reference,
+			Reason: "the running fallback listener was started from a different configuration",
+		}}
+	}
 }
 
 func diffIngress(spec domain.IngressSpec, observed domain.IngressObservation) []domain.Operation {

@@ -173,6 +173,7 @@ tunnels:
 	}
 	stateDir := t.TempDir()
 	configDir := t.TempDir()
+	runtimeDir := t.TempDir()
 	serverKeyPath := filepath.Join(t.TempDir(), "server.key")
 	if _, err := (linux.ServerKeyFile{Path: serverKeyPath}).Create(); err != nil {
 		t.Fatal(err)
@@ -185,8 +186,8 @@ tunnels:
 		ConfigPath:    configPath,
 		StateDir:      stateDir,
 		ConfigDir:     configDir,
-		RuntimeDir:    t.TempDir(),
-		Service:       wiring.Service(configPath, stateDir),
+		RuntimeDir:    runtimeDir,
+		Service:       wiring.Service(configPath, stateDir, runtimeDir),
 		Reconciler:    fakeReconciler{},
 		Editor:        configadapter.Editor{Root: configPath},
 		Revisions:     runtimeadapter.FileRevisionStore{StateDir: stateDir},
@@ -467,6 +468,141 @@ func TestDeviceAddDialogDeliversProfileAndQR(t *testing.T) {
 	}
 }
 
+// With the fallbacks on, a device gets three things instead of one: the ordinary
+// profile, the same profile aimed at UDP/443, and a vless:// link with its QR. The
+// point of issuing them together is that nobody has to hand-edit a port on a phone
+// at the moment the ordinary path has stopped working.
+func TestDeviceAddDeliversTheFallbackProfiles(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	realityKey := filepath.Join(t.TempDir(), "reality.key")
+	if _, err := (linux.RealityKeyFile{Path: realityKey}).Create(); err != nil {
+		t.Fatal(err)
+	}
+	instance.RealityKey = linux.RealityKeyFile{Path: realityKey}
+
+	body := strings.Replace(read(t, instance.ConfigPath),
+		"  dns_address: \"10.80.0.1\"\n",
+		"  dns_address: \"10.80.0.1\"\n"+
+			"  fallback:\n"+
+			"    udp443: true\n"+
+			"    reality:\n"+
+			"      enabled: true\n"+
+			"      server_name: \"www.example.com\"\n", 1)
+	if err := os.WriteFile(instance.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "dev:add"))
+	instance.handleUpdate(ctx, message(adminID, "phone"))
+	suggestion := findButton(t, api.lastScreen(t).markup, "Использовать")
+	instance.handleUpdate(ctx, tap(adminID, suggestion))
+	egress := findButton(t, api.lastScreen(t).markup, "direct")
+	instance.handleUpdate(ctx, tap(adminID, egress))
+
+	api.mu.Lock()
+	docs, photos := append([]string(nil), api.docs...), append([]string(nil), api.photos...)
+	messages := append([]sent(nil), api.sent...)
+	api.mu.Unlock()
+
+	if len(docs) != 2 || docs[0] != "phone.conf" || docs[1] != "phone-443.conf" {
+		t.Fatalf("expected the ordinary and the UDP/443 profile, got %v", docs)
+	}
+	if len(photos) != 2 {
+		t.Fatalf("expected a QR for each way in, got %v", photos)
+	}
+
+	var link string
+	for _, message := range messages {
+		if strings.Contains(message.text, "vless://") {
+			link = message.text
+		}
+	}
+	if link == "" {
+		t.Fatal("no vless:// link was delivered")
+	}
+	// The credential in the chat has to be the one the listener will admit, and the
+	// listener's user list is derived from the device's public key as it appears in
+	// the configuration -- so read it from there rather than trusting the renderer.
+	privateKey, err := instance.RealityKey.PrivateKey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := instance.Service.LoadAndValidate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var devicePublicKey string
+	for _, device := range cfg.Devices {
+		if device.ID == "phone" {
+			devicePublicKey = device.PublicKey
+		}
+	}
+	if devicePublicKey == "" {
+		t.Fatal("the device was not added to the configuration")
+	}
+	uuid, err := domain.RealityUserUUID(privateKey, "phone", devicePublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(link, uuid) {
+		t.Errorf("the link does not carry the device's derived credential:\n%s", link)
+	}
+	if strings.Contains(link, privateKey) {
+		t.Fatal("the hub's private key was sent to the chat")
+	}
+}
+
+// A missing key must not cost the operator the ordinary profile: the fallback is
+// an extra way in, and failing the whole flow over it would be a worse outcome
+// than not having it.
+func TestDeviceAddSurvivesAMissingRealityKey(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixture(t)
+	ctx := context.Background()
+
+	instance.RealityKey = linux.RealityKeyFile{Path: filepath.Join(t.TempDir(), "absent.key")}
+	body := strings.Replace(read(t, instance.ConfigPath),
+		"  dns_address: \"10.80.0.1\"\n",
+		"  dns_address: \"10.80.0.1\"\n"+
+			"  fallback:\n"+
+			"    reality:\n"+
+			"      enabled: true\n"+
+			"      server_name: \"www.example.com\"\n", 1)
+	if err := os.WriteFile(instance.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "dev:add"))
+	instance.handleUpdate(ctx, message(adminID, "phone"))
+	suggestion := findButton(t, api.lastScreen(t).markup, "Использовать")
+	instance.handleUpdate(ctx, tap(adminID, suggestion))
+	egress := findButton(t, api.lastScreen(t).markup, "direct")
+	instance.handleUpdate(ctx, tap(adminID, egress))
+
+	api.mu.Lock()
+	docs, messages := append([]string(nil), api.docs...), append([]sent(nil), api.sent...)
+	api.mu.Unlock()
+
+	if len(docs) != 1 || docs[0] != "phone.conf" {
+		t.Fatalf("the ordinary profile did not survive the missing key: %v", docs)
+	}
+	// Told in the chat, and told why: the ordinary profile arrives either way, so
+	// without this the screen reads as success and the device is handed over as if
+	// it could also come in on 443.
+	warned := false
+	for _, message := range messages {
+		if strings.Contains(message.text, "Запасной вход") && strings.Contains(message.text, "keygen --reality") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("the admin was not told why no fallback link arrived:\n%v", messages)
+	}
+}
+
 // A hub edit that breaks validation must be reverted, and a good one must land.
 func TestHubEndpointEditWithRevert(t *testing.T) {
 	t.Parallel()
@@ -603,6 +739,64 @@ func TestCandidatePickPromotesOnlyProven(t *testing.T) {
 	current, hasCurrent, _ := instance.Upstreams.Current("wg-nl")
 	if !hasCurrent || current.Server != "5.6.7.8" {
 		t.Fatalf("the proven candidate was not promoted: %+v %v", current, hasCurrent)
+	}
+}
+
+// A manual pick goes through the real canary, whose temporary firewall table is
+// hooked into forward/postrouting outside the reconciled ruleset -- if a try leaks
+// it, nothing ever removes it. Stubs of Prove used to hide exactly this leak, so
+// this test wires the production Canary with a recording runner instead.
+func TestPickCandidateDiscardsTheCanaryFirewall(t *testing.T) {
+	t.Parallel()
+	instance, _ := hubFixture(t)
+	ctx := context.Background()
+
+	link := "vless://3b1c8a52-4b6e-4d8a-9f00-0123456789ab@1.2.3.4:443?encryption=none&type=tcp\n"
+	instance.Fetch = func(context.Context, string) ([]byte, error) { return []byte(link), nil }
+	instance.Uplink = func(context.Context) (string, error) { return "eth0", nil }
+
+	var mu sync.Mutex
+	var commands []string
+	run := func(_ context.Context, name string, args ...string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		return "", nil
+	}
+	instance.Prove = func(ctx context.Context, candidate domain.ProxyTunnel, uplink string) error {
+		return linux.Canary{
+			Egress: linux.Egress{Run: run, SecretsDir: instance.RuntimeDir},
+			Run:    run,
+		}.Try(ctx, candidate, uplink)
+	}
+
+	body := strings.Replace(read(t, instance.ConfigPath),
+		"    source: {kind: config, value: \"wg-nl.conf\"}",
+		"    source: {kind: subscription, value: \"https://provider.example/sub\"}", 1)
+	body = strings.Replace(body, "type: wireguard", "type: xray", 1)
+	if err := os.WriteFile(instance.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "sub:cand:wg-nl"))
+	instance.wg.Wait()
+	instance.handleUpdate(ctx, tap(adminID, "sub:pick:wg-nl:0"))
+	instance.wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	discarded := false
+	for _, command := range commands {
+		if strings.Contains(command, "nft delete table inet vpn_hub_canary") {
+			discarded = true
+			break
+		}
+	}
+	if !discarded {
+		t.Fatalf("the canary nft table was not discarded; commands:\n%s", strings.Join(commands, "\n"))
+	}
+	if _, err := os.Stat(filepath.Join(instance.RuntimeDir, "canary.nft")); !os.IsNotExist(err) {
+		t.Errorf("canary.nft was left behind (stat: %v)", err)
 	}
 }
 

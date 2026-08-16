@@ -21,6 +21,23 @@ func renderFailure(what string, err error) screen {
 	}
 }
 
+// revertEdit undoes a configuration change that did not validate, and says so
+// when the undo did not work either.
+//
+// Every caller used to drop the undo's error and report "cancelled" regardless.
+// That is a lie an operator acts on: the file is still broken, the next deploy
+// fails validation, and nothing said so -- while the screen claimed the change
+// had been taken back. Reverting is also the only reason the bot survives a bad
+// edit at all, since an unloadable configuration takes the whole UI with it.
+func revertEdit(cancelled string, invalid error, undo func() error) screen {
+	if err := undo(); err != nil {
+		return renderFailure(
+			"конфигурация осталась сломанной: откат не удался, почините файл вручную",
+			fmt.Errorf("%w; откат: %w", invalid, err))
+	}
+	return renderFailure(cancelled, invalid)
+}
+
 // --- Status ----------------------------------------------------------------
 
 const agentUnit = "vpn-hub-agent.service"

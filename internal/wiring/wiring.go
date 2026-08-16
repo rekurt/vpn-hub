@@ -6,6 +6,8 @@
 package wiring
 
 import (
+	"path/filepath"
+
 	configadapter "vpn-hub/internal/adapters/config"
 	"vpn-hub/internal/adapters/linux"
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
@@ -23,14 +25,33 @@ func ConfigRepository(path string) ports.ConfigRepository {
 }
 
 // Service assembles the operator-facing side: validate, compile, save, probe.
-func Service(configPath, stateDir string) application.Service {
+//
+// runtimeDir is where the agent puts the management sockets an OpenVPN tunnel
+// reports its state through, so a hub told to keep them elsewhere is probed
+// there too. Hardcoding the default meant `hubctl tunnel test` and the bot's
+// health board reported every OpenVPN tunnel as "socket not answering" on such a
+// hub, while the tunnels carried traffic perfectly well.
+func Service(configPath, stateDir, runtimeDir string) application.Service {
 	return application.Service{
 		ConfigRepository: ConfigRepository(configPath),
 		RevisionStore:    runtimeadapter.FileRevisionStore{StateDir: stateDir},
 		// Probing from the host would measure the host's own connectivity, which is
 		// the path the tunnel exists to avoid.
-		HealthChecker: linux.HealthChecker{RuntimeDir: "/run/vpn-hub"},
+		HealthChecker: linux.HealthChecker{RuntimeDir: runtimeDir},
 	}
+}
+
+// RealityKeyPath names the fallback listener's key, beside the configuration it
+// belongs to. Derived rather than given a flag of its own: the agent, the bot and
+// hubctl all need it, and three flags is three chances for one of them to look at a
+// different file and quietly disagree about which devices can connect.
+func RealityKeyPath(configDir string) string {
+	return filepath.Join(configDir, "reality.key")
+}
+
+// RealityKey is the store hubctl and the bot read to issue client links.
+func RealityKey(configDir string) linux.RealityKeyFile {
+	return linux.RealityKeyFile{Path: RealityKeyPath(configDir)}
 }
 
 // Reconciler wires the host-facing adapters. Everything it drives only formats or
@@ -44,5 +65,7 @@ func Reconciler(keyPath, runtimeDir, configDir string) ports.Reconciler {
 		TunnelConfigs: linux.TunnelConfigFiles{Dir: configDir, Secrets: configadapter.SOPSSecretStore{}},
 		Host:          linux.NetConf{},
 		ServerKey:     linux.ServerKeyFile{Path: keyPath},
+		Reality:       linux.RealityIngress{SecretsDir: runtimeDir},
+		RealityKey:    RealityKey(configDir),
 	}
 }

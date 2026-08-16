@@ -18,6 +18,7 @@
 package linux_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -338,11 +339,40 @@ func TestPrivateNetworkIsReachedAlongsideTheInternet(t *testing.T) {
 		hubInterface, privateVeth)
 	sh(t, "nft add rule inet vpn_hub postrouting ip saddr 10.80.0.0/24 oifname %q masquerade", privateVeth)
 
-	go func() {
-		_ = exec.Command("bash", "-c", fmt.Sprintf(
-			"ip netns exec %s timeout 30 python3 -m http.server 80 --bind %s", privateNS, service)).Run()
-	}()
-	time.Sleep(2 * time.Second)
+	// The stand-in service, kept alive well past the polling budget below and with
+	// its output kept: a server that failed to start used to be indistinguishable
+	// from a routing failure, because the goroutine dropped its error and the test
+	// only ever said "not reachable".
+	server := exec.Command("bash", "-c", fmt.Sprintf(
+		"ip netns exec %s timeout 90 python3 -m http.server 80 --bind %s", privateNS, service))
+	var serverOutput bytes.Buffer
+	server.Stdout = &serverOutput
+	server.Stderr = &serverOutput
+	if err := server.Start(); err != nil {
+		t.Fatalf("start the stand-in private service: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = server.Process.Kill()
+		_, _ = server.Process.Wait()
+	})
+
+	// Wait for it to be listening before asking the client, so a slow start is not
+	// mistaken for a path that does not work.
+	listening := false
+	for range 30 {
+		out, _ := exec.Command("bash", "-c", fmt.Sprintf(
+			"ip netns exec %s curl -s --max-time 2 -o /dev/null -w '%%{http_code}' http://%s/ || true",
+			privateNS, service)).Output()
+		if strings.TrimSpace(string(out)) == "200" {
+			listening = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !listening {
+		t.Fatalf("the stand-in private service never came up; its output was:\n%s\n%s",
+			serverOutput.String(), diagnose(t))
+	}
 
 	reachable := func() bool {
 		out, _ := exec.Command("bash", "-c", fmt.Sprintf(
@@ -359,7 +389,8 @@ func TestPrivateNetworkIsReachedAlongsideTheInternet(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}
 	if !reached {
-		t.Fatalf("the private service was not reachable\n%s", diagnose(t))
+		t.Fatalf("the private service is listening but the client cannot reach it\n%s\nservice output:\n%s",
+			diagnose(t), serverOutput.String())
 	}
 	// The point of the milestone: both at once, not one instead of the other.
 	if egress := testbed.probe(); egress == "BLOCKED" {
@@ -400,7 +431,7 @@ func TestCanaryRejectsAnUnreachableCandidateAndCleansUp(t *testing.T) {
 		{Protocol: "vless", Server: "192.0.2.11", Port: 443, UUID: "00000000-0000-4000-8000-000000000002"},
 	}
 
-	chosen, reasons, err := canary.SelectCandidate(context.Background(), dead, uplink)
+	chosen, reasons, err := canary.SelectCandidate(context.Background(), dead, uplink, nil)
 	if err == nil {
 		t.Fatalf("an unreachable candidate must not be promoted, got %+v", chosen)
 	}

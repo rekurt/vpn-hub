@@ -72,7 +72,9 @@ func allowedSets(plan domain.FirewallPlan) []struct {
 // whenever RenderRuleset's output changes for an unchanged plan.
 //
 //	1: forwarded TCP MSS clamp matched on the SYN|RST mask, not a bare `flags syn`.
-const rulesetFormatVersion = 1
+//	2: TCP/443 is accepted only when the REALITY fallback is on, and the UDP/443
+//	   redirect moved into this table, scoped to the uplink.
+const rulesetFormatVersion = 2
 
 // Fingerprint identifies a firewall plan by its content and rendering format.
 func Fingerprint(plan domain.FirewallPlan) string {
@@ -240,14 +242,36 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\tchain input {")
 	line("\t\ttype filter hook input priority filter; policy drop;")
 	line("\t\tct state established,related accept")
+	// The hub's own services are not a destination the fallback path may reach.
+	//
+	// Refusing private addresses in the listener's configuration does not cover
+	// them: the hub's endpoint is a *public* address, and a connection to it is
+	// resolved by the local table -- priority 0, ahead of every fwmark rule -- so it
+	// arrives here over loopback, which the next rule accepts. An authenticated
+	// device could otherwise reach SSH on the hub's own address without ever
+	// crossing the cloud firewall that decides who may.
+	//
+	// The socket mark survives the trip through loopback, and every connection the
+	// listener opens carries one, so the mark is what separates them from the hub's
+	// own traffic. This is also why devices on `direct` are marked: not to steer
+	// them, but to be recognisable here.
+	//
+	// The resolver is the exception, and the only one: the listener has to look
+	// names up somewhere, and that somewhere is the hub's own dnsmasq.
+	line("\t\tiif lo meta mark != 0x00000000 ip daddr %s udp dport 53 accept", plan.DNSAddress)
+	line("\t\tiif lo meta mark != 0x00000000 ip daddr %s tcp dport 53 accept", plan.DNSAddress)
+	line("\t\tiif lo meta mark != 0x00000000 drop")
 	line("\t\tiif lo accept")
 	line("\t\tip protocol icmp accept")
 	line("\t\ttcp dport %d accept", plan.ManagementPort)
 	line("\t\tudp dport %d accept", plan.ListenPort)
-	// Reality is a TCP fallback for networks that discard encrypted UDP. Keep this
-	// in the reconciled table rather than in a parallel table: verdicts from a
-	// second base chain do not bypass this chain's drop policy.
-	line("\t\ttcp dport 443 accept")
+	// REALITY is a TCP fallback for networks that discard encrypted UDP. Kept in
+	// the reconciled table rather than a parallel one: verdicts from a second base
+	// chain do not bypass this chain's drop policy. Conditional, because a port
+	// accepted with nothing listening behind it is attack surface offered for free.
+	if plan.RealityPort != 0 {
+		line("\t\ttcp dport %d accept", plan.RealityPort)
+	}
 	line("\t\tiifname %q ip daddr %s udp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
 	line("\t\tiifname %q ip daddr %s tcp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
 	line("\t}")
@@ -260,6 +284,16 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	if len(plan.Internals) > 0 {
 		line("\tchain output_mark {")
 		line("\t\ttype route hook output priority mangle; policy accept;")
+		// A socket that already chose its way out keeps it. This marks by destination
+		// alone -- it cannot see who asked -- so without this guard it would also
+		// re-mark the fallback listener's connections, which carry the mark of the
+		// egress their device was assigned. A device excluded from a private network
+		// by allowed_devices would then reach it anyway, because that list is enforced
+		// in the forward chain and this traffic never passes through it. Refusing
+		// private destinations in the listener's own configuration is not enough on
+		// its own: a private network may legitimately route a public prefix, and split
+		// DNS adds whatever addresses its zones resolve to.
+		line("\t\tmeta mark != 0x00000000 return")
 		for _, network := range plan.Internals {
 			line("\t\tip daddr @%s meta mark set 0x%08x", internalSetName(network.TunnelID), network.Mark)
 		}
@@ -272,6 +306,28 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\tchain output {")
 	line("\t\ttype filter hook output priority filter; policy accept;")
 	line("\t\tmeta nfproto ipv6 drop")
+	// The kill switch for traffic the hub originates on a client's behalf.
+	//
+	// Marked traffic is steered by `ip rule fwmark N lookup N`, and that construct
+	// fails OPEN: a table with no matching route is a lookup that falls through to
+	// the next rule and then to main, so the packet leaves by the hub's own uplink
+	// carrying the hub's address. Forwarded client traffic is safe from this because
+	// the forward chain's drop policy only accepts it out of the interface its mark
+	// belongs to -- but the REALITY listener's connections, and the resolver's
+	// queries into a private zone, never pass through forward at all.
+	//
+	// So the same guarantee is stated here explicitly: a marked packet leaving by
+	// anything other than its own interface is dropped rather than delivered by the
+	// wrong path.
+	for _, group := range plan.Egresses {
+		if group.ID == domain.EgressDirect {
+			continue // direct means the uplink, which is where unmarked traffic goes
+		}
+		line("\t\tmeta mark 0x%08x oifname != %q drop", group.Mark, group.Interface)
+	}
+	for _, network := range plan.Internals {
+		line("\t\tmeta mark 0x%08x oifname != %q drop", network.Mark, network.Interface)
+	}
 	line("\t}")
 	line("")
 
@@ -287,6 +343,21 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	// will not guess which one a rule means.
 	line("\t\tiifname %q udp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
 	line("\t\tiifname %q tcp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
+	// The UDP fallback, for networks that block UDP/51820 by port rather than
+	// discarding UDP as such. Scoped to the uplink: an unscoped rule also matches
+	// client traffic arriving on the ingress interface, so a forwarded QUIC or
+	// HTTP/3 request to any site's :443 would have its destination port rewritten to
+	// the ingress and silently break. Conntrack reverses it for the replies, as it
+	// already does for the DNS rules above.
+	//
+	// `dnat to :port` rather than `redirect`, which would also rewrite the
+	// destination address to the incoming interface's primary one: where clients
+	// dial a secondary or floating address, the reply would then be sourced from the
+	// primary and the client would discard it as coming from the wrong endpoint.
+	if plan.AltUDP443 {
+		line("\t\tiifname %q meta nfproto ipv4 udp dport %d dnat to :%d",
+			plan.UplinkInterface, domain.RealityPort, plan.ListenPort)
+	}
 	line("\t}")
 	line("")
 
@@ -358,7 +429,7 @@ func (n NFTables) runtimeDir() string {
 	if n.RuntimeDir != "" {
 		return n.RuntimeDir
 	}
-	return "/run/vpn-hub"
+	return DefaultRuntimeDir
 }
 
 func (n NFTables) binary() string {

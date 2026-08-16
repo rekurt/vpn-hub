@@ -34,4 +34,8 @@ type ObservedState struct {
 	// empty when the table is absent, which is the common shape of drift: something
 	// flushed the ruleset, or the host rebooted before the agent ran.
 	FirewallRevision string `json:"firewall_revision,omitempty"`
+	// RealityFingerprint is what the running fallback listener was started from,
+	// empty when none runs. A hub with the fallback off leaves this empty and
+	// expects it: it is only drift when the revision asks for a listener.
+	RealityFingerprint string `json:"reality_fingerprint,omitempty"`
 }

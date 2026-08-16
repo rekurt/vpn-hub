@@ -35,6 +35,17 @@ type FirewallPlan struct {
 	// Socks lists the SOCKS5 endpoints clients may reach.
 	Socks []SocksEndpoint `json:"socks,omitempty"`
 
+	// AltUDP443 redirects UDP/443 arriving on the uplink to ListenPort. Scoped to
+	// the uplink on purpose: an unscoped redirect also matches client traffic
+	// arriving on the ingress interface, so a forwarded QUIC or HTTP/3 request to
+	// any site's :443 would have its destination port rewritten and silently break.
+	AltUDP443 bool `json:"alt_udp443,omitempty"`
+
+	// RealityPort is the TCP port the fallback listener occupies, zero when the
+	// fallback is off. Nothing may accept on 443 unless something is listening: an
+	// open port with no listener is attack surface offered for nothing.
+	RealityPort uint16 `json:"reality_port,omitempty"`
+
 	// Egresses is ordered deterministically so an unchanged configuration renders
 	// byte-identically.
 	Egresses []EgressGroup `json:"egresses"`

@@ -38,6 +38,30 @@ test:
 test-integration:
 	sudo -E env "PATH=$$PATH" go test -tags=integration -count=1 -timeout 15m ./internal/adapters/linux/
 
+## test-integration-box: the same suite in a throwaway container (works off Linux)
+# For a workstation that is not the Linux host those tests need. Same suite, same
+# sing-box, same systemd. Extra arguments reach go test: make test-integration-box
+# ARGS='-run Reality'.
+test-integration-box:
+	deploy/testbox/run.sh $(ARGS)
+
+## ci: run what CI runs, locally -- everything but the integration job
+# Worth having on its own: the four jobs are spread across a workflow file, and
+# finding out which of them a change breaks should not require pushing.
+ci: lint golangci terraform-check test build-linux
+	@echo "build, lint and terraform pass locally; integration is make test-integration-box"
+
+## golangci: the linter CI runs, with the repository's own configuration
+golangci:
+	golangci-lint run
+
+## terraform-check: formatting and validation, as the terraform job does them
+terraform-check:
+	$(TF) fmt -check -diff
+	# Validation contacts no provider API, so this needs no credentials.
+	$(TF) init -backend=false
+	$(TF) validate
+
 ## build: build both binaries for the host platform
 build:
 	go build -o bin/ ./cmd/...
@@ -71,27 +95,15 @@ stand-down:
 ## deploy-lab: install binaries and the systemd units onto the lab host
 # Binaries land in a staging directory first: scp cannot write over a running
 # executable (ETXTBSY), whereas `install` replaces the directory entry and leaves the
-# running process on the old inode until it restarts.
-# The bot starts only where its config exists: a lab host without a token should not
-# grow a crash-looping unit. The subscription timer is disabled when the bot runs --
-# the bot schedules refreshes itself, through its own mutation gate, so timer and bot
-# cannot collide over the singleton canary namespace.
+# running process on the old inode until it restarts. The procedure itself is
+# deploy/install.sh -- the same script the deploy workflow runs, so the two paths
+# cannot drift.
 deploy-lab: build-linux
 	@test -n "$(LAB_IP)" || { echo "no lab host; run make stand-up"; exit 1; }
-	$(SSH) 'mkdir -p /run/vpn-hub-stage'
-	scp bin/linux/hubctl bin/linux/vpn-hub-agent bin/linux/vpn-hub-bot root@$(LAB_IP):/run/vpn-hub-stage/
-	scp deploy/systemd/vpn-hub-agent.service deploy/systemd/vpn-hub-bot.service \
-		deploy/systemd/vpn-hub-subscription@.service \
-		deploy/systemd/vpn-hub-subscription@.timer root@$(LAB_IP):/etc/systemd/system/
-	$(SSH) 'install -m 0755 /run/vpn-hub-stage/hubctl /run/vpn-hub-stage/vpn-hub-agent /run/vpn-hub-stage/vpn-hub-bot /usr/local/bin/ \
-		&& rm -rf /run/vpn-hub-stage \
-		&& systemctl daemon-reload \
-		&& systemctl enable --now vpn-hub-agent \
-		&& systemctl restart vpn-hub-agent \
-		&& if [ -f /etc/vpn-hub/telegram.yaml ]; then \
-			systemctl disable --now "vpn-hub-subscription@*.timer" 2>/dev/null; \
-			systemctl enable --now vpn-hub-bot && systemctl restart vpn-hub-bot; \
-		else echo "no /etc/vpn-hub/telegram.yaml; vpn-hub-bot not enabled"; fi'
+	$(SSH) 'rm -rf /run/vpn-hub-stage && mkdir -p /run/vpn-hub-stage/systemd'
+	scp bin/linux/hubctl bin/linux/vpn-hub-agent bin/linux/vpn-hub-bot deploy/install.sh root@$(LAB_IP):/run/vpn-hub-stage/
+	scp deploy/systemd/vpn-hub-agent.service deploy/systemd/vpn-hub-bot.service root@$(LAB_IP):/run/vpn-hub-stage/systemd/
+	$(SSH) 'sh /run/vpn-hub-stage/install.sh'
 
 ## ssh: open a shell on the lab host
 ssh:
@@ -105,4 +117,4 @@ logs:
 logs-bot:
 	$(SSH) 'journalctl -u vpn-hub-bot -f'
 
-.PHONY: help fmt lint test test-integration build build-linux $(STAND_TARGETS) deploy-lab ssh logs logs-bot
+.PHONY: help fmt lint test test-integration test-integration-box ci golangci terraform-check build build-linux $(STAND_TARGETS) deploy-lab ssh logs logs-bot

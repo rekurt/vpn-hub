@@ -27,9 +27,14 @@ RuntimeDirectoryPreserve=yes
 
 # The bot is the operator's seat, not the reconciler: it edits /etc/vpn-hub, forks
 # systemctl/journalctl/qrencode and builds the canary namespace for subscription
-# refreshes. That rules out the agent's mount isolation; it gets the subscription
-# unit's confinement level instead. The reconciler's sandbox stays intact precisely
-# because this lives in a separate service.
+# refreshes. None of that needs a writable system: the canary namespace is built
+# through the same systemd-run delegation the agent uses under this very setting,
+# and forking systemctl or qrencode writes nothing outside the two directories
+# named below. ConfigurationDirectory gets no implicit write exemption under
+# strict, so /etc/vpn-hub is listed explicitly -- the config editor and the
+# upstream link files live there.
+ProtectSystem=strict
+ReadWritePaths=/etc/vpn-hub /run/vpn-hub
 UMask=0077
 ProtectHome=true
 PrivateTmp=true

@@ -8,6 +8,7 @@ package ports
 
 import (
 	"context"
+	"time"
 
 	"vpn-hub/internal/domain"
 )
@@ -37,6 +38,21 @@ type Firewall interface {
 type Ingress interface {
 	Apply(context.Context, domain.IngressSpec) error
 	Observe(ctx context.Context, name string) (domain.IngressObservation, error)
+}
+
+// RealityIngress runs the TCP/443 fallback listener. A spec with Enabled false
+// asks for it to be gone, which is how turning the fallback off closes the port.
+//
+// It also reports what it is running, so a dry run says the same thing a real
+// pass would do and a listener someone stopped shows up as drift.
+type RealityIngress interface {
+	Apply(context.Context, domain.RealityIngressSpec) error
+	// Fingerprint is what Applied returns for a listener started from this spec.
+	Fingerprint(domain.RealityIngressSpec) string
+	// Applied reports the fingerprint the running listener was started from, and
+	// the empty string when none is running -- a listener someone stopped is a
+	// difference from the revision, not the absence of one.
+	Applied(context.Context) (string, error)
 }
 
 // EgressManager runs upstream tunnels, each isolated in its own namespace.
@@ -76,6 +92,20 @@ type HostNetwork interface {
 // carried in a revision.
 type ServerKeyStore interface {
 	PrivateKey(context.Context) (string, error)
+}
+
+// RevocationSource lists locally revoked device ids, consumed at deploy time so a
+// revoked device never reaches the state the agent converges on.
+type RevocationSource interface {
+	Load(context.Context) ([]string, error)
+}
+
+// DeployConfirmation arms the deploy-and-confirm safety net and clears it.
+type DeployConfirmation interface {
+	// Arm reports false without error when there is no earlier revision to return
+	// to -- the first deploy has nothing to roll back onto.
+	Arm(ctx context.Context, within time.Duration, revision string) (armed bool, err error)
+	Confirm() error
 }
 
 // Reconciler converges a host towards a revision. Apply returns the differences it

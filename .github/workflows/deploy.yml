@@ -120,25 +120,17 @@ jobs:
           fi
           # Staged first: scp cannot overwrite a running executable (ETXTBSY), while
           # install replaces the directory entry and leaves the running process alone
-          # until it restarts.
-          ssh root@"$HUB_HOST" 'mkdir -p /run/vpn-hub-stage'
-          scp $BINARIES root@"$HUB_HOST":/run/vpn-hub-stage/
-          scp deploy/systemd/vpn-hub-agent.service deploy/systemd/vpn-hub-bot.service root@"$HUB_HOST":/etc/systemd/system/
-          # The bot runs only where its config and binary exist; the subscription
-          # timer yields to the bot's own scheduler so the two never race over the
-          # canary.
-          ssh root@"$HUB_HOST" '
-            set -e
-            install -m 0755 /run/vpn-hub-stage/* /usr/local/bin/
-            rm -rf /run/vpn-hub-stage
-            systemctl daemon-reload
-            systemctl restart vpn-hub-agent
-            if [ -f /etc/vpn-hub/telegram.yaml ] && [ -x /usr/local/bin/vpn-hub-bot ]; then
-              systemctl disable --now "vpn-hub-subscription@*.timer" 2>/dev/null || true
-              systemctl enable --now vpn-hub-bot
-              systemctl restart vpn-hub-bot
-            fi
-          '
+          # until it restarts. The procedure itself is deploy/install.sh -- the same
+          # script `make deploy-lab` runs, so the two paths cannot drift.
+          # Emptied, not just created: an install that aborted before its final
+          # cleanup leaves its binaries behind, and a rollback to an artifact that
+          # predates the bot would copy no bot while install.sh still found and
+          # installed the stale one -- mixing versions on a hub deployed precisely
+          # to get away from one of them.
+          ssh root@"$HUB_HOST" 'rm -rf /run/vpn-hub-stage && mkdir -p /run/vpn-hub-stage/systemd'
+          scp $BINARIES deploy/install.sh root@"$HUB_HOST":/run/vpn-hub-stage/
+          scp deploy/systemd/vpn-hub-agent.service deploy/systemd/vpn-hub-bot.service root@"$HUB_HOST":/run/vpn-hub-stage/systemd/
+          ssh root@"$HUB_HOST" 'sh /run/vpn-hub-stage/install.sh'
 
       # A deploy that leaves the agent crash-looping is a failed deploy, so say so
       # here rather than letting it be discovered later.

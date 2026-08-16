@@ -31,10 +31,7 @@ type Systemctl struct {
 }
 
 func (s Systemctl) run(ctx context.Context, name string, args ...string) (string, error) {
-	if s.Run != nil {
-		return s.Run(ctx, name, args...)
-	}
-	return execRunner(ctx, name, args...)
+	return s.Run.or()(ctx, name, args...)
 }
 
 // unitNamePattern is what a real systemd unit name looks like: it starts with an
