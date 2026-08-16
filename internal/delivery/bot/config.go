@@ -25,6 +25,14 @@ type Config struct {
 	Notifications Notifications
 }
 
+// The interval fallbacks are shared with Bot.init's clamp, so LoadConfig and a
+// hand-built Bot cannot disagree on what a missing cadence means.
+const (
+	defaultHealthInterval      = 5 * time.Minute
+	defaultDriftInterval       = 30 * time.Minute
+	defaultSubscriptionRefresh = 6 * time.Hour
+)
+
 // Notifications sets the cadence of the bot's own observations.
 type Notifications struct {
 	// HealthInterval is how often every enabled tunnel is probed.
@@ -80,9 +88,9 @@ func LoadConfig(ctx context.Context, path string) (Config, error) {
 		fallback time.Duration
 		into     *time.Duration
 	}{
-		{"health_interval", wire.Notifications.HealthInterval, 5 * time.Minute, &cfg.Notifications.HealthInterval},
-		{"drift_interval", wire.Notifications.DriftInterval, 30 * time.Minute, &cfg.Notifications.DriftInterval},
-		{"subscription_refresh", wire.Notifications.SubscriptionRefresh, 6 * time.Hour, &cfg.Notifications.SubscriptionRefresh},
+		{"health_interval", wire.Notifications.HealthInterval, defaultHealthInterval, &cfg.Notifications.HealthInterval},
+		{"drift_interval", wire.Notifications.DriftInterval, defaultDriftInterval, &cfg.Notifications.DriftInterval},
+		{"subscription_refresh", wire.Notifications.SubscriptionRefresh, defaultSubscriptionRefresh, &cfg.Notifications.SubscriptionRefresh},
 	}
 	for _, interval := range intervals {
 		if interval.value == "" {

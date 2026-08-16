@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -146,5 +147,42 @@ func TestAlertSwitches(t *testing.T) {
 	// Unknown categories default to on, so a new category is never born muted.
 	if !switches.get("brand-new") {
 		t.Fatal("unknown categories must default to on")
+	}
+}
+
+// The debounce key carries the event's text, and an agent-error's text is a line
+// from the journal -- so without a sweep every distinct failure the agent ever
+// reported stayed in the map, in a process that runs for months between deploys.
+func TestDebounceForgetsWhatCanNoLongerSuppress(t *testing.T) {
+	t.Parallel()
+	instance := &Bot{alerts: newAlertSwitches()}
+	st := newNotifierState()
+	base := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	const window = 15 * time.Minute
+
+	// A hundred failures, each with its own text, an hour apart: four windows
+	// between them, so none can suppress any other.
+	for index := range 100 {
+		text := fmt.Sprintf("reconcile failed: tunnel-%d", index)
+		if !instance.shouldDeliver(st, event{category: "agent-error", text: text, debounce: window},
+			base.Add(time.Duration(index)*time.Hour)) {
+			t.Fatalf("event %d was suppressed by an unrelated one", index)
+		}
+	}
+	if len(st.lastSent) != 1 {
+		t.Errorf("the debounce map kept %d entries, want only the most recent", len(st.lastSent))
+	}
+
+	// And the suppression it exists for still works: the same text inside the
+	// window is held back, outside it is not.
+	repeat := event{category: "agent-error", text: "the same failure", debounce: window}
+	if !instance.shouldDeliver(st, repeat, base) {
+		t.Fatal("the first occurrence was suppressed")
+	}
+	if instance.shouldDeliver(st, repeat, base.Add(window-time.Second)) {
+		t.Error("a repeat inside the window was delivered")
+	}
+	if !instance.shouldDeliver(st, repeat, base.Add(window+time.Second)) {
+		t.Error("a repeat past the window was suppressed")
 	}
 }

@@ -28,10 +28,7 @@ type Journal struct {
 }
 
 func (j Journal) run(ctx context.Context, name string, args ...string) (string, error) {
-	if j.Run != nil {
-		return j.Run(ctx, name, args...)
-	}
-	return execRunner(ctx, name, args...)
+	return j.Run.or()(ctx, name, args...)
 }
 
 // Tail returns the last lines for one unit, newest last.

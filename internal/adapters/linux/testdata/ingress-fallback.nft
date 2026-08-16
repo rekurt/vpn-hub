@@ -1,0 +1,75 @@
+# Managed by vpn-hub. Manual edits are reverted on the next reconcile.
+
+# Creating the table before deleting it makes the definition below an atomic
+# replacement of this table alone, leaving any other ruleset on the host intact.
+table inet vpn_hub
+delete table inet vpn_hub
+
+table inet vpn_hub {
+	comment "vpn-hub:e47bcab98a060660"
+
+	set client_direct {
+		type ipv4_addr
+		elements = { 10.80.0.2, 10.80.0.3 }
+	}
+
+	set client_provider_nl {
+		type ipv4_addr
+		elements = { 10.80.0.4 }
+	}
+
+	set allowed_provider_nl {
+		type ipv4_addr
+	}
+
+	chain prerouting {
+		type filter hook prerouting priority mangle; policy accept;
+		iifname != "awg0" accept
+		ip saddr @client_direct meta mark set 0x00000100
+		ip saddr @client_provider_nl meta mark set 0x00000101
+		ct mark set meta mark
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		tcp flags & (syn|rst) == syn tcp option maxseg size set 1240
+		ct state established,related accept
+		iifname "awg0" oifname "awg0" drop
+		iifname "awg0" tcp dport 853 reject with tcp reset
+		iifname "awg0" ip saddr @client_direct oifname "eth0" accept
+		iifname "awg0" ip saddr @client_provider_nl oifname "vh-provider-nl" accept
+	}
+
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state established,related accept
+		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 udp dport 53 accept
+		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 tcp dport 53 accept
+		iif lo meta mark != 0x00000000 drop
+		iif lo accept
+		ip protocol icmp accept
+		tcp dport 22 accept
+		udp dport 51820 accept
+		tcp dport 443 accept
+		iifname "awg0" ip daddr 10.80.0.1 udp dport 53 accept
+		iifname "awg0" ip daddr 10.80.0.1 tcp dport 53 accept
+	}
+
+	chain output {
+		type filter hook output priority filter; policy accept;
+		meta nfproto ipv6 drop
+		meta mark 0x00000101 oifname != "vh-provider-nl" drop
+	}
+
+	chain prerouting_nat {
+		type nat hook prerouting priority dstnat; policy accept;
+		iifname "awg0" udp dport 53 dnat ip to 10.80.0.1:53
+		iifname "awg0" tcp dport 53 dnat ip to 10.80.0.1:53
+		iifname "eth0" meta nfproto ipv4 udp dport 443 dnat to :51820
+	}
+
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		ip saddr 10.80.0.0/24 oifname "eth0" masquerade
+	}
+}

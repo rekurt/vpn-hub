@@ -85,6 +85,150 @@ func TestRenderWithTunnelAndInternalRoutes(t *testing.T) {
 	goldenTest(t, "tunnel-and-internal", plan)
 }
 
+func TestRenderIngressFallback(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.AltUDP443 = true
+	plan.RealityPort = domain.RealityPort
+	// A tunnel egress as well as direct: the fallback listener opens hub-originated
+	// connections into it on a device's behalf, which is what the extra masquerade
+	// in the golden file exists for.
+	plan.Egresses = append(plan.Egresses, domain.EgressGroup{
+		ID:        "provider-nl",
+		Mark:      0x101,
+		Interface: "vh-provider-nl",
+		Addresses: []string{"10.80.0.4"},
+	})
+	goldenTest(t, "ingress-fallback", plan)
+}
+
+// The hub's own address is public, so refusing private destinations in the
+// listener does not cover it -- and the local table resolves it over loopback,
+// which the input chain otherwise accepts. Without this an authenticated device
+// could reach SSH on the hub without crossing the cloud firewall that decides who
+// may.
+func TestLocalServicesAreClosedToMarkedTraffic(t *testing.T) {
+	t.Parallel()
+	rendered := RenderRuleset(directOnlyPlan())
+
+	chain := rendered[strings.Index(rendered, "chain input {"):]
+	chain = chain[:strings.Index(chain, "\t}")]
+
+	drop := `iif lo meta mark != 0x00000000 drop`
+	if !strings.Contains(chain, drop) {
+		t.Fatalf("marked traffic may still reach the hub's own services:\n%s", chain)
+	}
+	// Ahead of the blanket loopback accept, or it guards nothing.
+	if strings.Index(chain, drop) > strings.Index(chain, "iif lo accept") {
+		t.Errorf("the drop comes after the accept it is meant to precede:\n%s", chain)
+	}
+	// The resolver is the one local service this path legitimately needs.
+	for _, protocol := range []string{"udp", "tcp"} {
+		exception := fmt.Sprintf(`iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 %s dport 53 accept`, protocol)
+		if !strings.Contains(chain, exception) {
+			t.Errorf("the listener cannot resolve names over %s:\n%s", protocol, chain)
+		}
+		if strings.Index(chain, exception) > strings.Index(chain, drop) {
+			t.Errorf("the %s resolver exception comes after the drop:\n%s", protocol, chain)
+		}
+	}
+}
+
+// output_mark marks by destination alone -- it cannot see who asked -- so it must
+// not touch a socket that already chose its way out. The fallback listener's
+// connections carry the mark of their device's egress; re-marking them into a
+// private network's tunnel would hand a device access that allowed_devices denies
+// it, because that list is enforced in the forward chain and this traffic never
+// reaches it. Refusing private addresses in the listener is not enough on its own:
+// a private network may route a public prefix, and split DNS adds whatever its
+// zones resolve to.
+func TestOutputMarkLeavesAlreadyMarkedTrafficAlone(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.Internals = []domain.InternalNetwork{{
+		TunnelID: "corp", Mark: 0x102, Interface: "vh-corp", Routes: []string{"10.20.0.0/16"},
+	}}
+	rendered := RenderRuleset(plan)
+
+	chain := rendered[strings.Index(rendered, "chain output_mark {"):]
+	chain = chain[:strings.Index(chain, "\t}")]
+	guard := "meta mark != 0x00000000 return"
+	if !strings.Contains(chain, guard) {
+		t.Fatalf("output_mark does not spare already-marked traffic:\n%s", chain)
+	}
+	// Ahead of the marking, or it would guard nothing.
+	if strings.Index(chain, guard) > strings.Index(chain, "meta mark set") {
+		t.Errorf("the guard comes after the marking it is supposed to precede:\n%s", chain)
+	}
+}
+
+// The kill switch has to cover traffic the hub originates on a client's behalf,
+// not only forwarded traffic. `ip rule fwmark N lookup N` fails OPEN -- a table
+// with no matching route falls through to main and the packet leaves by the hub's
+// own uplink -- so the output chain has to say what the forward chain's drop
+// policy says for everyone else.
+func TestOutputChainDropsMarkedTrafficLeavingTheWrongWay(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.Egresses = append(plan.Egresses, domain.EgressGroup{
+		ID: "provider-nl", Mark: 0x101, Interface: "vh-provider-nl",
+	})
+	plan.Internals = []domain.InternalNetwork{{
+		TunnelID: "corp", Mark: 0x102, Interface: "vh-corp", Routes: []string{"10.20.0.0/16"},
+	}}
+	rendered := RenderRuleset(plan)
+
+	for _, rule := range []string{
+		`meta mark 0x00000101 oifname != "vh-provider-nl" drop`,
+		`meta mark 0x00000102 oifname != "vh-corp" drop`,
+	} {
+		if !strings.Contains(rendered, rule) {
+			t.Errorf("missing %q:\n%s", rule, rendered)
+		}
+	}
+	// direct is the uplink, which is where an unmarked socket goes anyway.
+	if strings.Contains(rendered, `meta mark 0x00000100 oifname !=`) {
+		t.Error("the direct egress got a rule that would drop its own traffic")
+	}
+}
+
+// The fallbacks open a port and rewrite a destination, so their absence has to be
+// as exact as their presence: with the gate off nothing may accept on 443, and no
+// redirect may exist to catch a client's own QUIC traffic.
+func TestFallbackRulesAreAbsentWhenOff(t *testing.T) {
+	t.Parallel()
+	ruleset := RenderRuleset(directOnlyPlan())
+	for _, rule := range []string{"tcp dport 443", "redirect to :"} {
+		if strings.Contains(ruleset, rule) {
+			t.Errorf("%q is present with the fallback off:\n%s", rule, ruleset)
+		}
+	}
+}
+
+// The redirect must never match traffic arriving from clients: an unscoped rule
+// would rewrite a forwarded QUIC or HTTP/3 request to any site's :443 and break it
+// in a way that looks like the site's fault.
+func TestAltUDP443IsScopedToTheUplink(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.AltUDP443 = true
+	ruleset := RenderRuleset(plan)
+
+	// `dnat to :port` rather than `redirect`, which would also rewrite the
+	// destination address to the interface's primary one and break every client
+	// dialling a secondary or floating address.
+	want := `iifname "eth0" meta nfproto ipv4 udp dport 443 dnat to :51820`
+	if !strings.Contains(ruleset, want) {
+		t.Fatalf("missing %q:\n%s", want, ruleset)
+	}
+	if strings.Contains(ruleset, "redirect to") {
+		t.Errorf("the address-rewriting form came back:\n%s", ruleset)
+	}
+	if strings.Contains(ruleset, `iifname "awg0" udp dport 443`) {
+		t.Errorf("the rule also matches the ingress interface:\n%s", ruleset)
+	}
+}
+
 // The kill switch is the forward chain's policy rather than an explicit rule, so it
 // is worth asserting directly: a refactor that flipped it to accept would leave every
 // golden file looking plausible.

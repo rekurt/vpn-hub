@@ -83,23 +83,17 @@ func newDeployCommand(configPath *string) *cobra.Command {
 		Use:   "deploy",
 		Short: "Compile and safely apply a desired-state revision locally",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			service := newService(*configPath, stateDir)
-			cfg, err := service.LoadAndValidate(cmd.Context())
-			if err != nil {
-				return err
+			deployment := application.Deployment{
+				Service:       newService(*configPath, stateDir),
+				Revocations:   runtimeadapter.RevocationStore{StateDir: stateDir},
+				Confirmations: runtimeadapter.ConfirmationStore{StateDir: stateDir},
 			}
-			// Applied after validation and before compiling the revision, so a revoked
-			// device never reaches the state the agent converges on.
-			revoked, err := runtimeadapter.RevocationStore{StateDir: stateDir}.Load(cmd.Context())
+			state, revoked, err := deployment.Compile(cmd.Context())
 			if err != nil {
 				return err
 			}
 			if len(revoked) > 0 {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "excluding %d revoked device(s): %s\n", len(revoked), strings.Join(revoked, ", "))
-			}
-			state, err := service.BuildDesiredState(application.RemoveRevoked(cfg, revoked))
-			if err != nil {
-				return err
 			}
 			if dryRun {
 				_, err = fmt.Fprintf(cmd.OutOrStdout(),
@@ -107,33 +101,27 @@ func newDeployCommand(configPath *string) *cobra.Command {
 					state.Revision, len(state.Tunnels), len(state.Devices))
 				return err
 			}
-			confirmations := runtimeadapter.ConfirmationStore{StateDir: stateDir}
-			var armed bool
-			if confirmWithin > 0 {
-				if armed, err = confirmations.Arm(cmd.Context(), confirmWithin, state.Revision); err != nil {
-					return err
-				}
-			}
-			if err := service.Save(cmd.Context(), state); err != nil {
+			result, err := deployment.Apply(cmd.Context(), state, confirmWithin)
+			if err != nil {
 				return err
 			}
 			if confirmWithin > 0 {
-				if !armed {
+				if !result.Armed {
 					// Said plainly rather than implied: an operator who reads the
 					// usual message trusts a rollback that is not there.
 					_, err = fmt.Fprintf(cmd.OutOrStdout(),
 						"saved revision %s; no rollback was armed because there is no earlier revision to return to\n",
-						state.Revision)
+						result.Revision)
 					return err
 				}
 				_, err = fmt.Fprintf(cmd.OutOrStdout(),
 					"saved revision %s; run `hubctl confirm` within %s or the agent restores the previous one\n",
-					state.Revision, confirmWithin)
+					result.Revision, confirmWithin)
 				return err
 			}
 			// The agent converges the host onto this; hubctl never touches it.
 			_, err = fmt.Fprintf(cmd.OutOrStdout(),
-				"saved revision %s to %s; the agent applies it on its next pass\n", state.Revision, stateDir)
+				"saved revision %s to %s; the agent applies it on its next pass\n", result.Revision, stateDir)
 			return err
 		},
 	}
@@ -227,13 +215,18 @@ func newStatusCommand() *cobra.Command {
 
 func newTestCommand(configPath *string) *cobra.Command {
 	command := newParentCommand("test", "Run preflight probes")
+	var probeRuntimeDir string
 	tunnel := &cobra.Command{
 		Use:   "tunnel <id>",
 		Short: "Run configured preflight probes for one tunnel",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tunnelID := args[0]
-			service := newService(*configPath, "")
+			// The probes run inside the tunnel namespaces and read the management
+			// sockets the agent writes, so this has to name the same directory the
+			// agent was given or every OpenVPN tunnel reports a socket that is not
+			// answering while carrying traffic perfectly well.
+			service := wiring.Service(*configPath, "", probeRuntimeDir)
 			cfg, err := service.LoadAndValidate(cmd.Context())
 			if err != nil {
 				return err
@@ -255,6 +248,8 @@ func newTestCommand(configPath *string) *cobra.Command {
 			}
 		},
 	}
+	tunnel.Flags().StringVar(&probeRuntimeDir, "runtime-dir", linux.DefaultRuntimeDir,
+		"tmpfs directory the agent writes tunnel management sockets to")
 	command.AddCommand(tunnel)
 	return command
 }
@@ -288,13 +283,13 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			canary := linux.Canary{Egress: linux.Egress{SecretsDir: "/run/vpn-hub"}}
+			canary := linux.Canary{Egress: linux.Egress{SecretsDir: linux.DefaultRuntimeDir}}
 
 			chosen, rejected, err := application.SubscriptionRefresher{
 				Fetch: health.HTTPSSubscriptionFetcher{},
 				Parse: linux.ParseSubscription,
 				Prove: func(ctx context.Context, list []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
-					return canary.SelectCandidate(ctx, list, uplink)
+					return canary.SelectCandidate(ctx, list, uplink, nil)
 				},
 				Store: linux.UpstreamFile{Dir: configDir},
 			}.Refresh(cmd.Context(), subject)
@@ -312,7 +307,7 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 			return err
 		},
 	}
-	refresh.Flags().StringVar(&configDir, "config-dir", "/etc/vpn-hub", "directory holding upstream configurations")
+	refresh.Flags().StringVar(&configDir, "config-dir", DefaultConfigDir, "directory holding upstream configurations")
 
 	var restoreConfigDir string
 	restore := &cobra.Command{
@@ -332,7 +327,7 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 			return err
 		},
 	}
-	restore.Flags().StringVar(&restoreConfigDir, "config-dir", "/etc/vpn-hub", "directory holding upstream configurations")
+	restore.Flags().StringVar(&restoreConfigDir, "config-dir", DefaultConfigDir, "directory holding upstream configurations")
 
 	command.AddCommand(refresh, restore)
 	return command
@@ -382,6 +377,9 @@ func newDeviceCommand(configPath *string) *cobra.Command {
 	return command
 }
 
+// newService builds the operator-facing service for commands that only validate
+// and compile. Those never probe, so the runtime directory they would probe in is
+// the default; `tunnel test` is the one command that does, and it takes a flag.
 func newService(configPath, stateDir string) application.Service {
-	return wiring.Service(configPath, stateDir)
+	return wiring.Service(configPath, stateDir, linux.DefaultRuntimeDir)
 }

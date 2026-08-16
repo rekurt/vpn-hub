@@ -166,9 +166,9 @@ func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args 
 	if target == current {
 		return result{toast: "Уже так"}
 	}
-	release, busyWith, ok := b.gate.Acquire("смена egress " + deviceID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("смена egress " + deviceID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -178,9 +178,11 @@ func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args 
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.SetDeviceField(deviceID, "egress", current)
+		view := revertEdit("Изменение отменено, конфигурация не проходит проверку", err, func() error {
+			return b.Editor.SetDeviceField(deviceID, "egress", current)
+		})
 		return b.show(ctx, cb, screen{
-			text:   fmt.Sprintf("↩️ Изменение отменено, конфигурация не проходит проверку:\n<code>%s</code>", esc(err.Error())),
+			text:   view.text,
 			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К устройству", "dev:c:"+deviceID)}),
 		})
 	}
@@ -334,10 +336,22 @@ func nextFreeAddress(cfg domain.Config) string {
 		if used[address.String()] {
 			continue
 		}
+		candidate := address.String() + "/32"
 		if address.Is6() {
-			return address.String() + "/128"
+			candidate = address.String() + "/128"
 		}
-		return address.String() + "/32"
+		// Asked of the same rule the deploy will apply, rather than repeated here.
+		// The addresses a prefix cannot hand out -- its broadcast address, which the
+		// hub's ingress interface makes broadcast on the link -- are a property of
+		// the subnet, not of this screen, and an allocator that disagreed with
+		// validation would offer a device the deploy then refuses to take.
+		//
+		// Ascending, so the first refusal past the last usable address ends the
+		// search: nothing above it can be free.
+		if err := application.ValidateProfileAddress(candidate, cfg.Hub.ClientCIDR); err != nil {
+			return ""
+		}
+		return candidate
 	}
 	return ""
 }
@@ -349,9 +363,9 @@ func (b *Bot) finishDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, egress 
 	}
 	deviceID, address := dialog.data["id"], dialog.data["address"]
 
-	release, busyWith, ok := b.gate.Acquire("добавление устройства " + deviceID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("добавление устройства " + deviceID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -369,13 +383,14 @@ func (b *Bot) finishDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, egress 
 	if err := b.Editor.AddDevice(deviceID, address, publicKey, egress); err != nil {
 		return b.show(ctx, cb, renderFailure("устройство не добавилось", err))
 	}
+	undoAdd := func() error { return b.Editor.RemoveDevice(deviceID) }
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.RemoveDevice(deviceID)
-		return b.show(ctx, cb, renderFailure("отменено: конфигурация с новым устройством не проходит проверку", err))
+		return b.show(ctx, cb, revertEdit(
+			"отменено: конфигурация с новым устройством не проходит проверку", err, undoAdd))
 	}
 	if err := b.saveProfileKey(ctx, deviceID, privateKey); err != nil {
-		_ = b.Editor.RemoveDevice(deviceID)
-		return b.show(ctx, cb, renderFailure("устройство отменено: ключ профиля не сохранился", err))
+		return b.show(ctx, cb, revertEdit(
+			"устройство отменено: ключ профиля не сохранился", err, undoAdd))
 	}
 	b.dialogs.clear()
 
@@ -398,9 +413,9 @@ func (b *Bot) saveProfileKey(ctx context.Context, deviceID, privateKey string) e
 // profile issued before key storage was introduced cannot be reconstructed, so the
 // operator gets an explicit, safe reissue path instead of a different profile.
 func (b *Bot) sendCurrentProfile(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busyWith, ok := b.gate.Acquire("отправка профиля " + deviceID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("отправка профиля " + deviceID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -471,15 +486,89 @@ func (b *Bot) sendProfile(ctx context.Context, hub domain.Hub, deviceID, address
 		"Сканировать в приложении AmneziaWG"); err != nil {
 		b.logf("sendPhoto: %v", err)
 	}
+	b.sendFallbackProfiles(ctx, hub, deviceID, address, privateKey)
 	return nil
+}
+
+// sendFallbackProfiles delivers the alternative ways in, when they are configured.
+//
+// Every failure here is reported and stepped over: the ordinary profile has
+// already been delivered, and a device that cannot use the fallback is still a
+// device that works everywhere the fallback is not needed.
+// fallbackFailed says a way in was not delivered, in the chat rather than the
+// journal.
+//
+// The distinction matters more here than it looks: the ordinary profile arrives
+// either way, so the screen reads as success, and an operator who was never told
+// otherwise hands over a device believing it can also come in on 443. They find
+// out on the network where that was the point -- which is the one place the
+// journal is not.
+func (b *Bot) fallbackFailed(ctx context.Context, way string, err error) {
+	b.logf("%s fallback: %v", way, err)
+	b.send(ctx, "⚠️ Запасной вход <b>"+way+"</b> включён, но выдать его не удалось: <code>"+
+		esc(err.Error())+"</code>\nУстройство работает обычным профилем.", nil)
+}
+
+func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID, address, privateKey string) {
+	if hub.Fallback.UDP443 {
+		if profile, err := runtimeadapter.AltPortProfile(hub, address, privateKey); err != nil {
+			b.fallbackFailed(ctx, "UDP/443", err)
+		} else if _, err := b.API.SendDocument(ctx, b.Cfg.AdminID,
+			runtimeadapter.RealityProfileName(deviceID), []byte(profile),
+			"Запасной профиль на <b>UDP/443</b> — для сетей, где режут порт 51820. "+
+				"Тот же профиль, другой порт."); err != nil {
+			b.fallbackFailed(ctx, "UDP/443", err)
+		}
+	}
+
+	if !hub.Fallback.Reality.Enabled {
+		return
+	}
+	privateRealityKey, err := b.RealityKey.PrivateKey(ctx)
+	if err != nil {
+		b.fallbackFailed(ctx, "TCP/443", err)
+		return
+	}
+	publicKey, err := domain.RealityPublicKey(privateRealityKey)
+	if err != nil {
+		b.fallbackFailed(ctx, "TCP/443", err)
+		return
+	}
+	// Derived from the device's public half, so a re-issued profile carries a new
+	// fallback credential too. The private key is what this function was handed;
+	// the hub itself only ever stores the public one.
+	devicePublicKey, err := domain.PublicKeyFromPrivate(privateKey)
+	if err != nil {
+		b.fallbackFailed(ctx, "TCP/443", err)
+		return
+	}
+	uuid, err := domain.RealityUserUUID(privateRealityKey, deviceID, devicePublicKey)
+	if err != nil {
+		b.fallbackFailed(ctx, "TCP/443", err)
+		return
+	}
+	link, err := runtimeadapter.RealityProfileRenderer{}.Link(hub, deviceID, uuid, publicKey)
+	if err != nil {
+		b.fallbackFailed(ctx, "TCP/443", err)
+		return
+	}
+
+	b.send(ctx, "🛡 Запасной вход по <b>TCP/443</b> — для сетей, где UDP не проходит вовсе. "+
+		"Импортировать в v2rayNG, Hiddify или sing-box:\n\n<code>"+esc(link)+"</code>", nil)
+	if image, err := b.QR.PNG(ctx, link); err != nil {
+		b.logf("reality qr: %v", err)
+	} else if _, err := b.API.SendPhoto(ctx, b.Cfg.AdminID, deviceID+"-reality.png", image,
+		"Сканировать в прокси-клиенте"); err != nil {
+		b.logf("sendPhoto: %v", err)
+	}
 }
 
 // --- reissue / revoke ------------------------------------------------------
 
 func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busyWith, ok := b.gate.Acquire("перевыпуск профиля " + deviceID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("перевыпуск профиля " + deviceID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -504,13 +593,14 @@ func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID 
 	if err := b.Editor.SetDeviceField(deviceID, "public_key", publicKey); err != nil {
 		return b.show(ctx, cb, renderFailure("ключ не записался", err))
 	}
+	undoKey := func() error {
+		return b.Editor.SetDeviceField(deviceID, "public_key", device.PublicKey)
+	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.SetDeviceField(deviceID, "public_key", device.PublicKey)
-		return b.show(ctx, cb, renderFailure("отменено: конфигурация не проходит проверку", err))
+		return b.show(ctx, cb, revertEdit("отменено: конфигурация не проходит проверку", err, undoKey))
 	}
 	if err := b.saveProfileKey(ctx, deviceID, privateKey); err != nil {
-		_ = b.Editor.SetDeviceField(deviceID, "public_key", device.PublicKey)
-		return b.show(ctx, cb, renderFailure("отменено: ключ профиля не сохранился", err))
+		return b.show(ctx, cb, revertEdit("отменено: ключ профиля не сохранился", err, undoKey))
 	}
 	// A re-issued device is meant to work again: lifting the revocation is part of
 	// the same operation, not a separate thing to remember.
@@ -528,9 +618,9 @@ func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID 
 }
 
 func (b *Bot) revokeDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busyWith, ok := b.gate.Acquire("отзыв устройства " + deviceID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("отзыв устройства " + deviceID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 

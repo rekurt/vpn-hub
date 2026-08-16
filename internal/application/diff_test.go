@@ -45,7 +45,7 @@ func converged(t *testing.T) (domain.IngressSpec, domain.ObservedState) {
 func TestConvergedHostReportsNothing(t *testing.T) {
 	t.Parallel()
 	spec, observed := converged(t)
-	if operations := Diff(spec, wantedRevision, observed); len(operations) != 0 {
+	if operations := Diff(spec, wantedRevision, "", observed); len(operations) != 0 {
 		t.Fatalf("a converged host must produce no operations, got %v", operations)
 	}
 }
@@ -100,7 +100,7 @@ func TestDiff(t *testing.T) {
 			spec, observed := converged(t)
 			test.mutate(&spec, &observed)
 
-			operations := Diff(spec, wantedRevision, observed)
+			operations := Diff(spec, wantedRevision, "", observed)
 			var found *domain.Operation
 			for index := range operations {
 				if operations[index].Resource.Type == test.resource {
@@ -126,7 +126,7 @@ func TestEveryOperationExplainsItself(t *testing.T) {
 	t.Parallel()
 	spec, _ := converged(t)
 	// Nothing on the host at all: no table, no interface, no peers.
-	operations := Diff(spec, wantedRevision, domain.ObservedState{})
+	operations := Diff(spec, wantedRevision, "", domain.ObservedState{})
 	if len(operations) == 0 {
 		t.Fatal("an empty host must produce operations")
 	}
@@ -148,7 +148,7 @@ func TestPeerOperationsDoNotPrintWholeKeys(t *testing.T) {
 	fullKey := spec.Peers[0].PublicKey
 	observed.Ingress.Peers = nil
 
-	for _, operation := range Diff(spec, wantedRevision, observed) {
+	for _, operation := range Diff(spec, wantedRevision, "", observed) {
 		if strings.Contains(operation.Resource.ID, fullKey) {
 			t.Fatalf("the whole peer key reached the operation: %s", operation.Resource.ID)
 		}
@@ -167,9 +167,9 @@ func TestDiffIsDeterministic(t *testing.T) {
 		})
 	}
 
-	first := Diff(spec, wantedRevision, observed)
+	first := Diff(spec, wantedRevision, "", observed)
 	for range 5 {
-		if got := Diff(spec, wantedRevision, observed); !sameOperations(first, got) {
+		if got := Diff(spec, wantedRevision, "", observed); !sameOperations(first, got) {
 			t.Fatal("Diff returned a different order for the same input")
 		}
 	}

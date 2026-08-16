@@ -83,17 +83,14 @@ type Dnsmasq struct {
 }
 
 func (d Dnsmasq) run(ctx context.Context, name string, args ...string) (string, error) {
-	if d.Run != nil {
-		return d.Run(ctx, name, args...)
-	}
-	return execRunner(ctx, name, args...)
+	return d.Run.or()(ctx, name, args...)
 }
 
 func (d Dnsmasq) configDir() string {
 	if d.ConfigDir != "" {
 		return d.ConfigDir
 	}
-	return "/run/vpn-hub"
+	return DefaultRuntimeDir
 }
 
 func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan, repopulate bool) error {

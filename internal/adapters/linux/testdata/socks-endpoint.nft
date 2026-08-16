@@ -6,7 +6,7 @@ table inet vpn_hub
 delete table inet vpn_hub
 
 table inet vpn_hub {
-	comment "vpn-hub:610d92d1484cafed"
+	comment "vpn-hub:52f8bdfa0b445b70"
 
 	set client_direct {
 		type ipv4_addr
@@ -37,11 +37,13 @@ table inet vpn_hub {
 	chain input {
 		type filter hook input priority filter; policy drop;
 		ct state established,related accept
+		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 udp dport 53 accept
+		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 tcp dport 53 accept
+		iif lo meta mark != 0x00000000 drop
 		iif lo accept
 		ip protocol icmp accept
 		tcp dport 22 accept
 		udp dport 51820 accept
-		tcp dport 443 accept
 		iifname "awg0" ip daddr 10.80.0.1 udp dport 53 accept
 		iifname "awg0" ip daddr 10.80.0.1 tcp dport 53 accept
 	}

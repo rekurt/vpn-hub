@@ -66,6 +66,17 @@ func TestValidateRejects(t *testing.T) {
 		"profile address that is not a host route": {
 			func(c *domain.Config) { c.Devices[0].Address = "10.80.0.0/24" }, "must be a host route",
 		},
+		// Inside the subnet and a host route, so the two checks above pass it. The hub
+		// carries the whole prefix on its ingress interface, which makes the last
+		// address broadcast on that link -- a device given it has traffic that half
+		// works. `hubctl device add --address` and a hand-edited hub.yaml both reach
+		// this field without passing the bot's allocator, so this is where it is caught.
+		"profile address that is the subnet's broadcast address": {
+			func(c *domain.Config) { c.Devices[0].Address = "10.80.0.255/32" }, "broadcast address",
+		},
+		"profile address that is the network address": {
+			func(c *domain.Config) { c.Devices[0].Address = "10.80.0.0/32" }, "network address",
+		},
 		"device id with unsafe characters": {
 			func(c *domain.Config) { c.Devices[0].ID = "mac book" }, "device id",
 		},

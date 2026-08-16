@@ -41,17 +41,23 @@ resource "digitalocean_firewall" "hub" {
     source_addresses = ["0.0.0.0/0"]
   }
 
-  # Kept alongside the primary port for mobile networks that block or throttle
-  # conventional WireGuard traffic. The host DNATs it to the ingress socket.
+  # Both 443 rules serve the ingress fallbacks, and both stay open here whether or
+  # not a hub uses them: this cloud firewall is the coarse outer layer, and the
+  # actual switch is `hub.fallback` in hub.yaml, which decides whether the host
+  # accepts on the port at all. Gating them here too would only give the same
+  # decision two places to disagree, and a `tofu apply` would become part of
+  # turning a fallback on.
+  #
+  # UDP/443 for networks that block the ingress port specifically; the host
+  # redirects it to the ingress socket.
   inbound_rule {
     protocol         = "udp"
     port_range       = "443"
     source_addresses = ["0.0.0.0/0"]
   }
 
-  # A TCP/443 fallback is deliberately separate from AmneziaWG.  Reality makes
-  # its TLS handshake look like an ordinary HTTPS connection on networks that
-  # discard or shape every UDP flow.
+  # TCP/443 for networks that discard UDP entirely. REALITY makes the handshake
+  # look like an ordinary HTTPS connection to a real site.
   inbound_rule {
     protocol         = "tcp"
     port_range       = "443"

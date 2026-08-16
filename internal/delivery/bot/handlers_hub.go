@@ -142,9 +142,8 @@ func (b *Bot) handleHubEditInput(ctx context.Context, dialog *dialog, text strin
 	}
 	b.dialogs.clear()
 
-	release, busyWith, ok := b.gate.Acquire("правка хаба: " + field)
-	if !ok {
-		b.send(ctx, "⏳ Занято: "+esc(busyWith)+". Повторите позже.", nil)
+	release := b.claimForDialog(ctx, "правка хаба: "+field)
+	if release == nil {
 		return
 	}
 	defer release()
@@ -165,8 +164,9 @@ func (b *Bot) handleHubEditInput(ctx context.Context, dialog *dialog, text strin
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.SetHubField(field, previous)
-		b.sendScreen(ctx, renderFailure("отменено: конфигурация не проходит проверку", err))
+		b.sendScreen(ctx, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+			return b.Editor.SetHubField(field, previous)
+		}))
 		return
 	}
 	b.sendScreen(ctx, screen{
@@ -198,9 +198,8 @@ func (b *Bot) handleAWGSetInput(ctx context.Context, _ *dialog, text string) {
 	}
 	b.dialogs.clear()
 
-	release, busyWith, ok := b.gate.Acquire("правка AWG-параметра " + canonical)
-	if !ok {
-		b.send(ctx, "⏳ Занято: "+esc(busyWith)+". Повторите позже.", nil)
+	release := b.claimForDialog(ctx, "правка AWG-параметра "+canonical)
+	if release == nil {
 		return
 	}
 	defer release()
@@ -219,12 +218,12 @@ func (b *Bot) handleAWGSetInput(ctx context.Context, _ *dialog, text string) {
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		if existed {
-			_ = b.Editor.SetHubMapField("awg_interface", key, previous)
-		} else {
-			_ = b.Editor.RemoveHubMapField("awg_interface", key)
-		}
-		b.sendScreen(ctx, renderFailure("отменено: конфигурация не проходит проверку", err))
+		b.sendScreen(ctx, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+			if existed {
+				return b.Editor.SetHubMapField("awg_interface", key, previous)
+			}
+			return b.Editor.RemoveHubMapField("awg_interface", key)
+		}))
 		return
 	}
 	b.sendScreen(ctx, b.afterHubChange(fmt.Sprintf("✅ <code>%s = %s</code> записан.", esc(canonical), esc(value))))
@@ -242,9 +241,9 @@ func (b *Bot) afterHubChange(text string) screen {
 }
 
 func (b *Bot) removeAWGParameter(ctx context.Context, cb *tg.CallbackQuery, key string) result {
-	release, busyWith, ok := b.gate.Acquire("удаление AWG-параметра " + key)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("удаление AWG-параметра " + key)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -261,8 +260,9 @@ func (b *Bot) removeAWGParameter(ctx context.Context, cb *tg.CallbackQuery, key 
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.SetHubMapField("awg_interface", key, previous)
-		return b.show(ctx, cb, renderFailure("отменено: конфигурация не проходит проверку", err))
+		return b.show(ctx, cb, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+			return b.Editor.SetHubMapField("awg_interface", key, previous)
+		}))
 	}
 	outcome := b.show(ctx, cb, b.buildHub(ctx))
 	name, _ := domain.CanonicalAWGParameter(key)
@@ -289,9 +289,9 @@ func (b *Bot) routeKeyRotation(ctx context.Context, cb *tg.CallbackQuery, args [
 		return result{toast: "Не понимаю эту кнопку"}
 	}
 
-	release, busyWith, ok := b.gate.Acquire("ротация ключа хаба")
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("ротация ключа хаба")
+	if busy != nil {
+		return *busy
 	}
 
 	progress, err := b.API.SendMessage(ctx, b.Cfg.AdminID, "🔑 Ротация: генерирую новый ключ…", nil)
@@ -504,9 +504,8 @@ func (b *Bot) handleProbeSetInput(ctx context.Context, dialog *dialog, text stri
 	}
 	b.dialogs.clear()
 
-	release, busyWith, ok := b.gate.Acquire("проба " + title + " у " + tunnelID)
-	if !ok {
-		b.send(ctx, "⏳ Занято: "+esc(busyWith)+". Повторите позже.", nil)
+	release := b.claimForDialog(ctx, "проба "+title+" у "+tunnelID)
+	if release == nil {
 		return
 	}
 	defer release()
@@ -516,8 +515,9 @@ func (b *Bot) handleProbeSetInput(ctx context.Context, dialog *dialog, text stri
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.RemoveTunnelMapField(tunnelID, "health", field)
-		b.sendScreen(ctx, renderFailure("отменено: конфигурация не проходит проверку", err))
+		b.sendScreen(ctx, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+			return b.Editor.RemoveTunnelMapField(tunnelID, "health", field)
+		}))
 		return
 	}
 	b.sendScreen(ctx, b.buildProbes(ctx, tunnelID))
@@ -528,9 +528,9 @@ func (b *Bot) removeProbe(ctx context.Context, cb *tg.CallbackQuery, tunnelID, k
 	if !ok {
 		return result{toast: "Не понимаю вид пробы"}
 	}
-	release, busyWith, ok := b.gate.Acquire("удаление пробы " + title + " у " + tunnelID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("удаление пробы " + title + " у " + tunnelID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -551,10 +551,13 @@ func (b *Bot) removeProbe(ctx context.Context, cb *tg.CallbackQuery, tunnelID, k
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		if previous != "" {
-			_ = b.Editor.SetTunnelMapField(tunnelID, "health", field, previous)
-		}
-		return b.show(ctx, cb, renderFailure("отменено: удаление пробы сделало конфигурацию невалидной", err))
+		return b.show(ctx, cb, revertEdit("отменено: удаление пробы сделало конфигурацию невалидной", err, func() error {
+			if previous == "" {
+				// Nothing to put back: the probe had no value to begin with.
+				return nil
+			}
+			return b.Editor.SetTunnelMapField(tunnelID, "health", field, previous)
+		}))
 	}
 	outcome := b.show(ctx, cb, b.buildProbes(ctx, tunnelID))
 	outcome.toast = "Удалена " + title + "-проба"

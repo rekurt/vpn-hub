@@ -6,7 +6,7 @@ table inet vpn_hub
 delete table inet vpn_hub
 
 table inet vpn_hub {
-	comment "vpn-hub:296d2a437dff7533"
+	comment "vpn-hub:dafdfff08b5ea39f"
 
 	set client_direct {
 		type ipv4_addr
@@ -55,23 +55,28 @@ table inet vpn_hub {
 	chain input {
 		type filter hook input priority filter; policy drop;
 		ct state established,related accept
+		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 udp dport 53 accept
+		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 tcp dport 53 accept
+		iif lo meta mark != 0x00000000 drop
 		iif lo accept
 		ip protocol icmp accept
 		tcp dport 22 accept
 		udp dport 51820 accept
-		tcp dport 443 accept
 		iifname "awg0" ip daddr 10.80.0.1 udp dport 53 accept
 		iifname "awg0" ip daddr 10.80.0.1 tcp dport 53 accept
 	}
 
 	chain output_mark {
 		type route hook output priority mangle; policy accept;
+		meta mark != 0x00000000 return
 		ip daddr @internal_corp_a meta mark set 0x00000102
 	}
 
 	chain output {
 		type filter hook output priority filter; policy accept;
 		meta nfproto ipv6 drop
+		meta mark 0x00000101 oifname != "vh-provider-nl" drop
+		meta mark 0x00000102 oifname != "vh-corp-a" drop
 	}
 
 	chain prerouting_nat {

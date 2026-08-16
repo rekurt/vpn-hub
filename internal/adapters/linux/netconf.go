@@ -37,10 +37,7 @@ type NetConf struct {
 }
 
 func (n NetConf) run(ctx context.Context, name string, args ...string) (string, error) {
-	if n.Run != nil {
-		return n.Run(ctx, name, args...)
-	}
-	return execRunner(ctx, name, args...)
+	return n.Run.or()(ctx, name, args...)
 }
 
 func (n NetConf) UplinkInterface(ctx context.Context) (string, error) {

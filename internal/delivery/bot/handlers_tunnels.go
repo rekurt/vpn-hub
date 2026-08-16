@@ -124,9 +124,9 @@ func (b *Bot) toggleTunnel(ctx context.Context, cb *tg.CallbackQuery, tunnelID s
 	if enable {
 		name = "включение туннеля "
 	}
-	release, busyWith, ok := b.gate.Acquire(name + tunnelID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim(name + tunnelID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -134,11 +134,11 @@ func (b *Bot) toggleTunnel(ctx context.Context, cb *tg.CallbackQuery, tunnelID s
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		_ = b.Editor.SetTunnelField(tunnelID, "enabled", fmt.Sprint(!enable))
-		return b.show(ctx, cb, screen{
-			text:   "↩️ Отменено, конфигурация не проходит проверку:\n<code>" + esc(err.Error()) + "</code>",
-			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID)}),
+		view := revertEdit("Отменено, конфигурация не проходит проверку", err, func() error {
+			return b.Editor.SetTunnelField(tunnelID, "enabled", fmt.Sprint(!enable))
 		})
+		view.markup = keyboard([]tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID)})
+		return b.show(ctx, cb, view)
 	}
 	state := "выключен"
 	if enable {
@@ -153,9 +153,9 @@ func (b *Bot) toggleTunnel(ctx context.Context, cb *tg.CallbackQuery, tunnelID s
 // that was written but no longer validates is reported rather than silently left to
 // fail at deploy.
 func (b *Bot) editTunnelList(ctx context.Context, cb *tg.CallbackQuery, tunnelID, field, value string, add bool) result {
-	release, busyWith, ok := b.gate.Acquire("правка " + field + " у " + tunnelID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("правка " + field + " у " + tunnelID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -302,9 +302,9 @@ func (b *Bot) buildAccess(ctx context.Context, tunnelID string) screen {
 // resulting config no longer validates -- excluding the only device that uses this
 // egress is exactly the mistake validation exists to catch.
 func (b *Bot) toggleAccess(ctx context.Context, cb *tg.CallbackQuery, tunnelID, deviceID string) result {
-	release, busyWith, ok := b.gate.Acquire("доступ к " + tunnelID)
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("доступ к " + tunnelID)
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -332,13 +332,14 @@ func (b *Bot) toggleAccess(ctx context.Context, cb *tg.CallbackQuery, tunnelID, 
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		if allowed {
-			_ = b.Editor.AppendListItem(tunnelID, "allowed_devices", deviceID)
-		} else {
-			_ = b.Editor.RemoveListItem(tunnelID, "allowed_devices", deviceID)
-		}
+		view := revertEdit("Отменено, конфигурация не проходит проверку", err, func() error {
+			if allowed {
+				return b.Editor.AppendListItem(tunnelID, "allowed_devices", deviceID)
+			}
+			return b.Editor.RemoveListItem(tunnelID, "allowed_devices", deviceID)
+		})
 		return b.show(ctx, cb, screen{
-			text:   "↩️ Отменено, конфигурация не проходит проверку:\n<code>" + esc(err.Error()) + "</code>",
+			text:   view.text,
 			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К доступу", "tun:ac:"+tunnelID)}),
 		})
 	}

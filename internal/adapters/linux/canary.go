@@ -2,6 +2,7 @@ package linux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,10 +34,7 @@ type Canary struct {
 }
 
 func (c Canary) run(ctx context.Context, name string, args ...string) (string, error) {
-	if c.Run != nil {
-		return c.Run(ctx, name, args...)
-	}
-	return execRunner(ctx, name, args...)
+	return c.Run.or()(ctx, name, args...)
 }
 
 func (c Canary) probe() string {
@@ -75,7 +73,7 @@ func (c Canary) Try(ctx context.Context, candidate domain.ProxyTunnel, uplink st
 	return c.try(ctx, candidate, uplink)
 }
 
-func (c Canary) try(ctx context.Context, candidate domain.ProxyTunnel, uplink string) error {
+func (c Canary) try(ctx context.Context, candidate domain.ProxyTunnel, uplink string) (err error) {
 	spec := domain.EgressSpec{
 		TunnelID:  "canary",
 		Namespace: canaryNamespace,
@@ -92,8 +90,28 @@ func (c Canary) try(ctx context.Context, candidate domain.ProxyTunnel, uplink st
 	}
 
 	defer func() {
-		// Torn down whatever happened: a candidate that failed must not leave a
-		// namespace behind for the next attempt to trip over.
+		// The firewall hole goes first, and on a deadline of its own.
+		//
+		// It is the one piece of this teardown that nothing else ever cleans up: a
+		// leaked vpn_hub_canary table keeps an accept and a masquerade hooked into
+		// forward/postrouting, and the agent only replaces its own inet vpn_hub
+		// table. Sharing one budget with the steps above it meant a namespace
+		// deletion that hung could eat the whole timeout and leave the hole open
+		// with the context already cancelled.
+		discard, cancelDiscard := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancelDiscard()
+		// Reported through the named return, and joined rather than preferred: a
+		// candidate that carried traffic is of no use if proving it left a hole
+		// open, and one that failed does not make the hole less open. Keeping only
+		// the first error hid the leak in exactly the case it matters most -- a
+		// rejected candidate, where the ordinary "did not carry traffic" would be
+		// the whole of what the operator saw.
+		if discardErr := c.Discard(discard); discardErr != nil {
+			err = errors.Join(err, discardErr)
+		}
+
+		// Then the rest: a candidate that failed must not leave a namespace behind
+		// for the next attempt to trip over.
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		_, _ = c.run(cleanup, "systemctl", "stop", "vpn-hub-proxy-canary.service")
@@ -143,10 +161,24 @@ table inet vpn_hub_canary {
 	return err
 }
 
-// Discard removes the temporary ruleset once no candidate is being tried.
-func (c Canary) Discard(ctx context.Context) {
-	_, _ = c.run(ctx, "nft", "delete", "table", "inet", "vpn_hub_canary")
+// Discard removes the temporary ruleset. Every path through try runs it, so a
+// caller never needs to; it stays exported for callers that want to sweep up
+// after an interrupted run from a previous process.
+//
+// A table that was never created is not a failure -- most tries end that way when
+// the candidate died before the ruleset went in. Anything else is: the hole it
+// leaves is hooked into forward and postrouting, no reconcile removes it, and
+// reporting a candidate as proven while it is still open would trade a working
+// upstream for a permanent gap nobody is looking for.
+func (c Canary) Discard(ctx context.Context) error {
 	_ = os.Remove(filepath.Join(c.Egress.secretsDir(), "canary.nft"))
+	if _, err := c.run(ctx, "nft", "delete", "table", "inet", "vpn_hub_canary"); err != nil {
+		if strings.Contains(err.Error(), "No such file or directory") {
+			return nil
+		}
+		return fmt.Errorf("remove the canary firewall table: %w", err)
+	}
+	return nil
 }
 
 // peerVethName mirrors the application layer's choice so a canary namespace looks
@@ -156,8 +188,10 @@ const peerVethName = "uplink0"
 // SelectCandidate tries candidates in order and returns the first that carries
 // traffic, with the reasons the others were rejected. The lock is held across the
 // whole selection, not per candidate: interleaving two selections would still
-// thrash the shared namespace between them.
-func (c Canary) SelectCandidate(ctx context.Context, candidates []domain.ProxyTunnel, uplink string) (domain.ProxyTunnel, []string, error) {
+// thrash the shared namespace between them. progress, when non-nil, is called
+// before each attempt with the 1-based index, the total and the rejections so far.
+func (c Canary) SelectCandidate(ctx context.Context, candidates []domain.ProxyTunnel, uplink string,
+	progress func(tried, total int, rejected []string)) (domain.ProxyTunnel, []string, error) {
 	release, err := c.lock()
 	if err != nil {
 		return domain.ProxyTunnel{}, nil, err
@@ -165,10 +199,12 @@ func (c Canary) SelectCandidate(ctx context.Context, candidates []domain.ProxyTu
 	defer release()
 
 	var reasons []string
-	for _, candidate := range candidates {
+	for index, candidate := range candidates {
+		if progress != nil {
+			progress(index+1, len(candidates), reasons)
+		}
 		err := c.try(ctx, candidate, uplink)
 		if err == nil {
-			c.Discard(ctx)
 			return candidate, reasons, nil
 		}
 		reasons = append(reasons, fmt.Sprintf("%s:%d: %v", candidate.Server, candidate.Port, err))
@@ -176,7 +212,6 @@ func (c Canary) SelectCandidate(ctx context.Context, candidates []domain.ProxyTu
 			break
 		}
 	}
-	c.Discard(ctx)
 	return domain.ProxyTunnel{}, reasons, fmt.Errorf("no candidate carried traffic:\n  %s",
 		strings.Join(reasons, "\n  "))
 }

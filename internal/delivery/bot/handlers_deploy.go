@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -11,19 +12,20 @@ import (
 	"vpn-hub/internal/domain"
 )
 
+// deployment is the shared pipeline `hubctl deploy` drives too; building it here
+// keeps the Bot struct free of one more field.
+func (b *Bot) deployment() application.Deployment {
+	return application.Deployment{
+		Service:       b.Service,
+		Revocations:   b.Revocations,
+		Confirmations: b.Confirmations,
+	}
+}
+
 // compileNext runs the same pipeline as `hubctl deploy`: validate, drop revoked
 // devices, compile the revision.
 func (b *Bot) compileNext(ctx context.Context) (domain.DesiredState, []string, error) {
-	cfg, err := b.Service.LoadAndValidate(ctx)
-	if err != nil {
-		return domain.DesiredState{}, nil, err
-	}
-	revoked, err := b.Revocations.Load(ctx)
-	if err != nil {
-		return domain.DesiredState{}, nil, err
-	}
-	state, err := b.Service.BuildDesiredState(application.RemoveRevoked(cfg, revoked))
-	return state, revoked, err
+	return b.deployment().Compile(ctx)
 }
 
 func (b *Bot) buildDeployPreview(ctx context.Context) screen {
@@ -84,9 +86,9 @@ func (b *Bot) routeDeploy(ctx context.Context, cb *tg.CallbackQuery, action stri
 
 // applyDeploy is `hubctl deploy --dry-run=false [--confirm-within N]` in-process.
 func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRevision string, confirmWithin time.Duration) result {
-	release, busyWith, ok := b.gate.Acquire("деплой")
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("деплой")
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -104,21 +106,15 @@ func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRev
 	}
 
 	b.self.mark(b.Now())
-	armed := false
-	if confirmWithin > 0 {
-		if armed, err = b.Confirmations.Arm(ctx, confirmWithin, state.Revision); err != nil {
-			return b.show(ctx, cb, renderFailure("страховка не взвелась", err))
-		}
-	}
-	if err := b.Service.Save(ctx, state); err != nil {
-		// Arm ran but Save did not: a pending confirmation now points at a revision
-		// that was never written, and the agent would "roll back" to the already
-		// active one at the deadline. Clear it so nothing is armed over nothing.
-		if armed {
-			_ = b.Confirmations.Confirm()
+	applied, err := b.deployment().Apply(ctx, state, confirmWithin)
+	if err != nil {
+		var stage application.DeployError
+		if errors.As(err, &stage) && stage.Stage == application.DeployStageArm {
+			return b.show(ctx, cb, renderFailure("страховка не взвелась", stage.Err))
 		}
 		return b.show(ctx, cb, renderFailure("ревизия не сохранилась", err))
 	}
+	armed := applied.Armed
 
 	switch {
 	case confirmWithin > 0 && !armed:
@@ -147,9 +143,9 @@ func (b *Bot) confirmDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
 	// Serialize with the other confirmation-state mutators (rollback, scheduled
 	// refresh) through the same gate rollbackDeploy takes: both write Confirmations,
 	// and confirming while a rollback is in flight must not race.
-	release, busyWith, ok := b.gate.Acquire("подтверждение")
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("подтверждение")
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 
@@ -174,9 +170,9 @@ func (b *Bot) confirmDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
 }
 
 func (b *Bot) rollbackDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
-	release, busyWith, ok := b.gate.Acquire("откат")
-	if !ok {
-		return busyResult(busyWith)
+	release, busy := b.claim("откат")
+	if busy != nil {
+		return *busy
 	}
 	defer release()
 

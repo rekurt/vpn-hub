@@ -12,6 +12,27 @@ hub:
     Jc: "4"
     Jmin: "64"
     Jmax: "256"
+  # Alternative ways in, for networks that block the ordinary UDP ingress. Both are
+  # off unless stated here: each opens a port on the hub, and a listener nobody
+  # asked for is attack surface rather than a feature.
+  fallback:
+    # Redirects UDP/443 arriving on the uplink to the ingress port, for networks
+    # that block UDP/51820 by port rather than discarding UDP as such. The client
+    # keeps its ordinary profile with the endpoint port changed; the bot issues that
+    # second profile alongside the first.
+    udp443: false
+    # A TCP/443 VLESS listener for networks that discard UDP entirely. Clients are
+    # proxy applications (v2rayNG, Hiddify, sing-box), not AmneziaWG peers, and the
+    # bot hands out a vless:// link and QR code beside the usual profile.
+    #
+    # Needs a key: `hubctl keygen --reality` writes /etc/vpn-hub/reality.key.
+    # Rotating it invalidates every link already issued.
+    reality:
+      enabled: false
+      # The real TLS 1.3 site the handshake mimics, and which unauthenticated
+      # connections are handed to. Pick somewhere plausible for this hub to talk to
+      # and unrelated to it; it must not be the hub's own name.
+      server_name: "www.example.com"
 
 # One connection reaches everything: `egress` names the internet path, and the
 # private networks below are reached in addition to it, chosen by destination.
