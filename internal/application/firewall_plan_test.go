@@ -238,3 +238,21 @@ func TestDisabledEgressGetsNoGroup(t *testing.T) {
 		}
 	}
 }
+
+func TestClientACLsResolveDeviceIDs(t *testing.T) {
+	t.Parallel()
+	state := planState()
+	state.ClientACLs = []domain.ClientACL{{Source: domain.ClientACLAny, Target: "phone", Protocol: domain.ClientACLTCP, Port: 22}}
+
+	plan, err := BuildFirewallPlan(state, "eth0")
+	if err != nil {
+		t.Fatalf("BuildFirewallPlan: %v", err)
+	}
+	if len(plan.ClientACLs) != 1 {
+		t.Fatalf("ClientACLs = %+v, want one", plan.ClientACLs)
+	}
+	acl := plan.ClientACLs[0]
+	if acl.SourceAddress != "" || acl.TargetAddress != "10.80.0.3" || acl.Protocol != domain.ClientACLTCP || acl.Port != 22 {
+		t.Fatalf("ACL = %+v, want any -> 10.80.0.3 tcp/22", acl)
+	}
+}

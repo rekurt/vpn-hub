@@ -311,3 +311,9 @@ func TestTunnelCardHidesSubscriptionURL(t *testing.T) {
 		t.Fatalf("the subscription URL leaked:\n%s", text)
 	}
 }
+
+func TestRenderClientACLs(t *testing.T) {
+	t.Parallel()
+	text, markup := renderClientACLs([]clientACLEntry{{Rule: domain.ClientACL{Source: "phone", Target: "macbook", Protocol: domain.ClientACLTCP, Port: 22}, Ordinal: 0}})
+	golden(t, "client_acls.golden", text, markup)
+}

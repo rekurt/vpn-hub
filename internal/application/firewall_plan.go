@@ -42,11 +42,13 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 	}
 
 	grouped := make(map[string][]string)
+	deviceAddresses := make(map[string]string, len(state.Devices))
 	for _, device := range state.Devices {
 		address, err := hostAddress(device.Address)
 		if err != nil {
 			return domain.FirewallPlan{}, fmt.Errorf("device %q: %w", device.ID, err)
 		}
+		deviceAddresses[device.ID] = address
 		grouped[device.Egress] = append(grouped[device.Egress], address)
 	}
 
@@ -73,6 +75,7 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 		DNSAddress:       state.Hub.DNSAddress,
 		AltUDP443:        state.Hub.Fallback.UDP443,
 		Internals:        nil, // filled below, once marks are allocated
+		ClientACLs:       clientPortACLs(state.ClientACLs, deviceAddresses),
 		Egresses:         make([]domain.EgressGroup, 0, len(grouped)),
 	}
 	if state.Hub.Fallback.Reality.Enabled {
@@ -130,6 +133,35 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 	plan.Internals = internalNetworks(state.Tunnels, nextMark, permitted, proxied)
 
 	return plan, nil
+}
+
+func clientPortACLs(rules []domain.ClientACL, addresses map[string]string) []domain.ClientPortACL {
+	result := make([]domain.ClientPortACL, 0, len(rules))
+	for _, rule := range rules {
+		acl := domain.ClientPortACL{
+			TargetAddress: addresses[rule.Target],
+			Protocol:      rule.Protocol,
+			Port:          rule.Port,
+		}
+		if rule.Source != domain.ClientACLAny {
+			acl.SourceAddress = addresses[rule.Source]
+		}
+		result = append(result, acl)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left, right := result[i], result[j]
+		switch {
+		case left.SourceAddress != right.SourceAddress:
+			return left.SourceAddress < right.SourceAddress
+		case left.TargetAddress != right.TargetAddress:
+			return left.TargetAddress < right.TargetAddress
+		case left.Protocol != right.Protocol:
+			return left.Protocol < right.Protocol
+		default:
+			return left.Port < right.Port
+		}
+	})
+	return result
 }
 
 // permittedClients maps a tunnel to the client addresses allowed to use it.

@@ -188,3 +188,27 @@ func TestValidateAcceptsLowercasedAWGParameters(t *testing.T) {
 		t.Fatalf("lower-cased parameters must validate: %v", err)
 	}
 }
+
+func TestValidateClientACLs(t *testing.T) {
+	t.Parallel()
+	if err := validateWith(t, func(cfg *domain.Config) {
+		_, phonePublicKey, err := domain.GenerateX25519KeyPair()
+		if err != nil {
+			t.Fatalf("generate phone key: %v", err)
+		}
+		cfg.Devices = append(cfg.Devices, domain.Device{ID: "phone", Address: "10.80.0.3/32", PublicKey: phonePublicKey, Egress: domain.EgressDirect})
+		cfg.ClientACLs = []domain.ClientACL{{Source: domain.ClientACLAny, Target: cfg.Devices[0].ID, Protocol: domain.ClientACLTCP, Port: 22}}
+	}); err != nil {
+		t.Fatalf("client ACL should validate: %v", err)
+	}
+	if err := validateWith(t, func(cfg *domain.Config) {
+		cfg.ClientACLs = []domain.ClientACL{{Source: "missing", Target: cfg.Devices[0].ID, Protocol: domain.ClientACLTCP, Port: 22}}
+	}); err == nil || !strings.Contains(err.Error(), "source") {
+		t.Fatalf("expected unknown source error, got %v", err)
+	}
+	if err := validateWith(t, func(cfg *domain.Config) {
+		cfg.ClientACLs = []domain.ClientACL{{Source: domain.ClientACLAny, Target: cfg.Devices[0].ID, Protocol: "icmp", Port: 22}}
+	}); err == nil || !strings.Contains(err.Error(), "protocol") {
+		t.Fatalf("expected protocol error, got %v", err)
+	}
+}

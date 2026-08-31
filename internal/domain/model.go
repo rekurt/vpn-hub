@@ -93,6 +93,22 @@ type DeviceProfile struct {
 	ClientPrivateKey string `mapstructure:"client_private_key"`
 }
 
+type ClientACLProtocol string
+
+const (
+	ClientACLTCP ClientACLProtocol = "tcp"
+	ClientACLUDP ClientACLProtocol = "udp"
+)
+
+const ClientACLAny = "any"
+
+type ClientACL struct {
+	Source   string            `mapstructure:"source" json:"source"`
+	Target   string            `mapstructure:"target" json:"target"`
+	Protocol ClientACLProtocol `mapstructure:"protocol" json:"protocol"`
+	Port     uint16            `mapstructure:"port" json:"port"`
+}
+
 type Device struct {
 	ID      string `mapstructure:"id" json:"id"`
 	Address string `mapstructure:"address" json:"address"`
@@ -106,9 +122,10 @@ type Device struct {
 }
 
 type Config struct {
-	Hub     Hub      `mapstructure:"hub" json:"hub"`
-	Devices []Device `mapstructure:"devices" json:"devices"`
-	Tunnels []Tunnel `mapstructure:"tunnels" json:"tunnels"`
+	Hub        Hub         `mapstructure:"hub" json:"hub"`
+	Devices    []Device    `mapstructure:"devices" json:"devices"`
+	Tunnels    []Tunnel    `mapstructure:"tunnels" json:"tunnels"`
+	ClientACLs []ClientACL `mapstructure:"client_acls" json:"client_acls,omitempty"`
 }
 
 type DeployedDevice struct {
@@ -124,6 +141,7 @@ type DesiredState struct {
 	Hub         Hub              `json:"hub"`
 	Devices     []DeployedDevice `json:"devices"`
 	Tunnels     []Tunnel         `json:"tunnels"`
+	ClientACLs  []ClientACL      `json:"client_acls,omitempty"`
 }
 
 type OperationKind string

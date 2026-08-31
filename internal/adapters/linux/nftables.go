@@ -74,7 +74,7 @@ func allowedSets(plan domain.FirewallPlan) []struct {
 //	1: forwarded TCP MSS clamp matched on the SYN|RST mask, not a bare `flags syn`.
 //	2: TCP/443 is accepted only when the REALITY fallback is on, and the UDP/443
 //	   redirect moved into this table, scoped to the uplink.
-const rulesetFormatVersion = 2
+const rulesetFormatVersion = 3
 
 // Fingerprint identifies a firewall plan by its content and rendering format.
 func Fingerprint(plan domain.FirewallPlan) string {
@@ -193,6 +193,17 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	// server->client segment size unclamped and half the transfers still stalling.
 	line("\t\ttcp flags & (syn|rst) == syn tcp option maxseg size set %d", forwardedMSSClamp)
 	line("\t\tct state established,related accept")
+	for _, acl := range plan.ClientACLs {
+		if acl.SourceAddress == "" {
+			line("\t\tiifname %q oifname %q ip saddr %s ip daddr %s %s dport %d accept",
+				plan.IngressInterface, plan.IngressInterface, plan.ClientCIDR,
+				acl.TargetAddress, acl.Protocol, acl.Port)
+			continue
+		}
+		line("\t\tiifname %q oifname %q ip saddr %s ip daddr %s %s dport %d accept",
+			plan.IngressInterface, plan.IngressInterface, acl.SourceAddress,
+			acl.TargetAddress, acl.Protocol, acl.Port)
+	}
 	line("\t\tiifname %q oifname %q drop", plan.IngressInterface, plan.IngressInterface)
 	// DNS-over-TLS is refused before any egress rule can accept it. A client that
 	// resolves a private name through a public resolver gets an answer the hub never
