@@ -587,3 +587,29 @@ func TestAnEgressNobodyDefaultsToRendersNoElementsLine(t *testing.T) {
 		t.Errorf("the set must still exist, since rules refer to it:\n%s", ruleset)
 	}
 }
+
+func TestClientACLRulesPrecedeClientToClientDrop(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.ClientACLs = []domain.ClientPortACL{{SourceAddress: "10.80.0.2", TargetAddress: "10.80.0.3", Protocol: domain.ClientACLTCP, Port: 22}}
+	rendered := RenderRuleset(plan)
+	allow := `iifname "awg0" oifname "awg0" ip saddr 10.80.0.2 ip daddr 10.80.0.3 tcp dport 22 accept`
+	drop := `iifname "awg0" oifname "awg0" drop`
+	if !strings.Contains(rendered, allow) {
+		t.Fatalf("missing client ACL rule %q:\n%s", allow, rendered)
+	}
+	if strings.Index(rendered, allow) > strings.Index(rendered, drop) {
+		t.Fatalf("client ACL is after the blanket drop:\n%s", rendered)
+	}
+}
+
+func TestClientACLAnySourceUsesClientCIDR(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.ClientACLs = []domain.ClientPortACL{{TargetAddress: "10.80.0.3", Protocol: domain.ClientACLUDP, Port: 5353}}
+	rendered := RenderRuleset(plan)
+	want := `iifname "awg0" oifname "awg0" ip saddr 10.80.0.0/24 ip daddr 10.80.0.3 udp dport 5353 accept`
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("missing any-source client ACL rule %q:\n%s", want, rendered)
+	}
+}
