@@ -12,7 +12,7 @@ import (
 // rather than shipping alongside it.
 var inlineBlocks = map[string]bool{
 	"ca": true, "cert": true, "key": true, "tls-auth": true, "tls-crypt": true,
-	"auth-user-pass": true,
+	"auth-user-pass": true, "http-proxy-user-pass": true, "pkcs12": true, "tls-crypt-v2": true,
 }
 
 var externalFileDirectives = map[string]bool{
@@ -106,6 +106,19 @@ func validateOpenVPNInlineBlocks(content string) (map[int]bool, bool, error) {
 
 	for number, raw := range strings.Split(content, "\n") {
 		line := strings.TrimSpace(raw)
+		if block == "auth-user-pass" {
+			inlineLines[number] = true
+			if line == "</auth-user-pass>" {
+				if credentialLines != 2 {
+					return nil, false, inlineCredentialBlockError(blockLine)
+				}
+				hasCompleteBlock = true
+				block = ""
+			} else if line != "" {
+				credentialLines++
+			}
+			continue
+		}
 		if strings.HasPrefix(line, "<") {
 			name, closing, err := parseOpenVPNInlineTag(line)
 			if err != nil {
