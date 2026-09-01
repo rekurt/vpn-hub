@@ -80,6 +80,17 @@ func TestUpstreamKeysNeverSerialise(t *testing.T) {
 	}
 }
 
+func TestProxyOriginServerNeverSerialises(t *testing.T) {
+	t.Parallel()
+	serialised := mustMarshal(t, ProxyTunnel{
+		Server:       "1.1.1.1",
+		OriginServer: "provider.example",
+	})
+	if strings.Contains(serialised, "provider.example") {
+		t.Fatalf("the in-memory origin reached the serialised form: %s", serialised)
+	}
+}
+
 func mustMarshal(t *testing.T, value any) string {
 	t.Helper()
 	data, err := json.Marshal(value)

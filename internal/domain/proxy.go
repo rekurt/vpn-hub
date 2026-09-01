@@ -31,7 +31,10 @@ type ProxyTransport struct {
 type ProxyTunnel struct {
 	Protocol string `json:"protocol"`
 	Server   string `json:"server"`
-	Port     uint16 `json:"port"`
+	// OriginServer keeps the provider hostname in memory after Server is pinned
+	// to an address. Handshake fields carry it across link-file persistence.
+	OriginServer string `json:"-"`
+	Port         uint16 `json:"port"`
 	// UUID authenticates the hub to the provider and is deliberately not serialised:
 	// a revision is written to disk and read back by anything that can open the state
 	// directory.

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"vpn-hub/internal/adapters/config"
+	"vpn-hub/internal/adapters/health"
 	"vpn-hub/internal/domain"
 )
 
@@ -28,6 +29,9 @@ type TunnelConfigFiles struct {
 	// Secrets decrypts SOPS-encrypted configurations. Without it an encrypted file
 	// is a clear error rather than a confusing parse failure.
 	Secrets Decryptor
+	// Resolver pins provider-controlled VLESS hostnames before sing-box receives
+	// them. Operator WireGuard and OpenVPN endpoints do not use it.
+	Resolver health.EndpointResolver
 }
 
 func (t TunnelConfigFiles) dir() string {
@@ -76,6 +80,10 @@ func (t TunnelConfigFiles) Load(ctx context.Context, tunnel domain.Tunnel) (doma
 
 	case domain.TunnelXray:
 		parsed, err := ParseVLESS(firstLine(string(content)))
+		if err != nil {
+			return domain.Upstream{}, fmt.Errorf("%s: %w", source, err)
+		}
+		parsed, err = health.PinPublicEndpoint(ctx, t.Resolver, parsed)
 		if err != nil {
 			return domain.Upstream{}, fmt.Errorf("%s: %w", source, err)
 		}
