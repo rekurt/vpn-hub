@@ -6,14 +6,21 @@ import (
 	"time"
 )
 
-// realDump was captured from `awg show awg0 dump` on the lab host: one interface line
-// carrying the obfuscation parameters, then one peer that has never handshaken.
-const realDump = "YK8abDsljvw7F3rfkYsup5IR39Q6gCcz/d5t0828jX0=\t6OUoSDjcaLflZn3V7U3aO6eW1Mn5HE4xPJYmzoVvnhU=\t51820\t4\t64\t256\t15\t30\t0\t0\t12345\t23456\t34567\t45678\t(null)\t(null)\t(null)\t(null)\t(null)\toff\n" +
-	"aYo1x9b951yd4mtMeKkW/vyOJvU08j2UU96u/Ve9QWA=\t(none)\t(none)\t10.80.0.2/32\t0\t0\t0\toff\n"
+const (
+	// Test-only base64 values. They do not identify a real interface or peer.
+	syntheticInterfacePrivateKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	syntheticInterfacePublicKey  = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+	syntheticPeerPublicKey       = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI="
+)
+
+// syntheticDump has one interface with obfuscation parameters and one peer that has
+// never handshaken.
+const syntheticDump = syntheticInterfacePrivateKey + "\t" + syntheticInterfacePublicKey + "\t51820\t4\t64\t256\t15\t30\t0\t0\t12345\t23456\t34567\t45678\t(null)\t(null)\t(null)\t(null)\t(null)\toff\n" +
+	syntheticPeerPublicKey + "\t(none)\t(none)\t10.80.0.2/32\t0\t0\t0\toff\n"
 
 func TestParseDump(t *testing.T) {
 	t.Parallel()
-	state, err := ParseDump(realDump)
+	state, err := ParseDump(syntheticDump)
 	if err != nil {
 		t.Fatalf("ParseDump: %v", err)
 	}
@@ -21,7 +28,7 @@ func TestParseDump(t *testing.T) {
 	if !state.Exists {
 		t.Error("Exists = false")
 	}
-	if want := "6OUoSDjcaLflZn3V7U3aO6eW1Mn5HE4xPJYmzoVvnhU="; state.PublicKey != want {
+	if want := syntheticInterfacePublicKey; state.PublicKey != want {
 		t.Errorf("PublicKey = %q, want %q", state.PublicKey, want)
 	}
 	if state.ListenPort != 51820 {
@@ -42,7 +49,7 @@ func TestParseDump(t *testing.T) {
 
 func TestParseDumpReadsHandshakeTime(t *testing.T) {
 	t.Parallel()
-	dump := strings.Replace(realDump, "10.80.0.2/32\t0\t0\t0", "10.80.0.2/32\t1752900000\t1024\t2048", 1)
+	dump := strings.Replace(syntheticDump, "10.80.0.2/32\t0\t0\t0", "10.80.0.2/32\t1752900000\t1024\t2048", 1)
 	state, err := ParseDump(dump)
 	if err != nil {
 		t.Fatalf("ParseDump: %v", err)
@@ -56,9 +63,9 @@ func TestParseDumpReadsHandshakeTime(t *testing.T) {
 // hub"; the bot's device screens are built on them.
 func TestParseDumpReadsEndpointAndTraffic(t *testing.T) {
 	t.Parallel()
-	dump := strings.Replace(realDump,
-		"aYo1x9b951yd4mtMeKkW/vyOJvU08j2UU96u/Ve9QWA=\t(none)\t(none)\t10.80.0.2/32\t0\t0\t0\toff",
-		"aYo1x9b951yd4mtMeKkW/vyOJvU08j2UU96u/Ve9QWA=\t(none)\t203.0.113.7:33333\t10.80.0.2/32\t1752900000\t1024\t2048\toff", 1)
+	dump := strings.Replace(syntheticDump,
+		syntheticPeerPublicKey+"\t(none)\t(none)\t10.80.0.2/32\t0\t0\t0\toff",
+		syntheticPeerPublicKey+"\t(none)\t203.0.113.7:33333\t10.80.0.2/32\t1752900000\t1024\t2048\toff", 1)
 	state, err := ParseDump(dump)
 	if err != nil {
 		t.Fatalf("ParseDump: %v", err)
@@ -72,7 +79,7 @@ func TestParseDumpReadsEndpointAndTraffic(t *testing.T) {
 	}
 
 	// The (none) endpoint of a never-connected peer stays empty.
-	original, err := ParseDump(realDump)
+	original, err := ParseDump(syntheticDump)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +90,7 @@ func TestParseDumpReadsEndpointAndTraffic(t *testing.T) {
 
 func TestParseDumpHandlesAnInterfaceWithNoPeers(t *testing.T) {
 	t.Parallel()
-	header := strings.SplitN(realDump, "\n", 2)[0]
+	header := strings.SplitN(syntheticDump, "\n", 2)[0]
 	state, err := ParseDump(header + "\n")
 	if err != nil {
 		t.Fatalf("ParseDump: %v", err)
@@ -99,8 +106,8 @@ func TestParseDumpRejectsMalformedOutput(t *testing.T) {
 		"empty":              "",
 		"short header":       "key\tpub\n",
 		"non-numeric port":   "key\tpub\tnotaport\n",
-		"truncated peer":     realDump[:strings.Index(realDump, "\n")+1] + "onlyonefield\n",
-		"bad handshake time": strings.Replace(realDump, "10.80.0.2/32\t0", "10.80.0.2/32\tsoon", 1),
+		"truncated peer":     syntheticDump[:strings.Index(syntheticDump, "\n")+1] + "onlyonefield\n",
+		"bad handshake time": strings.Replace(syntheticDump, "10.80.0.2/32\t0", "10.80.0.2/32\tsoon", 1),
 	}
 
 	for name, input := range tests {
