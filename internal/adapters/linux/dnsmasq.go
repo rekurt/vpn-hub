@@ -35,7 +35,11 @@ func RenderHubResolver(plan domain.DNSPlan) string {
 	line("local-service")
 
 	for _, zone := range plan.Zones {
-		for _, resolver := range zone.Resolvers {
+		resolvers := zone.Resolvers
+		if zone.ForwardAddress != "" {
+			resolvers = []string{zone.ForwardAddress}
+		}
+		for _, resolver := range resolvers {
 			line("server=/%s/%s", zone.Zone, resolver)
 		}
 		// inet, table vpn_hub, set <name>: addresses learned for this zone start
@@ -72,7 +76,24 @@ func RenderUpstreamResolver(plan domain.DNSPlan) string {
 	return out.String()
 }
 
-// Dnsmasq runs the two resolvers as transient systemd units.
+// RenderPrivateResolver builds a resolver that runs inside a private-network
+// namespace and forwards that network's zones to the DNS servers reachable there.
+func RenderPrivateResolver(resolver domain.DNSPrivateResolver) string {
+	var out strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&out, format+"\n", args...) }
+
+	line("# Managed by vpn-hub. Manual edits are reverted on the next reconcile.")
+	line("no-resolv")
+	line("no-hosts")
+	line("bind-interfaces")
+	line("listen-address=%s", resolver.Address)
+	for _, upstream := range resolver.Resolvers {
+		line("server=%s", upstream)
+	}
+	return out.String()
+}
+
+// Dnsmasq runs the resolvers as transient systemd units.
 //
 // Transient rather than packaged units because the set of namespaces changes with
 // every revision, and a unit file per namespace would need its own lifecycle to stay
@@ -103,6 +124,19 @@ func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan, repopulate bool
 	// its cache would answer from memory without refilling them. Starting over is
 	// what makes the next lookup route correctly.
 	hubChanged = hubChanged || repopulate
+	// Private-zone resolvers must start before the hub resolver, because the hub
+	// forwards matching zones to them.
+	for _, resolver := range plan.PrivateResolvers {
+		config := filepath.Join(d.configDir(), "dnsmasq-private-"+safeUnitSuffix(resolver.TunnelID)+".conf")
+		changed, err := d.write(config, RenderPrivateResolver(resolver))
+		if err != nil {
+			return err
+		}
+		unit := "vpn-hub-dns-" + safeUnitSuffix(resolver.TunnelID)
+		if err := d.ensureRunning(ctx, unit, resolver.Namespace, config, changed || repopulate); err != nil {
+			return err
+		}
+	}
 
 	if plan.UpstreamNamespace != "" {
 		upstreamConfig := filepath.Join(d.configDir(), "dnsmasq-upstream.conf")
@@ -147,6 +181,28 @@ func (d Dnsmasq) restart(ctx context.Context, unit, namespace, config string) er
 	arguments = append(arguments, "dnsmasq", "--keep-in-foreground", "--conf-file="+config)
 	_, err := d.run(ctx, "systemd-run", arguments...)
 	return err
+}
+
+func safeUnitSuffix(value string) string {
+	result := strings.Builder{}
+	for _, symbol := range value {
+		switch {
+		case symbol >= 'a' && symbol <= 'z':
+			result.WriteRune(symbol)
+		case symbol >= 'A' && symbol <= 'Z':
+			result.WriteRune(symbol)
+		case symbol >= '0' && symbol <= '9':
+			result.WriteRune(symbol)
+		case symbol == '-' || symbol == '_':
+			result.WriteRune(symbol)
+		default:
+			result.WriteRune('-')
+		}
+	}
+	if result.Len() == 0 {
+		return "private"
+	}
+	return result.String()
 }
 
 // write reports whether the file's contents changed.

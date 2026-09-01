@@ -45,6 +45,16 @@ func TestPrivateZonesResolveThroughTheirOwnTunnel(t *testing.T) {
 	if zone.Zone != "corp.internal" || len(zone.Resolvers) != 1 || zone.Resolvers[0] != "10.20.0.53" {
 		t.Errorf("zone = %+v", zone)
 	}
+	if zone.ForwardAddress == "" {
+		t.Errorf("ForwardAddress is empty; private DNS would be queried from the main namespace")
+	}
+	if len(dns.PrivateResolvers) != 1 {
+		t.Fatalf("expected one private resolver, got %+v", dns.PrivateResolvers)
+	}
+	resolver := dns.PrivateResolvers[0]
+	if resolver.TunnelID != "corp-a" || resolver.Namespace == "" || resolver.Address != zone.ForwardAddress {
+		t.Errorf("private resolver = %+v, zone = %+v", resolver, zone)
+	}
 	// Without the set, a private name would resolve correctly and then route out of
 	// the internet path.
 	if zone.Set != "internal_corp_a" {
