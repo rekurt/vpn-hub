@@ -118,6 +118,12 @@ func (e Egress) Apply(ctx context.Context, specs []domain.EgressSpec) error {
 		_, _ = e.run(ctx, "systemctl", "stop", "vpn-hub-proxy-"+id+".service")
 		_, _ = e.run(ctx, "systemctl", "stop", "vpn-hub-openvpn-"+id+".service")
 		_, _ = e.run(ctx, "systemctl", "stop", "vpn-hub-socks-"+id+".service")
+		// This network's own resolver goes too. It is reached by the same reasoning as
+		// the upstream one below, but it is missed by the sweep the DNS adapter runs:
+		// egress converges before DNS does, so by the time that sweep looks, the
+		// namespace is already gone and the resolver is a process holding a namespace
+		// that no longer has a name.
+		_, _ = e.run(ctx, "systemctl", "stop", privateResolverUnit(id)+".service")
 		// The upstream resolver lives in whichever namespace carries the internet for
 		// most devices, which may well be this one. `ip netns del` unmounts the
 		// handle but does not kill what runs inside, so a resolver left behind stays
