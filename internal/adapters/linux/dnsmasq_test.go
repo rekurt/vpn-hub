@@ -264,7 +264,7 @@ func TestAForwarderFromThePreviousBuildIsReapedButKeepsItsFile(t *testing.T) {
 func TestTheSweepLeavesThePublicForwarderAlone(t *testing.T) {
 	t.Parallel()
 	host := &fakeHost{replies: map[string]string{
-		listResolverUnits: "  vpn-hub-dns-upstream.service loaded active running dnsmasq\n",
+		listResolverUnits: "  " + upstreamResolverUnit + ".service loaded active running dnsmasq\n",
 	}}
 	dns := Dnsmasq{Run: host.run, ConfigDir: t.TempDir()}
 
@@ -281,5 +281,83 @@ func TestTheSweepLeavesThePublicForwarderAlone(t *testing.T) {
 			!strings.Contains(host.commands[index+1], "--unit="+upstreamResolverUnit+" ") {
 			t.Fatalf("the public forwarder was stopped and not restarted; commands: %v", host.commands)
 		}
+	}
+}
+
+// A hub upgraded from the build where the names collided carries a unit called
+// vpn-hub-dns-upstream, and for a tunnel with that id there is no telling which
+// resolver is behind it: the private forwarder claimed the name first, and the public
+// one, finding it already active and its own configuration unchanged, left it alone.
+//
+// Exempting that name would keep the private process running. Its replacement could
+// not bind the address, and the public resolver -- unchanged and apparently active --
+// would never be replaced, so public queries would go on reaching the corporate
+// resolver. This reproduces that host: only the collided unit is running, and both
+// configurations are already on disk exactly as they render.
+func TestTheCollidedNameFromThePreviousBuildIsNotExempted(t *testing.T) {
+	t.Parallel()
+	plan := privateDNSPlan()
+	plan.PrivateResolvers[0].TunnelID = "upstream"
+	plan.PrivateResolvers[0].Namespace = "vpn-hub-upstream"
+
+	directory := t.TempDir()
+	for name, content := range map[string]string{
+		privateResolverConfig("upstream"): RenderPrivateResolver(plan.PrivateResolvers[0]),
+		"dnsmasq-upstream.conf":           RenderUpstreamResolver(plan),
+		"dnsmasq-hub.conf":                RenderHubResolver(plan),
+	} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	const collided = "vpn-hub-dns-upstream"
+	host := &fakeHost{
+		replies: map[string]string{
+			listResolverUnits: "  " + collided + ".service loaded active running dnsmasq\n",
+		},
+		// What is running is a fact about the host, so it is spelled out literally
+		// rather than through the constants under test. On that host the collided
+		// unit and the hub's own resolver are up, and nothing else is -- which is
+		// precisely what lets an unchanged public configuration be skipped.
+		failures: map[string]error{
+			"systemctl is-active --quiet vpn-hub-dns-public.service":           errors.New("inactive"),
+			"systemctl is-active --quiet vpn-hub-dns-private-upstream.service": errors.New("inactive"),
+		},
+	}
+
+	dns := Dnsmasq{Run: host.run, ConfigDir: directory}
+	if err := dns.Apply(context.Background(), plan, false); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	reaped, private, public := -1, -1, -1
+	for index, command := range host.commands {
+		switch {
+		case reaped < 0 && command == "systemctl stop "+collided+".service":
+			reaped = index
+		case private < 0 && strings.Contains(command, "--unit="+privateResolverUnit("upstream")+" "):
+			private = index
+		case public < 0 && strings.Contains(command, "--unit="+upstreamResolverUnit+" "):
+			public = index
+		}
+	}
+	if reaped < 0 {
+		t.Fatalf("the collided unit was exempted, so the old forwarder kept the address and the name; commands: %v",
+			host.commands)
+	}
+	if private < 0 {
+		t.Fatalf("the network's forwarder never started; commands: %v", host.commands)
+	}
+	if public < 0 {
+		t.Fatalf("the public namespace was left without a resolver; commands: %v", host.commands)
+	}
+	if reaped > private {
+		t.Errorf("the replacement was started before the address was free: reaped at %d, started at %d",
+			reaped, private)
+	}
+	// The public forwarder must reach the public namespace, not the corporate one.
+	if !host.ran("--unit=" + upstreamResolverUnit + " --property=Restart=on-failure ip netns exec vpn-hub-provider-nl") {
+		t.Errorf("public queries were not sent to the public namespace; commands: %v", host.commands)
 	}
 }

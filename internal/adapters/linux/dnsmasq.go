@@ -12,8 +12,14 @@ import (
 )
 
 const (
-	hubResolverUnit      = "vpn-hub-dns"
-	upstreamResolverUnit = "vpn-hub-dns-upstream"
+	hubResolverUnit = "vpn-hub-dns"
+	// upstreamResolverUnit carries the public forwarder. "public" rather than
+	// "upstream", which the domain calls it and its configuration file still does,
+	// because this name shares a prefix with the tunnel-derived ones: a tunnel may be
+	// called "upstream", and under the older build its forwarder claimed this very
+	// unit. A name any other path could have started cannot be reasoned about, and
+	// the sweep below has to exempt this one from reaping.
+	upstreamResolverUnit = "vpn-hub-dns-public"
 	// resolverUnitPrefix matches every resolver that runs inside a namespace, and the
 	// stale sweep enumerates by it rather than by privateResolverPrefix. The wider
 	// pattern is what reaps a forwarder left by an earlier build under a name this
@@ -217,6 +223,15 @@ func (d Dnsmasq) forgetStaleResolvers(ctx context.Context, plan domain.DNSPlan) 
 	// The public forwarder is spared because it has an owner already: Apply starts it
 	// or stops it by name, according to whether a namespace carries the internet. Two
 	// owners for one unit is how it ends up stopped in the pass that started it.
+	//
+	// The exemption holds only because no other path can have started this unit. It
+	// did not hold for the name the public forwarder used before: a tunnel called
+	// "upstream" claimed that one too, and on a host upgraded from that build the
+	// process behind it may be either resolver. Exempting it there would keep the
+	// private forwarder alive under the public forwarder's name -- its replacement
+	// could not bind the address, and because the public configuration is unchanged
+	// and the unit looks active, public queries would go on reaching the corporate
+	// resolver. Under the current name that unit is unclaimed, so the sweep reaps it.
 	wanted[upstreamResolverUnit] = struct{}{}
 
 	output, err := d.run(ctx, "systemctl", "list-units", "--all", "--plain", "--no-legend",
