@@ -114,6 +114,83 @@ func TestParseOpenVPNConfigRejectsExternalReferences(t *testing.T) {
 	}
 }
 
+func TestParseOpenVPNConfigRejectsPrefixedExternalReferences(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name, directive, want string
+	}{
+		{"auth file", "--auth-user-pass credentials.txt", "external file reference"},
+		{"proxy auth file", "--http-proxy-user-pass proxy.auth", "external file reference"},
+		{"askpass file", "--askpass passphrase.txt", "external file reference"},
+		{"pkcs12 file", "--pkcs12 identity.p12", "external file reference"},
+		{"crl verifier", "--crl-verify revoked.pem", "external file reference"},
+		{"script verifier", "--tls-crypt-v2-verify /usr/local/bin/check", "external command reference"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseOpenVPNConfig(providerOVPN + test.directive + "\n")
+			if err == nil || !strings.Contains(err.Error(), "line") || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want line evidence and %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestParseOpenVPNConfigRejectsMalformedInlineBlocks(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name, config string
+	}{
+		{
+			name: "self closing auth block bypass",
+			config: providerOVPN + `<auth-user-pass/>
+auth-user-pass credentials.txt
+`,
+		},
+		{
+			name: "tag with trailing content bypass",
+			config: providerOVPN + `<ca>
+certificate
+</auth-user-pass/> ignored
+auth-user-pass credentials.txt
+`,
+		},
+		{
+			name: "mismatched close",
+			config: providerOVPN + `<ca>
+certificate
+</cert>
+`,
+		},
+		{
+			name: "nested block",
+			config: providerOVPN + `<ca>
+<cert>
+certificate
+</cert>
+</ca>
+`,
+		},
+		{
+			name: "unterminated block bypass",
+			config: providerOVPN + `<ca>
+certificate
+auth-user-pass credentials.txt
+`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseOpenVPNConfig(test.config)
+			if err == nil || !strings.Contains(err.Error(), "line") || !strings.Contains(err.Error(), "inline block") {
+				t.Fatalf("error = %v, want inline block error with line evidence", err)
+			}
+		})
+	}
+}
+
 func TestParseOpenVPNConfigAcceptsCompleteInlineCredentials(t *testing.T) {
 	t.Parallel()
 	config := providerOVPN + `auth-user-pass
