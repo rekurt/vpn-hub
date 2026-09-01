@@ -100,8 +100,8 @@ func TestParseOpenVPNConfigRejectsExternalReferences(t *testing.T) {
 		{"absolute auth file", "auth-user-pass /etc/shadow", "external file reference"},
 		{"proxy auth file", "http-proxy-user-pass proxy.auth", "external file reference"},
 		{"pkcs12 file", "pkcs12 identity.p12", "external file reference"},
-		{"crl verifier", "crl-verify revoked.pem", "external file reference"},
-		{"askpass file", "askpass passphrase.txt", "external file reference"},
+		{"crl verifier", "crl-verify fixtures/revoked_certificate", "external file reference"},
+		{"askpass file", "askpass secrets/passphrase_file", "external file reference"},
 		{"script verifier", "tls-crypt-v2-verify /usr/local/bin/check", "external command reference"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -122,9 +122,9 @@ func TestParseOpenVPNConfigRejectsPrefixedExternalReferences(t *testing.T) {
 	}{
 		{"auth file", "--auth-user-pass credentials.txt", "external file reference"},
 		{"proxy auth file", "--http-proxy-user-pass proxy.auth", "external file reference"},
-		{"askpass file", "--askpass passphrase.txt", "external file reference"},
+		{"askpass file", "--askpass secrets/passphrase_file", "external file reference"},
 		{"pkcs12 file", "--pkcs12 identity.p12", "external file reference"},
-		{"crl verifier", "--crl-verify revoked.pem", "external file reference"},
+		{"crl verifier", "--crl-verify fixtures/revoked_certificate", "external file reference"},
 		{"script verifier", "--tls-crypt-v2-verify /usr/local/bin/check", "external command reference"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
