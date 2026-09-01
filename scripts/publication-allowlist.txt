@@ -15,6 +15,7 @@ users.noreply.github.com
 2.2.2.2
 5.6.7.8
 64.225.96.1
+255.255.255.0
 www.cloudflare.com
 www.microsoft.com
 # IANA-reserved examples used by parser tests.
@@ -58,6 +59,7 @@ buildinfo.version
 button.devices
 button.status
 ca.crt
+ca.key
 canary.nft
 candidates.golden
 cfg.locale
@@ -254,6 +256,7 @@ security.md
 security.tftest.hcl
 seohead.astro
 server.conf
+server.crt
 server.json
 server.key
 server.key.previous
@@ -336,6 +339,9 @@ vpn-hub.conf
 wg-nl.conf
 wiring.go
 workstation.fingerprint
+who.crt
+who.csr
+who.key
 x.sock
 xray-egress.link
 xray.link

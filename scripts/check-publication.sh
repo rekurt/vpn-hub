@@ -49,29 +49,114 @@ is_non_network_literal() {
 	return 1
 }
 
+extract_address_candidates() {
+	perl -ne '
+		BEGIN { $state = "code"; $current_path = ""; }
+
+		sub go_text {
+			my ($line) = @_;
+			my $text = "";
+			my $length = length $line;
+			my $offset = 0;
+
+			while ($offset < $length) {
+				my $char = substr $line, $offset, 1;
+				my $pair = substr $line, $offset, 2;
+				if ($state eq "raw") {
+					if ($char eq "`") {
+						$state = "code";
+						$text .= " ";
+					} else {
+						$text .= $char;
+					}
+					$offset++;
+					next;
+				}
+				if ($state eq "block") {
+					if ($pair eq "*/") {
+						$state = "code";
+						$text .= " ";
+						$offset += 2;
+					} else {
+						$text .= $char;
+						$offset++;
+					}
+					next;
+				}
+				if ($state eq "quoted") {
+					if ($char eq "\\" && $offset + 1 < $length) {
+						$text .= substr $line, $offset, 2;
+						$offset += 2;
+					} elsif ($char eq "\"") {
+						$state = "code";
+						$text .= " ";
+						$offset++;
+					} else {
+						$text .= $char;
+						$offset++;
+					}
+					next;
+				}
+				if ($state eq "rune") {
+					if ($char eq "\\" && $offset + 1 < $length) {
+						$offset += 2;
+					} elsif ($char eq "\x27") {
+						$state = "code";
+						$offset++;
+					} else {
+						$offset++;
+					}
+					next;
+				}
+
+				if ($pair eq "//") {
+					$text .= " " . substr($line, $offset + 2);
+					last;
+				}
+				if ($pair eq "/*") {
+					$state = "block";
+					$text .= " ";
+					$offset += 2;
+					next;
+				}
+				if ($char eq "\"") {
+					$state = "quoted";
+					$text .= " ";
+				} elsif ($char eq "`") {
+					$state = "raw";
+					$text .= " ";
+				} elsif ($char eq "\x27") {
+					$state = "rune";
+				}
+				$offset++;
+			}
+
+			$state = "code" if $state eq "quoted" || $state eq "rune";
+			return $text;
+		}
+
+		chomp;
+		next unless /^([^\0]+)\0([0-9]+)\0(.*)$/s;
+		my ($path, $number, $content) = ($1, $2, $3);
+		if ($path ne $current_path) {
+			$state = "code";
+			$current_path = $path;
+		}
+		my $text = $path =~ /\.go$/ ? go_text($content) : $content;
+		while ($text =~ /(?<![A-Za-z0-9_-])((?:\d{1,3}\.){3}\d{1,3}|(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,})(?![A-Za-z0-9_-])/g) {
+			print "$1|$path:$number:$content\n";
+		}
+	'
+}
+
 check_addresses() {
 	ref=$1
 	if [ -n "$ref" ]; then
-		lines=$(git grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|([[:alnum:]-]+\.)+[[:alpha:]]{2,}' "$ref" -- ':!scripts/check-publication_test.sh' 2>/dev/null || true)
+		candidates=$(git grep -n -I -z -e '' "$ref" -- ':!scripts/check-publication_test.sh' 2>/dev/null | extract_address_candidates)
 	else
-		lines=$(git grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|([[:alnum:]-]+\.)+[[:alpha:]]{2,}' -- ':!scripts/check-publication_test.sh' 2>/dev/null || true)
+		candidates=$(git grep -n -I -z -e '' -- ':!scripts/check-publication_test.sh' 2>/dev/null | extract_address_candidates)
 	fi
 	bad=0
-	candidates=$(printf '%s\n' "$lines" | perl -ne '
-		$line = $_;
-		chomp $line;
-		($path, $number, $content) = split /:/, $_, 3;
-		if ($path =~ /\.go$/) {
-			@text = ($content =~ /(?:"([^"\\]*(?:\\.[^"\\]*)*)"|`([^`]*)`|\/\/\s*(.*))/g);
-			@text = grep defined, @text;
-		} else { @text = ($content); }
-		for $text (@text) {
-			while ($text =~ /(?<![A-Za-z0-9_-])((?:\d{1,3}\.){3}\d{1,3}|(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,})(?![A-Za-z0-9_-])/g) {
-				$value = $1;
-				print "$value|$line\n";
-			}
-		}
-	' || true)
 	while IFS='|' read -r value line; do
 		[ -n "$value" ] || continue
 		is_non_network_literal "$value" && continue

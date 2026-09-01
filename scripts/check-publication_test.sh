@@ -19,7 +19,8 @@ new_repo() {
 }
 
 commit_fixture() {
-	git -C "$repo" add fixture.txt
+	fixture=${1:-fixture.txt}
+	git -C "$repo" add "$fixture"
 	git -C "$repo" commit -qm "test: add fixture"
 }
 
@@ -47,6 +48,19 @@ expect_fail() {
 	fi
 }
 
+expect_fail_path() {
+	name=$1
+	path=$2
+	shift 2
+	new_repo "$name"
+	"$@" >"$repo/$path"
+	commit_fixture "$path"
+	if (cd "$repo" && sh scripts/check-publication.sh); then
+		echo "$name: expected publication check to fail" >&2
+		failed=1
+	fi
+}
+
 expect_pass clean printf '%s\n' 'endpoint: vpn.example.com:51820'
 expect_fail awg-private printf '%s\n' 'private_key = BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB='
 expect_fail telegram-token printf '%s\n' 'token: 123456789:AAExampleSecretValueThatMustFail'
@@ -66,6 +80,8 @@ expect_fail unknown-no-hyphen-host printf '%s\n' 'endpoint: vpn.example.dev:5182
 expect_fail unknown-uppercase-host printf '%s\n' 'endpoint: VPN.EXAMPLE.DEV:51820'
 expect_fail unknown-one-letter-label printf '%s\n' 'endpoint: a.b.dev:51820'
 expect_fail unknown-inline-code-host printf '%s\n' 'Use `vpn.vendor.cloud` as the endpoint.'
+expect_fail_path unknown-go-block-comment fixture.go printf '%s\n' 'package fixture' '' '/* block-comment.personal-domain.dev */'
+expect_fail_path unknown-go-multiline-raw-string fixture.go printf '%s\n' 'package fixture' '' 'var endpoint = `' 'raw-string.personal-domain.cloud 93.184.216.36' '`'
 expect_pass documentation-host printf '%s\n' 'endpoint: vpn.example.com:51820'
 expect_pass uppercase-documentation-host printf '%s\n' 'endpoint: VPN.EXAMPLE.COM:51820'
 
