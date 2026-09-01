@@ -36,6 +36,14 @@ hub:
 
 # One connection reaches everything: `egress` names the internet path, and the
 # private networks below are reached in addition to it, chosen by destination.
+client_acls:
+  # Narrow client-to-client holes. Without an explicit ACL, devices cannot reach
+  # each other across the hub. source may be a device id or "any".
+  - source: phone
+    target: macbook
+    protocol: tcp
+    port: 22
+
 devices:
   - id: macbook
     address: "10.80.0.2/32"

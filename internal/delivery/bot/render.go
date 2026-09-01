@@ -128,6 +128,7 @@ func renderMain() (string, *tg.InlineKeyboardMarkup) {
 		[]tg.InlineKeyboardButton{btn("📊 Статус", "st"), btn("📱 Устройства", "dev")},
 		[]tg.InlineKeyboardButton{btn("🚇 Туннели", "tun"), btn("📡 Подписки", "sub")},
 		[]tg.InlineKeyboardButton{btn("🚀 Деплой", "dep"), btn("🗺 Маршруты", "rt")},
+		[]tg.InlineKeyboardButton{btn("🔐 Между устройствами", "acl")},
 		[]tg.InlineKeyboardButton{btn("📜 Логи", "log"), btn("🖥 Хост", "host")},
 		[]tg.InlineKeyboardButton{btn("⚙️ Хаб", "hub"), btn("🔔 Настройки", "set")},
 	)
@@ -475,6 +476,58 @@ func sourceForDisplay(source domain.TunnelSource) string {
 	return source.Value
 }
 
+// --- Client ACLs ------------------------------------------------------------
+
+type clientACLEntry struct {
+	Rule    domain.ClientACL
+	Ordinal int
+}
+
+func renderClientACLs(entries []clientACLEntry) (string, *tg.InlineKeyboardMarkup) {
+	var b strings.Builder
+	b.WriteString("🔐 <b>Доступ между устройствами</b>\n\n")
+	b.WriteString("По умолчанию VPN-клиенты не ходят друг к другу. Здесь — только точечные разрешения.\n\n")
+	if len(entries) == 0 {
+		b.WriteString("Правил пока нет.\n")
+	}
+	var rows [][]tg.InlineKeyboardButton
+	for _, entry := range entries {
+		rule := entry.Rule
+		fmt.Fprintf(&b, "• <code>%s</code> → <code>%s</code> <code>%s/%d</code>\n",
+			esc(rule.Source), esc(rule.Target), esc(string(rule.Protocol)), rule.Port)
+		rows = append(rows, []tg.InlineKeyboardButton{btn(
+			fmt.Sprintf("➖ %s → %s %s/%d", rule.Source, rule.Target, rule.Protocol, rule.Port),
+			fmt.Sprintf("acl:rm:%d", entry.Ordinal),
+		)})
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{btn("➕ Добавить", "acl:add")}, backRow)
+	return b.String(), keyboard(rows...)
+}
+
+func renderClientACLSource(devices []string) (string, *tg.InlineKeyboardMarkup) {
+	var rows [][]tg.InlineKeyboardButton
+	rows = append(rows, []tg.InlineKeyboardButton{btn("any — любое устройство", "acl:src:any")})
+	for _, id := range devices {
+		rows = append(rows, []tg.InlineKeyboardButton{btn(id, "acl:src:"+id)})
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{btn("✖️ Отмена", "acl:x")})
+	return "➕ <b>Новое правило</b>\n\nШаг 1 из 3. Кто получает доступ?", keyboard(rows...)
+}
+
+func renderClientACLTarget(source string, devices []string) (string, *tg.InlineKeyboardMarkup) {
+	var rows [][]tg.InlineKeyboardButton
+	for _, id := range devices {
+		if id == source {
+			continue
+		}
+		if data := "acl:tgt:" + source + ":" + id; len(data) <= 64 {
+			rows = append(rows, []tg.InlineKeyboardButton{btn(id, data)})
+		}
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{btn("✖️ Отмена", "acl:x")})
+	return fmt.Sprintf("Шаг 2 из 3. К какому устройству открыть доступ для <code>%s</code>?", esc(source)), keyboard(rows...)
+}
+
 // --- Deploy ----------------------------------------------------------------
 
 type deployView struct {
@@ -569,10 +622,36 @@ func diffStates(current *domain.DesiredState, next domain.DesiredState) []string
 		}
 	}
 
+	oldACLs := map[string]domain.ClientACL{}
+	for _, rule := range current.ClientACLs {
+		oldACLs[clientACLKey(rule)] = rule
+	}
+	newACLs := map[string]domain.ClientACL{}
+	for _, rule := range next.ClientACLs {
+		key := clientACLKey(rule)
+		newACLs[key] = rule
+		if _, existed := oldACLs[key]; !existed {
+			changes = append(changes, "➕ доступ "+clientACLLabel(rule))
+		}
+	}
+	for _, rule := range current.ClientACLs {
+		if _, exists := newACLs[clientACLKey(rule)]; !exists {
+			changes = append(changes, "➖ доступ "+clientACLLabel(rule))
+		}
+	}
+
 	if !sameJSON(current.Hub, next.Hub) {
 		changes = append(changes, "✏️ параметры хаба")
 	}
 	return changes
+}
+
+func clientACLKey(rule domain.ClientACL) string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%d", rule.Source, rule.Target, rule.Protocol, rule.Port)
+}
+
+func clientACLLabel(rule domain.ClientACL) string {
+	return fmt.Sprintf("%s → %s %s/%d", rule.Source, rule.Target, rule.Protocol, rule.Port)
 }
 
 // sameJSON compares via the JSON the revision itself is hashed from, so "changed"

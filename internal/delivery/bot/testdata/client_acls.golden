@@ -1,0 +1,10 @@
+🔐 <b>Доступ между устройствами</b>
+
+По умолчанию VPN-клиенты не ходят друг к другу. Здесь — только точечные разрешения.
+
+• <code>phone</code> → <code>macbook</code> <code>tcp/22</code>
+
+--- keyboard ---
+[➖ phone → macbook tcp/22](acl:rm:0)
+[➕ Добавить](acl:add)
+[🏠 Меню](m)

@@ -14,6 +14,7 @@ const (
 	dialogHubEdit   = "hub-edit"
 	dialogAWGSet    = "awg-set"
 	dialogProbeSet  = "probe-set"
+	dialogClientACL = "client-acl"
 )
 
 // dialog is the state of one unfinished exchange. There is exactly one admin, so at
@@ -68,5 +69,7 @@ func (b *Bot) handleDialogInput(ctx context.Context, text string) {
 		b.handleAWGSetInput(ctx, dialog, text)
 	case dialogProbeSet:
 		b.handleProbeSetInput(ctx, dialog, text)
+	case dialogClientACL:
+		b.handleClientACLInput(ctx, dialog, text)
 	}
 }

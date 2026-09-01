@@ -46,9 +46,20 @@ type FirewallPlan struct {
 	// open port with no listener is attack surface offered for nothing.
 	RealityPort uint16 `json:"reality_port,omitempty"`
 
+	// ClientACLs are narrowly-scoped client-to-client holes. They must render before
+	// the blanket ingress-to-ingress drop.
+	ClientACLs []ClientPortACL `json:"client_acls,omitempty"`
+
 	// Egresses is ordered deterministically so an unchanged configuration renders
 	// byte-identically.
 	Egresses []EgressGroup `json:"egresses"`
+}
+
+type ClientPortACL struct {
+	SourceAddress string            `json:"source_address,omitempty"`
+	TargetAddress string            `json:"target_address"`
+	Protocol      ClientACLProtocol `json:"protocol"`
+	Port          uint16            `json:"port"`
 }
 
 // InternalNetwork is one private network and the tunnel that reaches it.
