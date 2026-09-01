@@ -1,11 +1,17 @@
 package linux
 
 import (
+	"bufio"
 	"encoding/base64"
 	"fmt"
 	"strings"
 
 	"vpn-hub/internal/domain"
+)
+
+const (
+	MaxSubscriptionCandidates = 32
+	MaxSubscriptionLineBytes  = 8192
 )
 
 // ParseSubscription reads a provider's subscription payload.
@@ -17,20 +23,24 @@ import (
 //
 // It is a pure function, so real payload shapes are tested without a network.
 func ParseSubscription(payload []byte) ([]domain.ProxyTunnel, error) {
-	text := strings.TrimSpace(string(payload))
-	if text == "" {
+	text := string(payload)
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
 		return nil, fmt.Errorf("the subscription is empty")
 	}
 
 	// A subscription is usually base64; a plain list is not. Decoding failure just
 	// means it was already plain.
-	if decoded, err := decodeBase64(text); err == nil {
+	if decoded, err := decodeBase64(trimmed); err == nil {
 		text = decoded
 	}
 
 	var tunnels []domain.ProxyTunnel
 	var skipped int
-	for _, line := range strings.Split(text, "\n") {
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	scanner.Buffer(make([]byte, 4096), MaxSubscriptionLineBytes)
+	for scanner.Scan() {
+		line := scanner.Text()
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -44,7 +54,13 @@ func ParseSubscription(payload []byte) ([]domain.ProxyTunnel, error) {
 			skipped++
 			continue
 		}
+		if len(tunnels) == MaxSubscriptionCandidates {
+			return nil, fmt.Errorf("the subscription contains more than %d usable candidates", MaxSubscriptionCandidates)
+		}
 		tunnels = append(tunnels, tunnel)
+	}
+	if scanner.Err() != nil {
+		return nil, fmt.Errorf("subscription line exceeds %d bytes", MaxSubscriptionLineBytes)
 	}
 
 	if len(tunnels) == 0 {

@@ -2,12 +2,15 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"vpn-hub/internal/domain"
 	"vpn-hub/internal/ports"
 )
+
+const DefaultSubscriptionRefreshTimeout = 2 * time.Minute
 
 // SubscriptionRefresher replaces a tunnel's upstream from its provider's
 // subscription, but only with one that has been shown to work.
@@ -17,11 +20,12 @@ import (
 // carrying traffic; applying first and checking afterwards means finding out by
 // losing the connection. So: fetch, parse, prove in isolation, and only then promote.
 type SubscriptionRefresher struct {
-	Fetch ports.SubscriptionFetcher
-	Parse func([]byte) ([]domain.ProxyTunnel, error)
-	Prove func(ctx context.Context, candidates []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error)
-	Store ports.UpstreamWriter
-	Now   func() time.Time
+	Fetch   ports.SubscriptionFetcher
+	Parse   func([]byte) ([]domain.ProxyTunnel, error)
+	Prove   func(ctx context.Context, candidates []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error)
+	Store   ports.UpstreamWriter
+	Now     func() time.Time
+	Timeout time.Duration
 }
 
 // Refresh updates one tunnel. It returns the chosen candidate and the reasons any
@@ -34,24 +38,73 @@ func (r SubscriptionRefresher) Refresh(ctx context.Context, tunnel domain.Tunnel
 		return domain.ProxyTunnel{}, nil, fmt.Errorf("tunnel %q is not a subscription", tunnel.ID)
 	}
 
-	payload, err := r.Fetch.Fetch(ctx, tunnel.Source.Value)
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = DefaultSubscriptionRefreshTimeout
+	}
+	refreshCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	payload, err := r.Fetch.Fetch(refreshCtx, tunnel.Source.Value)
 	if err != nil {
+		if timeoutErr := subscriptionRefreshTimeoutError(ctx, refreshCtx, timeout, err); timeoutErr != nil {
+			return domain.ProxyTunnel{}, nil, timeoutErr
+		}
 		return domain.ProxyTunnel{}, nil, fmt.Errorf("fetch subscription: %w", err)
 	}
+	if err := subscriptionRefreshContextError(ctx, refreshCtx, timeout); err != nil {
+		return domain.ProxyTunnel{}, nil, err
+	}
 	candidates, err := r.Parse(payload)
+	if contextErr := subscriptionRefreshContextError(ctx, refreshCtx, timeout); contextErr != nil {
+		return domain.ProxyTunnel{}, nil, contextErr
+	}
 	if err != nil {
 		return domain.ProxyTunnel{}, nil, fmt.Errorf("read subscription: %w", err)
 	}
 
-	chosen, rejected, err := r.Prove(ctx, candidates)
+	chosen, rejected, err := r.Prove(refreshCtx, candidates)
 	if err != nil {
+		if timeoutErr := subscriptionRefreshTimeoutError(ctx, refreshCtx, timeout, err); timeoutErr != nil {
+			return domain.ProxyTunnel{}, rejected, timeoutErr
+		}
 		// The active upstream is left exactly as it was: a subscription that offers
 		// nothing working is a reason to keep what already works, not to replace it.
 		return domain.ProxyTunnel{}, rejected, err
 	}
+	if err := subscriptionRefreshContextError(ctx, refreshCtx, timeout); err != nil {
+		return domain.ProxyTunnel{}, rejected, err
+	}
 
-	if err := r.Store.Write(ctx, tunnel, chosen); err != nil {
+	if err := r.Store.Write(refreshCtx, tunnel, chosen); err != nil {
+		if timeoutErr := subscriptionRefreshTimeoutError(ctx, refreshCtx, timeout, err); timeoutErr != nil {
+			return domain.ProxyTunnel{}, rejected, timeoutErr
+		}
 		return domain.ProxyTunnel{}, rejected, fmt.Errorf("save the chosen candidate: %w", err)
 	}
+	if err := subscriptionRefreshContextError(ctx, refreshCtx, timeout); err != nil {
+		return domain.ProxyTunnel{}, rejected, err
+	}
 	return chosen, rejected, nil
+}
+
+func subscriptionRefreshContextError(parent, refreshCtx context.Context, timeout time.Duration) error {
+	err := refreshCtx.Err()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil {
+		return fmt.Errorf("subscription refresh exceeded %s", timeout)
+	}
+	return err
+}
+
+func subscriptionRefreshTimeoutError(parent, refreshCtx context.Context, timeout time.Duration, err error) error {
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	if errors.Is(refreshCtx.Err(), context.DeadlineExceeded) && parent.Err() == nil {
+		return fmt.Errorf("subscription refresh exceeded %s", timeout)
+	}
+	return nil
 }
