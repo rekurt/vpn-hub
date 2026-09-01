@@ -118,15 +118,6 @@ func validateOpenVPNInlineBlocks(content string) (map[int]bool, bool, error) {
 				block = ""
 				continue
 			}
-			if strings.HasPrefix(line, "<") {
-				name, closing, err := parseOpenVPNInlineTag(line)
-				if err == nil && closing {
-					return nil, false, fmt.Errorf("line %d: mismatched inline block close </%s> for <%s>", number+1, name, block)
-				}
-				if err == nil && isOpenVPNInlineBlock(name) {
-					return nil, false, fmt.Errorf("line %d: nested inline block <%s> inside <%s> is not allowed", number+1, name, block)
-				}
-			}
 			if block == "auth-user-pass" && line != "" {
 				credentialLines++
 			}
