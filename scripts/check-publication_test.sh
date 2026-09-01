@@ -47,16 +47,18 @@ expect_fail() {
 }
 
 expect_pass clean printf '%s\n' 'endpoint: vpn.example.com:51820'
-expect_fail awg-private printf '%s\n' 'private_key = YK8abDsljvw7F3rfkYsup5IR39Q6gCcz/d5t0828jX0='
+expect_fail awg-private printf '%s\n' 'private_key = BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB='
 expect_fail telegram-token printf '%s\n' 'token: 123456789:AAExampleSecretValueThatMustFail'
 expect_fail runtime-state printf '%s\n' '{"revision":"abc","hub":{"endpoint":"203.0.113.7:51820"}}'
 expect_pass synthetic-public printf '%s\n' 'public_key: W/kKaUP1n48AgIzxs8po0HKV+UEk1vMcTuBW648atSE='
 expect_fail unknown-host printf '%s\n' 'endpoint: vpn.personal-domain.net:51820'
+expect_fail unknown-server-host printf '%s\n' 'server: vpn.personal-domain.net:51820'
+expect_fail unknown-vless-host printf '%s\n' 'vless://id@vpn.personal-domain.net:443'
 expect_fail unknown-public-ip printf '%s\n' 'endpoint: 93.184.216.34:51820'
 expect_pass documentation-host printf '%s\n' 'endpoint: vpn.example.com:51820'
 
 new_repo history-secret
-printf '%s\n' 'private_key = YK8abDsljvw7F3rfkYsup5IR39Q6gCcz/d5t0828jX0=' >"$repo/fixture.txt"
+printf '%s\n' 'private_key = BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=' >"$repo/fixture.txt"
 commit_fixture
 rm "$repo/fixture.txt"
 git -C "$repo" add fixture.txt

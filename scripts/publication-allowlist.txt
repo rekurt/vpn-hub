@@ -5,3 +5,13 @@ objects.githubusercontent.com
 ppa.launchpadcontent.net
 1.1.1.1
 9.9.9.9
+# Reviewed repository metadata and test-only upstream examples.
+registry.opentofu.org
+rekurt.github.io
+golang.org
+1.2.3.4
+2.2.2.2
+5.6.7.8
+64.225.96.1
+www.cloudflare.com
+www.microsoft.com

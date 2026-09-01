@@ -42,12 +42,12 @@ Create a temporary Git repository in `scripts/check-publication_test.sh`, copy t
 
 ```sh
 expect_pass clean printf '%s\n' 'endpoint: vpn.example.com:51820'
-expect_fail awg-private printf '%s\n' 'private_key = YK8abDsljvw7F3rfkYsup5IR39Q6gCcz/d5t0828jX0='
-expect_fail telegram-token printf '%s\n' 'token: 123456789:AAExampleSecretValueThatMustFail'
-expect_fail runtime-state printf '%s\n' '{"revision":"abc","hub":{"endpoint":"203.0.113.7:51820"}}'
+expect_fail awg-private printf '%s\n' 'private_key = synthetic-test-key'
+expect_fail telegram-token write_synthetic_telegram_fixture
+expect_fail runtime-state write_synthetic_runtime_state_fixture
 expect_pass synthetic-public printf '%s\n' 'public_key: W/kKaUP1n48AgIzxs8po0HKV+UEk1vMcTuBW648atSE='
-expect_fail unknown-host printf '%s\n' 'endpoint: vpn.personal-domain.net:51820'
-expect_fail unknown-public-ip printf '%s\n' 'endpoint: 93.184.216.34:51820'
+expect_fail unknown-host write_unreviewed_hostname_fixture
+expect_fail unknown-public-ip write_unreviewed_ipv4_fixture
 expect_pass documentation-host printf '%s\n' 'endpoint: vpn.example.com:51820'
 ```
 
@@ -297,13 +297,13 @@ Assert a hostname candidate becomes:
 
 ```go
 domain.ProxyTunnel{
-	Server: "8.8.8.8",
+	Server: "203.0.113.8",
 	OriginServer: "edge.provider.example",
 	TLS: domain.ProxyTLS{ServerName: "edge.provider.example"},
 }
 ```
 
-The fake resolver returns `8.8.8.8` without network access. Production classification must follow `netip` plus an explicit IANA special-purpose prefix table and must reject documentation ranges as non-routable test space.
+The fake resolver returns `203.0.113.8` without network access. Production classification must follow `netip` plus an explicit IANA special-purpose prefix table and must reject documentation ranges as non-routable test space.
 
 - [ ] **Step 2: Run and verify failure**
 
