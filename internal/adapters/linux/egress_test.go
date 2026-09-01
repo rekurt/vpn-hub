@@ -374,3 +374,39 @@ func TestPlainWireGuardEgressIsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// `ip netns del` unmounts the handle but does not kill what runs inside, and the DNS
+// adapter's own sweep runs after egress has converged. By the time that sweep looks,
+// the namespace is already gone and its forwarder is a process pinning a namespace
+// that no longer has a name -- along with the interfaces and the tunnel session it
+// still holds open.
+func TestAWithdrawnTunnelsResolverIsStoppedBeforeItsNamespaceGoes(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{replies: map[string]string{
+		"ip -j netns list": `[{"name":"vpn-hub-gone"}]`,
+	}}
+	egress := Egress{Run: host.run, SecretsDir: t.TempDir()}
+
+	if err := egress.Apply(context.Background(), nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	stopped, deleted := -1, -1
+	for index, command := range host.commands {
+		if stopped < 0 && strings.Contains(command, "systemctl stop "+privateResolverUnit("gone")+".service") {
+			stopped = index
+		}
+		if deleted < 0 && strings.Contains(command, "ip netns del vpn-hub-gone") {
+			deleted = index
+		}
+	}
+	if stopped < 0 {
+		t.Fatalf("the withdrawn tunnel's resolver was left running; commands: %v", host.commands)
+	}
+	if deleted < 0 {
+		t.Fatalf("the namespace was not removed at all; commands: %v", host.commands)
+	}
+	if stopped > deleted {
+		t.Errorf("the namespace went first: resolver stopped at %d, namespace deleted at %d", stopped, deleted)
+	}
+}
