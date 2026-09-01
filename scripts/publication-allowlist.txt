@@ -15,3 +15,7 @@ golang.org
 64.225.96.1
 www.cloudflare.com
 www.microsoft.com
+# IANA-reserved examples used by parser tests.
+provider.example
+node.example
+amnezia.example
