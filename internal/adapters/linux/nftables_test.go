@@ -325,6 +325,34 @@ func TestClientToClientTrafficIsNotMarkedForEgress(t *testing.T) {
 	}
 }
 
+// ...and it must not shadow the private networks while doing it. A route lying
+// inside the client subnet is a configuration nothing rejects: routes are checked
+// against each other, and the subnet against the egress link base, but the two are
+// never checked against one another. Such a destination reached its tunnel by the
+// internal mark outranking the directly attached client subnet, so the return added
+// for client-to-client traffic has to be matched after the internal sets, not before
+// them -- ahead of them it ends the chain first and the packet goes back out the
+// ingress interface instead of down the tunnel.
+func TestPrivateNetworksOutrankTheIntraVPNReturn(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.Internals = []domain.InternalNetwork{{
+		TunnelID: "corp-a", Mark: 0x102, Interface: "vh-corp-a",
+		// Deliberately inside the client CIDR, which is what nothing rejects.
+		Routes: []string{"10.80.0.128/25"},
+	}}
+	rendered := RenderRuleset(plan)
+
+	internal := strings.Index(rendered, "ip daddr @internal_corp_a")
+	intra := strings.Index(rendered, "ip daddr "+plan.ClientCIDR+" return")
+	if internal < 0 || intra < 0 {
+		t.Fatalf("both rules must be present:\n%s", rendered)
+	}
+	if internal > intra {
+		t.Error("the private-network rule must be evaluated before the intra-VPN return")
+	}
+}
+
 // Each private network needs its own set: a shared one can say a destination is
 // internal but not which tunnel owns it.
 func TestEachPrivateNetworkHasItsOwnSet(t *testing.T) {
