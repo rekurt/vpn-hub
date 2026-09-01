@@ -191,6 +191,61 @@ auth-user-pass credentials.txt
 	}
 }
 
+func TestParseOpenVPNConfigAcceptsOpaqueInlineCredentialPassword(t *testing.T) {
+	t.Parallel()
+	config := providerOVPN + `auth-user-pass
+<auth-user-pass>
+demo-user
+<value>
+</auth-user-pass>
+`
+
+	tunnel, err := ParseOpenVPNConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tunnel.Config != config {
+		t.Fatal("the inline credential password was not preserved")
+	}
+}
+
+func TestParseOpenVPNConfigRejectsCredentialBlockBypassWithTrailingClose(t *testing.T) {
+	t.Parallel()
+	_, err := ParseOpenVPNConfig(providerOVPN + `auth-user-pass
+<auth-user-pass>
+demo-user
+</auth-user-pass/> ignored
+auth-user-pass credentials.txt
+`)
+	if err == nil || !strings.Contains(err.Error(), "inline block") {
+		t.Fatalf("error = %v, want inline block error", err)
+	}
+}
+
+func TestParseOpenVPNConfigAcceptsAdditionalInlineBlocks(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name, block, content string
+	}{
+		{"pkcs12", "pkcs12", "encoded-identity"},
+		{"proxy credentials", "http-proxy-user-pass", "proxy-user\nproxy-password"},
+		{"tls crypt v2", "tls-crypt-v2", "wrapped-key-material"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			config := providerOVPN + "<" + test.block + ">\n" + test.content + "\n</" + test.block + ">\n"
+			tunnel, err := ParseOpenVPNConfig(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tunnel.Config != config {
+				t.Fatal("the inline block was not preserved")
+			}
+		})
+	}
+}
+
 func TestParseOpenVPNConfigAcceptsCompleteInlineCredentials(t *testing.T) {
 	t.Parallel()
 	config := providerOVPN + `auth-user-pass
