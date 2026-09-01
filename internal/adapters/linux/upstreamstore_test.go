@@ -64,6 +64,85 @@ func TestCurrentReportsWhatWasWritten(t *testing.T) {
 	}
 }
 
+func TestRenderVLESSRoundTripsPinnedIPv6(t *testing.T) {
+	t.Parallel()
+	candidate := proxy("2606:4700:4700::1111")
+	candidate.OriginServer = "edge.provider.example"
+	candidate.TLS = domain.ProxyTLS{Enabled: true, ServerName: "edge.provider.example"}
+	candidate.Transport = domain.ProxyTransport{Type: "ws", Path: "/vpn", Host: "provider.example"}
+
+	link, err := RenderVLESS(candidate)
+	if err != nil {
+		t.Fatalf("RenderVLESS: %v", err)
+	}
+	if !strings.Contains(link, "@[2606:4700:4700::1111]:443") {
+		t.Fatalf("rendered IPv6 authority is not bracketed: %s", link)
+	}
+
+	parsed, err := ParseVLESS(link)
+	if err != nil {
+		t.Fatalf("ParseVLESS rendered link: %v", err)
+	}
+	if parsed.Server != candidate.Server {
+		t.Errorf("server = %q, want %q", parsed.Server, candidate.Server)
+	}
+	if parsed.TLS.ServerName != candidate.TLS.ServerName {
+		t.Errorf("TLS server name = %q, want %q", parsed.TLS.ServerName, candidate.TLS.ServerName)
+	}
+	if parsed.Transport.Host != candidate.Transport.Host {
+		t.Errorf("transport host = %q, want %q", parsed.Transport.Host, candidate.Transport.Host)
+	}
+	if parsed.OriginServer != "" {
+		t.Errorf("in-memory origin unexpectedly persisted as %q", parsed.OriginServer)
+	}
+}
+
+func TestUpstreamFileWriteCurrentRoundTripsPinnedIPv6(t *testing.T) {
+	t.Parallel()
+	store, tunnel := upstreamFixture(t)
+	candidate := proxy("2606:4700:4700::1111")
+	candidate.TLS = domain.ProxyTLS{Enabled: true, ServerName: "edge.provider.example"}
+
+	if err := store.Write(context.Background(), tunnel, candidate); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	current, hasCurrent, hasPrevious := store.Current(tunnel.ID)
+	if !hasCurrent || hasPrevious {
+		t.Fatalf("current flags = %v, %v", hasCurrent, hasPrevious)
+	}
+	if current.Server != candidate.Server || current.TLS.ServerName != candidate.TLS.ServerName {
+		t.Fatalf("current = %+v, want pinned IPv6 with preserved SNI", current)
+	}
+}
+
+func TestRenderVLESSKeepsIPv4AndHostnameAuthorities(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, server, authority string
+	}{
+		{name: "IPv4", server: "9.9.9.9", authority: "@9.9.9.9:443"},
+		{name: "hostname", server: "edge.provider.example", authority: "@edge.provider.example:443"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			link, err := RenderVLESS(proxy(test.server))
+			if err != nil {
+				t.Fatalf("RenderVLESS: %v", err)
+			}
+			if !strings.Contains(link, test.authority) {
+				t.Fatalf("rendered authority = %s, want %s", link, test.authority)
+			}
+			parsed, err := ParseVLESS(link)
+			if err != nil {
+				t.Fatalf("ParseVLESS rendered link: %v", err)
+			}
+			if parsed.Server != test.server {
+				t.Fatalf("server = %q, want %q", parsed.Server, test.server)
+			}
+		})
+	}
+}
+
 func TestUpstreamWriteDoesNotStartAfterContextEnds(t *testing.T) {
 	for name, setup := range map[string]func() (context.Context, context.CancelFunc, error){
 		"cancellation": func() (context.Context, context.CancelFunc, error) {
