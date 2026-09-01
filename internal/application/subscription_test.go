@@ -22,6 +22,12 @@ type recordingWriter struct {
 	err     error
 }
 
+type upstreamWriterFunc func(context.Context, domain.Tunnel, domain.ProxyTunnel) error
+
+func (f upstreamWriterFunc) Write(ctx context.Context, tunnel domain.Tunnel, chosen domain.ProxyTunnel) error {
+	return f(ctx, tunnel, chosen)
+}
+
 func (w *recordingWriter) Write(_ context.Context, _ domain.Tunnel, chosen domain.ProxyTunnel) error {
 	w.written = append(w.written, chosen)
 	return w.err
@@ -186,5 +192,30 @@ func TestSubscriptionRefreshDeadlineDoesNotMaskParentCancellation(t *testing.T) 
 	}
 	if strings.Contains(err.Error(), "subscription refresh exceeded") {
 		t.Fatalf("parent cancellation was reported as aggregate timeout: %v", err)
+	}
+}
+
+func TestSubscriptionRefreshSuccessfulStoreCommitWinsDeadlineRace(t *testing.T) {
+	committed := false
+	refresher := SubscriptionRefresher{
+		Fetch:   fakeFetcher{payload: []byte("payload")},
+		Parse:   func([]byte) ([]domain.ProxyTunnel, error) { return candidates(1), nil },
+		Timeout: 20 * time.Millisecond,
+		Prove: func(_ context.Context, list []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
+			return list[0], nil, nil
+		},
+		Store: upstreamWriterFunc(func(ctx context.Context, _ domain.Tunnel, _ domain.ProxyTunnel) error {
+			committed = true
+			<-ctx.Done()
+			return nil
+		}),
+	}
+
+	chosen, _, err := refresher.Refresh(context.Background(), subscriptionTunnel())
+	if err != nil {
+		t.Fatalf("Refresh after successful persistence commit: %v", err)
+	}
+	if !committed || chosen.Port != 443 {
+		t.Fatalf("commit result was lost: committed=%v chosen=%+v", committed, chosen)
 	}
 }

@@ -82,9 +82,6 @@ func (r SubscriptionRefresher) Refresh(ctx context.Context, tunnel domain.Tunnel
 		}
 		return domain.ProxyTunnel{}, rejected, fmt.Errorf("save the chosen candidate: %w", err)
 	}
-	if err := subscriptionRefreshContextError(ctx, refreshCtx, timeout); err != nil {
-		return domain.ProxyTunnel{}, rejected, err
-	}
 	return chosen, rejected, nil
 }
 

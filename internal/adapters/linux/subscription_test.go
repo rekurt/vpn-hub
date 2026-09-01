@@ -86,9 +86,35 @@ func TestSubscriptionCandidateLimit(t *testing.T) {
 	}
 }
 
-func TestSubscriptionLineLimit(t *testing.T) {
+func TestSubscriptionLineLimitAcceptsExactly8192Bytes(t *testing.T) {
 	t.Parallel()
-	_, err := ParseSubscription([]byte(strings.Repeat("x", 8193)))
+	prefix := plainLink + "&padding="
+	line := prefix + strings.Repeat("a", MaxSubscriptionLineBytes-len(prefix))
+
+	for name, suffix := range map[string]string{
+		"EOF":  "",
+		"LF":   "\n",
+		"CRLF": "\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			tunnels, err := ParseSubscription([]byte(line + suffix))
+			if err != nil {
+				t.Fatalf("ParseSubscription: %v", err)
+			}
+			if len(tunnels) != 1 {
+				t.Fatalf("tunnels = %d, want 1", len(tunnels))
+			}
+		})
+	}
+}
+
+func TestSubscriptionLineLimitRejects8193Bytes(t *testing.T) {
+	t.Parallel()
+	prefix := plainLink + "&padding="
+	line := prefix + strings.Repeat("a", MaxSubscriptionLineBytes+1-len(prefix))
+
+	_, err := ParseSubscription([]byte(line))
 	if err == nil || !strings.Contains(err.Error(), "line exceeds 8192 bytes") {
 		t.Fatalf("error = %v", err)
 	}

@@ -29,22 +29,37 @@ func (u UpstreamFile) dir() string {
 	return "/etc/vpn-hub"
 }
 
-func (u UpstreamFile) Write(_ context.Context, tunnel domain.Tunnel, chosen domain.ProxyTunnel) error {
+func (u UpstreamFile) Write(ctx context.Context, tunnel domain.Tunnel, chosen domain.ProxyTunnel) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	path := filepath.Join(u.dir(), "subscriptions", tunnel.ID+".link")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create subscription directory: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	if previous, err := os.ReadFile(path); err == nil {
 		// Written before the replacement, so a crash midway leaves the old link
 		// recoverable rather than nothing at all.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := runtimeadapter.AtomicWrite(path+".last-known-good", previous, 0o600); err != nil {
 			return fmt.Errorf("keep the previous link: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 	}
 
 	link, err := RenderVLESS(chosen)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	// Atomic: the agent re-reads this file on every reconcile tick, and a plain
