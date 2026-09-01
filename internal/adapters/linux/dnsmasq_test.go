@@ -1,6 +1,10 @@
 package linux
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -78,6 +82,204 @@ func TestResolverIsNotOpenToTheWorld(t *testing.T) {
 	for _, wanted := range []string{"bind-interfaces", "local-service", "listen-address=10.80.0.1"} {
 		if !strings.Contains(rendered, wanted) {
 			t.Errorf("missing %q:\n%s", wanted, rendered)
+		}
+	}
+}
+
+// privateDNSPlan adds a network that resolves through its own tunnel, which is the
+// arrangement the per-network forwarders exist for.
+func privateDNSPlan() domain.DNSPlan {
+	plan := dnsPlan()
+	plan.Zones[0].ForwardAddress = "10.90.0.2"
+	plan.PrivateResolvers = []domain.DNSPrivateResolver{{
+		TunnelID:  "corp-a",
+		Namespace: "vpn-hub-corp-a",
+		Address:   "10.90.0.2",
+		Resolvers: []string{"10.20.0.53"},
+	}}
+	return plan
+}
+
+// listResolverUnits is the command the stale sweep enumerates with.
+const listResolverUnits = "systemctl list-units --all --plain --no-legend " +
+	resolverUnitPrefix + "*.service"
+
+// The whole point of the forwarder is where it asks from: a private DNS server is
+// reachable from inside the tunnel and from nowhere else.
+func TestPrivateResolverRunsInsideItsOwnNamespace(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{}
+	dns := Dnsmasq{Run: host.run, ConfigDir: t.TempDir()}
+
+	if err := dns.Apply(context.Background(), privateDNSPlan(), false); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !host.ran("--unit=vpn-hub-dns-private-corp-a --property=Restart=on-failure ip netns exec vpn-hub-corp-a dnsmasq") {
+		t.Fatalf("the forwarder did not start inside its namespace; commands: %v", host.commands)
+	}
+}
+
+// Only "direct" is a reserved tunnel id, so a network may legitimately be called
+// "upstream". Named without the "private-" segment its forwarder would claim the unit
+// the public resolver already uses, and the two would evict each other from it on
+// every reconcile -- leaving whichever started last answering for both.
+func TestAPrivateResolverCannotEvictTheUpstreamOne(t *testing.T) {
+	t.Parallel()
+	plan := privateDNSPlan()
+	plan.PrivateResolvers[0].TunnelID = "upstream"
+	plan.PrivateResolvers[0].Namespace = "vpn-hub-upstream"
+
+	host := &fakeHost{}
+	dns := Dnsmasq{Run: host.run, ConfigDir: t.TempDir()}
+	if err := dns.Apply(context.Background(), plan, false); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// One pass starts three resolvers -- this network's forwarder, the public one and
+	// the hub's -- and each needs a transient unit of its own. Asserting that both
+	// commands ran would prove nothing: under a shared name both do run, and the
+	// second simply replaces the first. A name claimed twice is the defect itself.
+	started := map[string]string{}
+	for _, command := range host.commands {
+		if !strings.HasPrefix(command, "systemd-run ") {
+			continue
+		}
+		for _, field := range strings.Fields(command) {
+			unit, isUnit := strings.CutPrefix(field, "--unit=")
+			if !isUnit {
+				continue
+			}
+			if previous, taken := started[unit]; taken {
+				t.Fatalf("two resolvers claimed the unit %q, so the second evicted the first:\n  %s\n  %s",
+					unit, previous, command)
+			}
+			started[unit] = command
+		}
+	}
+	if len(started) != 3 {
+		t.Errorf("expected this network's, the public and the hub's resolvers to start, got %d: %v",
+			len(started), host.commands)
+	}
+}
+
+// A tunnel that merely drops its dns_zones keeps its namespace, so the egress adapter
+// never visits it. Without this sweep its forwarder would hold the namespace's veth
+// address for as long as the hub runs, answering from a revision that is gone.
+func TestAWithdrawnNetworksResolverIsReaped(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	// The withdrawn unit is printed with the leading bullet systemd gives a failed
+	// one, which shifts every column right by one.
+	host := &fakeHost{replies: map[string]string{
+		listResolverUnits: "  vpn-hub-dns-private-corp-a.service loaded active running dnsmasq\n" +
+			"\u25cf vpn-hub-dns-private-gone.service loaded failed failed dnsmasq\n",
+	}}
+	stale := filepath.Join(directory, privateResolverConfig("gone"))
+	if err := os.WriteFile(stale, []byte("listen-address=10.90.0.6\n"), 0o600); err != nil {
+		t.Fatalf("seed a stale configuration: %v", err)
+	}
+
+	dns := Dnsmasq{Run: host.run, ConfigDir: directory}
+	if err := dns.Apply(context.Background(), privateDNSPlan(), false); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if !host.ran("systemctl stop vpn-hub-dns-private-gone.service") {
+		t.Errorf("the withdrawn network kept its resolver; commands: %v", host.commands)
+	}
+	if host.ran("--unit=vpn-hub-dns-private-gone ") {
+		t.Errorf("the withdrawn network's resolver was restarted rather than reaped; commands: %v", host.commands)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("the withdrawn network's configuration outlived it: %v", err)
+	}
+	// The network still in the revision keeps its forwarder.
+	if !host.ran("--unit=vpn-hub-dns-private-corp-a ") {
+		t.Errorf("a network still in the revision lost its resolver; commands: %v", host.commands)
+	}
+}
+
+// Enumerating is housekeeping. Returning on its failure would leave every client
+// without DNS because one bookkeeping command failed -- but swallowing it would let a
+// leaked resolver go unreported, since each later pass would conclude afresh that
+// there was nothing to reap.
+func TestFailingToEnumerateIsReportedWithoutCostingClientsDNS(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{failures: map[string]error{
+		listResolverUnits: errors.New("Failed to connect to bus"),
+	}}
+	dns := Dnsmasq{Run: host.run, ConfigDir: t.TempDir()}
+
+	err := dns.Apply(context.Background(), privateDNSPlan(), false)
+	if err == nil {
+		t.Fatal("the failure to enumerate was swallowed, so a leaked resolver would never be reported")
+	}
+	if !host.ran("--unit=" + hubResolverUnit + " --property=") {
+		t.Errorf("clients lost their resolver over housekeeping; commands: %v", host.commands)
+	}
+}
+
+// The forwarders were once named without the "private-" segment. A hub upgraded from
+// that build still has one running, holding the very address its replacement is about
+// to bind -- and pointing at the same configuration file, so it has to be stopped
+// without that file being taken out from under its replacement.
+func TestAForwarderFromThePreviousBuildIsReapedButKeepsItsFile(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	host := &fakeHost{replies: map[string]string{
+		listResolverUnits: "  vpn-hub-dns-corp-a.service loaded active running dnsmasq\n",
+	}}
+
+	dns := Dnsmasq{Run: host.run, ConfigDir: directory}
+	if err := dns.Apply(context.Background(), privateDNSPlan(), false); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	stopped, started := -1, -1
+	for index, command := range host.commands {
+		if stopped < 0 && strings.Contains(command, "systemctl stop vpn-hub-dns-corp-a.service") {
+			stopped = index
+		}
+		if started < 0 && strings.Contains(command, "--unit=vpn-hub-dns-private-corp-a ") {
+			started = index
+		}
+	}
+	if stopped < 0 {
+		t.Fatalf("the previous build's forwarder kept the address; commands: %v", host.commands)
+	}
+	if started < 0 {
+		t.Fatalf("the replacement never started; commands: %v", host.commands)
+	}
+	if stopped > started {
+		t.Errorf("the replacement was started before the address was free: stopped at %d, started at %d",
+			stopped, started)
+	}
+	if _, err := os.Stat(filepath.Join(directory, privateResolverConfig("corp-a"))); err != nil {
+		t.Errorf("the running forwarder lost its configuration: %v", err)
+	}
+}
+
+// The public forwarder has an owner already. Sweeping it as well would stop it in the
+// same pass that started it, in the arrangement where it is wanted.
+func TestTheSweepLeavesThePublicForwarderAlone(t *testing.T) {
+	t.Parallel()
+	host := &fakeHost{replies: map[string]string{
+		listResolverUnits: "  vpn-hub-dns-upstream.service loaded active running dnsmasq\n",
+	}}
+	dns := Dnsmasq{Run: host.run, ConfigDir: t.TempDir()}
+
+	if err := dns.Apply(context.Background(), privateDNSPlan(), false); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// It is replaced, not reaped: the stop belongs to the restart that follows it.
+	for index, command := range host.commands {
+		if command != "systemctl stop "+upstreamResolverUnit+".service" {
+			continue
+		}
+		if index+1 >= len(host.commands) ||
+			!strings.Contains(host.commands[index+1], "--unit="+upstreamResolverUnit+" ") {
+			t.Fatalf("the public forwarder was stopped and not restarted; commands: %v", host.commands)
 		}
 	}
 }
