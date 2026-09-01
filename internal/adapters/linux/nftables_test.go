@@ -301,6 +301,30 @@ func TestInternalNetworksOutrankTheDefaultEgress(t *testing.T) {
 	}
 }
 
+// A client ACL only works if the packet still reaches the forward chain on the
+// ingress interface. The default-egress rule matches on source alone, so without an
+// earlier return it marks traffic between two clients as well, and policy routing
+// hands it to the egress namespace where the destination does not exist. The ACL
+// rules require oifname == ingress and so never match: the hole the operator opened
+// stays shut, and the ruleset gives no sign of why.
+func TestClientToClientTrafficIsNotMarkedForEgress(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	rendered := RenderRuleset(plan)
+
+	intra := strings.Index(rendered, "ip daddr "+plan.ClientCIDR+" return")
+	egress := strings.Index(rendered, "ip saddr @client_direct meta mark")
+	if intra < 0 {
+		t.Fatalf("traffic within the client CIDR must be left unmarked:\n%s", rendered)
+	}
+	if egress < 0 {
+		t.Fatalf("the default-egress rule must be present:\n%s", rendered)
+	}
+	if intra > egress {
+		t.Error("the intra-VPN return must be evaluated before the default egress")
+	}
+}
+
 // Each private network needs its own set: a shared one can say a destination is
 // internal but not which tunnel owns it.
 func TestEachPrivateNetworkHasItsOwnSet(t *testing.T) {

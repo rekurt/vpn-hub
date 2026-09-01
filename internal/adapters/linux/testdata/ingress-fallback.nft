@@ -6,7 +6,7 @@ table inet vpn_hub
 delete table inet vpn_hub
 
 table inet vpn_hub {
-	comment "vpn-hub:ed504252946aee5e"
+	comment "vpn-hub:95695897509d57f5"
 
 	set client_direct {
 		type ipv4_addr
@@ -25,6 +25,7 @@ table inet vpn_hub {
 	chain prerouting {
 		type filter hook prerouting priority mangle; policy accept;
 		iifname != "awg0" accept
+		ip daddr 10.80.0.0/24 return
 		ip saddr @client_direct meta mark set 0x00000100
 		ip saddr @client_provider_nl meta mark set 0x00000101
 		ct mark set meta mark
