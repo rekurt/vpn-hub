@@ -246,6 +246,11 @@ func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID 
 			}
 		}
 
+		candidate, err := health.PinPublicEndpoint(ctx, b.Resolver, candidate)
+		if err != nil {
+			edit(renderFailure("кандидат указывает не на публичный endpoint", err))
+			return
+		}
 		uplink, err := b.Uplink(ctx)
 		if err != nil {
 			edit(renderFailure("не определился uplink", err))
@@ -359,16 +364,31 @@ func (b *Bot) canaryRefresh(ctx context.Context, tunnel domain.Tunnel, progress 
 		Fetch: health.HTTPSSubscriptionFetcher{},
 		Parse: linux.ParseSubscription,
 		Prove: func(ctx context.Context, candidates []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
-			chosen, reasons, err := canary.SelectCandidate(ctx, candidates, uplink, progress)
-			if err != nil {
-				// SelectCandidate's aggregate error repeats every rejection, and the
-				// screen renders the rejection list itself -- keep the one-line verdict.
-				err = fmt.Errorf("ни один кандидат не пропустил трафик")
-			}
-			return chosen, reasons, err
+			return b.provePublicCandidates(ctx, candidates,
+				func(ctx context.Context, pinned []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
+					chosen, reasons, err := canary.SelectCandidate(ctx, pinned, uplink, progress)
+					if err != nil {
+						// SelectCandidate's aggregate error repeats every rejection, and the
+						// screen renders the rejection list itself -- keep the one-line verdict.
+						err = fmt.Errorf("ни один кандидат не пропустил трафик")
+					}
+					return chosen, reasons, err
+				})
 		},
 		Store: linux.UpstreamFile{Dir: b.ConfigDir},
 	}.Refresh(ctx, tunnel)
+}
+
+func (b *Bot) provePublicCandidates(
+	ctx context.Context,
+	candidates []domain.ProxyTunnel,
+	prove func(context.Context, []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error),
+) (domain.ProxyTunnel, []string, error) {
+	pinned, err := health.PinPublicEndpoints(ctx, b.Resolver, candidates)
+	if err != nil {
+		return domain.ProxyTunnel{}, nil, fmt.Errorf("validate subscription candidates: %w", err)
+	}
+	return prove(ctx, pinned)
 }
 
 // scheduleRefreshes is the timer the systemd unit used to be: every interval, each

@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,12 @@ import (
 const adminID = int64(42)
 
 // --- fakes -----------------------------------------------------------------
+
+type botEndpointResolverStub map[string][]netip.Addr
+
+func (r botEndpointResolverStub) LookupNetIP(_ context.Context, _ string, host string) ([]netip.Addr, error) {
+	return r[host], nil
+}
 
 type sent struct {
 	text   string
@@ -696,9 +703,13 @@ func TestCandidatePickPromotesOnlyProven(t *testing.T) {
 	ctx := context.Background()
 
 	// Make wg-nl a subscription tunnel for this test's purposes: rewrite config.
-	link := "vless://3b1c8a52-4b6e-4d8a-9f00-0123456789ab@1.2.3.4:443?encryption=none&type=tcp\n" +
-		"vless://3b1c8a52-4b6e-4d8a-9f00-0123456789ab@5.6.7.8:443?encryption=none&type=tcp\n"
+	link := "vless://3b1c8a52-4b6e-4d8a-9f00-0123456789ab@edge.provider.example:443?encryption=none&type=tcp\n" +
+		"vless://3b1c8a52-4b6e-4d8a-9f00-0123456789ab@provider.example:443?encryption=none&type=tcp\n"
 	instance.Fetch = func(context.Context, string) ([]byte, error) { return []byte(link), nil }
+	instance.Resolver = botEndpointResolverStub{
+		"edge.provider.example": {netip.MustParseAddr("1.2.3.4")},
+		"provider.example":      {netip.MustParseAddr("5.6.7.8")},
+	}
 	proved := ""
 	instance.Prove = func(_ context.Context, candidate domain.ProxyTunnel, _ string) error {
 		proved = candidate.Server
@@ -739,6 +750,25 @@ func TestCandidatePickPromotesOnlyProven(t *testing.T) {
 	current, hasCurrent, _ := instance.Upstreams.Current("wg-nl")
 	if !hasCurrent || current.Server != "5.6.7.8" {
 		t.Fatalf("the proven candidate was not promoted: %+v %v", current, hasCurrent)
+	}
+}
+
+func TestBotProvePublicCandidatesRejectsPrivateBeforeCanary(t *testing.T) {
+	t.Parallel()
+	instance := &Bot{Resolver: botEndpointResolverStub{}}
+	called := false
+
+	_, _, err := instance.provePublicCandidates(context.Background(),
+		[]domain.ProxyTunnel{{Server: "10.0.0.8"}},
+		func(_ context.Context, _ []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
+			called = true
+			return domain.ProxyTunnel{}, nil, nil
+		})
+	if err == nil || !strings.Contains(err.Error(), "not a public endpoint") {
+		t.Fatalf("provePublicCandidates error = %v", err)
+	}
+	if called {
+		t.Fatal("private candidate reached the canary")
 	}
 }
 

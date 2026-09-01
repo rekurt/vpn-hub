@@ -2,6 +2,8 @@ package linux
 
 import (
 	"context"
+	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,23 @@ import (
 
 	"vpn-hub/internal/domain"
 )
+
+type tunnelConfigResolverStub struct {
+	answers map[string][]netip.Addr
+	err     error
+	calls   int
+}
+
+func (r *tunnelConfigResolverStub) LookupNetIP(_ context.Context, network, host string) ([]netip.Addr, error) {
+	r.calls++
+	if network != "ip" {
+		return nil, errors.New("unexpected network: " + network)
+	}
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.answers[host], nil
+}
 
 // A subscription names a URL, and the URL is not what the host dials. The refresher
 // proves a candidate and writes the winner to a link file; this reads it. Until it
@@ -26,7 +45,10 @@ func TestASubscriptionIsReadFromTheProvenLink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	upstream, err := (TunnelConfigFiles{Dir: dir}).Load(context.Background(), domain.Tunnel{
+	resolver := &tunnelConfigResolverStub{answers: map[string][]netip.Addr{
+		"provider.example": {netip.MustParseAddr("9.9.9.9")},
+	}}
+	upstream, err := (TunnelConfigFiles{Dir: dir, Resolver: resolver}).Load(context.Background(), domain.Tunnel{
 		ID:     "nl",
 		Type:   domain.TunnelXray,
 		Source: domain.TunnelSource{Kind: domain.SourceSubscription, Value: "https://provider.example/sub"},
@@ -34,8 +56,74 @@ func TestASubscriptionIsReadFromTheProvenLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if upstream.Proxy.Server != "provider.example" {
-		t.Errorf("Server = %q, want the proven candidate's", upstream.Proxy.Server)
+	if upstream.Proxy.Server != "9.9.9.9" {
+		t.Errorf("Server = %q, want the pinned candidate", upstream.Proxy.Server)
+	}
+	if upstream.Proxy.OriginServer != "provider.example" {
+		t.Errorf("OriginServer = %q, want provider.example", upstream.Proxy.OriginServer)
+	}
+}
+
+func TestVLESSFilesRejectNonPublicEndpoints(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		kind   domain.SourceKind
+		source string
+		path   string
+	}{
+		{name: "static config", kind: domain.SourceConfig, source: "edge-link", path: "edge-link"},
+		{name: "subscription", kind: domain.SourceSubscription, source: "https://provider.example/sub", path: filepath.Join("subscriptions", "edge"+".link")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, test.path)
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			link := "vless://24b3b0ef-1a1a-4d29-9f3f-6f0f6d0d1111@10.0.0.8:443?security=tls&type=tcp\n"
+			if err := os.WriteFile(path, []byte(link), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := (TunnelConfigFiles{Dir: dir}).Load(context.Background(), domain.Tunnel{
+				ID:     "edge",
+				Type:   domain.TunnelXray,
+				Source: domain.TunnelSource{Kind: test.kind, Value: test.source},
+			})
+			if err == nil || !strings.Contains(err.Error(), "not a public endpoint") {
+				t.Fatalf("Load error = %v, want public-endpoint rejection", err)
+			}
+		})
+	}
+}
+
+func TestOperatorPrivateNetworkEndpointsAreNotRestricted(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	resolver := &tunnelConfigResolverStub{err: errors.New("resolver must not be used")}
+
+	wg := strings.Replace(providerConfig, "frankfurt.example.net:51820", "10.0.0.2:51820", 1)
+	if err := os.WriteFile(filepath.Join(dir, "private-wg"), []byte(wg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ovpn := strings.Replace(providerOVPN, "vpn.example.net 1194", "10.0.0.3 1194", 1)
+	if err := os.WriteFile(filepath.Join(dir, "private-ovpn"), []byte(ovpn), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tunnel := range []domain.Tunnel{
+		{ID: "private-wg", Type: domain.TunnelWireGuard, Role: domain.RolePrivateNetwork, Source: domain.TunnelSource{Kind: domain.SourceConfig, Value: "private-wg"}},
+		{ID: "private-ovpn", Type: domain.TunnelOpenVPN, Role: domain.RoleEgress, Source: domain.TunnelSource{Kind: domain.SourceConfig, Value: "private-ovpn"}},
+	} {
+		if _, err := (TunnelConfigFiles{Dir: dir, Resolver: resolver}).Load(context.Background(), tunnel); err != nil {
+			t.Errorf("Load %s: %v", tunnel.ID, err)
+		}
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("operator endpoints caused %d DNS lookups", resolver.calls)
 	}
 }
 

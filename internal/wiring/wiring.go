@@ -6,6 +6,7 @@
 package wiring
 
 import (
+	"net"
 	"path/filepath"
 
 	configadapter "vpn-hub/internal/adapters/config"
@@ -62,7 +63,7 @@ func Reconciler(keyPath, runtimeDir, configDir string) ports.Reconciler {
 		Ingress:       linux.Ingress{SecretsDir: runtimeDir},
 		Egress:        linux.Egress{SecretsDir: runtimeDir},
 		DNS:           linux.Dnsmasq{ConfigDir: runtimeDir},
-		TunnelConfigs: linux.TunnelConfigFiles{Dir: configDir, Secrets: configadapter.SOPSSecretStore{}},
+		TunnelConfigs: linux.TunnelConfigFiles{Dir: configDir, Secrets: configadapter.SOPSSecretStore{}, Resolver: net.DefaultResolver},
 		Host:          linux.NetConf{},
 		ServerKey:     linux.ServerKeyFile{Path: keyPath},
 		Reality:       linux.RealityIngress{SecretsDir: runtimeDir},

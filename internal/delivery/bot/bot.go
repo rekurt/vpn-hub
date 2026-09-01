@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -134,7 +135,9 @@ type Bot struct {
 	Fetch func(ctx context.Context, url string) ([]byte, error)
 	Parse func(payload []byte) ([]domain.ProxyTunnel, error)
 	Prove func(ctx context.Context, candidate domain.ProxyTunnel, uplink string) error
-	Now   func() time.Time
+	// Resolver pins provider-controlled VLESS hostnames before either canary path.
+	Resolver health.EndpointResolver
+	Now      func() time.Time
 
 	gate       opsGate
 	dialogs    dialogs
@@ -180,6 +183,7 @@ func New(cfg Config, client *tg.Client, configPath, stateDir, configDir, runtime
 		Upstreams:  linux.UpstreamFile{Dir: configDir},
 		Fetch:      health.HTTPSSubscriptionFetcher{}.Fetch,
 		Parse:      linux.ParseSubscription,
+		Resolver:   net.DefaultResolver,
 		Now:        time.Now,
 	}
 	b.Refresh = b.canaryRefresh

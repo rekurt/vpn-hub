@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,12 @@ import (
 
 	"vpn-hub/internal/domain"
 )
+
+type cliEndpointResolverStub map[string][]netip.Addr
+
+func (r cliEndpointResolverStub) LookupNetIP(_ context.Context, _ string, host string) ([]netip.Addr, error) {
+	return r[host], nil
+}
 
 // run executes hubctl with args against a throwaway config and returns combined output.
 func run(t *testing.T, args ...string) (string, error) {
@@ -242,5 +249,48 @@ func TestTheFirstDeploySaysNoRollbackWasArmed(t *testing.T) {
 	}
 	if !strings.Contains(output, "no rollback was armed") {
 		t.Errorf("the output promises a rollback that was not armed:\n%s", output)
+	}
+}
+
+func TestProvePublicCandidatesPinsBeforeCanaryAndReturnsPinnedChoice(t *testing.T) {
+	t.Parallel()
+	resolver := cliEndpointResolverStub{
+		"edge.provider.example": {netip.MustParseAddr("9.9.9.9")},
+	}
+	candidate := domain.ProxyTunnel{
+		Server:    "edge.provider.example",
+		TLS:       domain.ProxyTLS{Enabled: true},
+		Transport: domain.ProxyTransport{Type: "ws"},
+	}
+
+	chosen, _, err := provePublicCandidates(context.Background(), resolver, []domain.ProxyTunnel{candidate},
+		func(_ context.Context, candidates []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
+			return candidates[0], nil, nil
+		})
+	if err != nil {
+		t.Fatalf("provePublicCandidates: %v", err)
+	}
+	if chosen.Server != "9.9.9.9" || chosen.OriginServer != "edge.provider.example" {
+		t.Fatalf("chosen = %+v, want pinned candidate", chosen)
+	}
+	if chosen.TLS.ServerName != "edge.provider.example" || chosen.Transport.Host != "edge.provider.example" {
+		t.Fatalf("handshake hosts were not preserved: %+v", chosen)
+	}
+}
+
+func TestProvePublicCandidatesRejectsPrivateBeforeCanary(t *testing.T) {
+	t.Parallel()
+	called := false
+	_, _, err := provePublicCandidates(context.Background(), cliEndpointResolverStub{},
+		[]domain.ProxyTunnel{{Server: "10.0.0.8"}},
+		func(_ context.Context, _ []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
+			called = true
+			return domain.ProxyTunnel{}, nil, nil
+		})
+	if err == nil || !strings.Contains(err.Error(), "not a public endpoint") {
+		t.Fatalf("provePublicCandidates error = %v", err)
+	}
+	if called {
+		t.Fatal("private candidate reached the canary")
 	}
 }

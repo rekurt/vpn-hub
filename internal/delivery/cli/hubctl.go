@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"time"
 
@@ -290,7 +291,10 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 				Fetch: health.HTTPSSubscriptionFetcher{},
 				Parse: linux.ParseSubscription,
 				Prove: func(ctx context.Context, list []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
-					return canary.SelectCandidate(ctx, list, uplink, nil)
+					return provePublicCandidates(ctx, net.DefaultResolver, list,
+						func(ctx context.Context, pinned []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
+							return canary.SelectCandidate(ctx, pinned, uplink, nil)
+						})
 				},
 				Store: linux.UpstreamFile{Dir: configDir},
 			}.Refresh(cmd.Context(), subject)
@@ -332,6 +336,19 @@ func newSubscriptionCommand(configPath *string) *cobra.Command {
 
 	command.AddCommand(refresh, restore)
 	return command
+}
+
+func provePublicCandidates(
+	ctx context.Context,
+	resolver health.EndpointResolver,
+	candidates []domain.ProxyTunnel,
+	prove func(context.Context, []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error),
+) (domain.ProxyTunnel, []string, error) {
+	pinned, err := health.PinPublicEndpoints(ctx, resolver, candidates)
+	if err != nil {
+		return domain.ProxyTunnel{}, nil, fmt.Errorf("validate subscription candidates: %w", err)
+	}
+	return prove(ctx, pinned)
 }
 
 func newDeviceCommand(configPath *string) *cobra.Command {
