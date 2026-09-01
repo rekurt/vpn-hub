@@ -54,6 +54,8 @@ expect_pass synthetic-public printf '%s\n' 'public_key: W/kKaUP1n48AgIzxs8po0HKV
 expect_fail unknown-host printf '%s\n' 'endpoint: vpn.personal-domain.net:51820'
 expect_fail unknown-server-host printf '%s\n' 'server: vpn.personal-domain.net:51820'
 expect_fail unknown-vless-host printf '%s\n' 'vless://id@vpn.personal-domain.net:443'
+expect_fail unknown-dev-host printf '%s\n' 'server: vpn.personal-domain.dev:51820'
+expect_fail unknown-ru-host printf '%s\n' 'server: vpn.personal-domain.ru:51820'
 expect_fail unknown-public-ip printf '%s\n' 'endpoint: 93.184.216.34:51820'
 expect_pass documentation-host printf '%s\n' 'endpoint: vpn.example.com:51820'
 

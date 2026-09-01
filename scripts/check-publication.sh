@@ -23,7 +23,7 @@ report_matches() {
 is_allowed_ip() {
 	ip=$1
 	case "$ip" in
-		0.*|10.*|127.*|169.254.*|192.168.*|192.0.2.*|198.51.100.*|203.0.113.*|255.255.255.*|1.1.1.1|9.9.9.9) return 0 ;;
+		0.*|10.*|127.*|169.254.*|192.168.*|192.0.2.*|198.51.100.*|203.0.113.*|1.1.1.1|9.9.9.9) return 0 ;;
 		172.*)
 			second=${ip#172.}
 			second=${second%%.*}
@@ -36,7 +36,7 @@ is_allowed_ip() {
 is_allowed_host() {
 	host=$1
 	case "$host" in
-		*.example.com|*.example.net|*.example.org|example.com|example.net|example.org|*.github.com) return 0 ;;
+		*.example.com|*.example.net|*.example.org|example.com|example.net|example.org) return 0 ;;
 	esac
 	grep -Fxq "$host" "$allowlist"
 }
@@ -44,9 +44,9 @@ is_allowed_host() {
 check_addresses() {
 	ref=$1
 	if [ -n "$ref" ]; then
-		lines=$(git grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|([[:alnum:]-]+\.)+(com|net|org|io)' "$ref" -- ':!scripts/check-publication_test.sh' 2>/dev/null || true)
+		lines=$(git grep -nE '(^|[^[:alnum:]_])(endpoint|server|host|hostname)[[:space:]]*[:=]|[a-z][a-z0-9+.-]*://' "$ref" -- ':!scripts/check-publication_test.sh' 2>/dev/null || true)
 	else
-		lines=$(git grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|([[:alnum:]-]+\.)+(com|net|org|io)' -- ':!scripts/check-publication_test.sh' 2>/dev/null || true)
+		lines=$(git grep -nE '(^|[^[:alnum:]_])(endpoint|server|host|hostname)[[:space:]]*[:=]|[a-z][a-z0-9+.-]*://' -- ':!scripts/check-publication_test.sh' 2>/dev/null || true)
 	fi
 	bad=0
 	while IFS= read -r line; do
@@ -56,7 +56,9 @@ check_addresses() {
 		else
 			content=${line#*:*:}
 		fi
-		for value in $(printf '%s\n' "$content" | perl -nle 'while (/(?<![A-Za-z0-9_-])(?:\d{1,3}\.){3}\d{1,3}(?![A-Za-z0-9_-])|(?<![A-Za-z0-9_-])(?:[A-Za-z0-9-]{2,}\.)+(?:com|net|org|io)(?![A-Za-z0-9_-])/g) { print $& }' || true); do
+		for value in $(printf '%s\n' "$content" | perl -nle 'while (/(?:\b(?:endpoint|server|host|hostname)\s*[:=]\s*["\x27]?|[a-z][a-z0-9+.-]*:\/\/(?:[^@\/\s]+@)?)([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)/g) { next if substr($_, pos(), 1) eq "("; print $1 }' || true); do
+			case "$value" in *.*) ;; *) continue ;; esac
+			case "$value" in *.*.[a-zA-Z]|*.[a-zA-Z]) continue ;; esac
 			case "$value" in
 				*[!0-9.]* )
 					case "$value" in *.internal|*.test|localhost) continue ;; esac
