@@ -134,6 +134,33 @@ func TestLocalServicesAreClosedToMarkedTraffic(t *testing.T) {
 	}
 }
 
+// A private network may route a prefix inside the client subnet: validateRouteOverlaps
+// compares a route against the other tunnels' routes and never against the hub's own
+// client CIDR, so the configuration is accepted. The client-to-client return therefore
+// has to come after the internal marks -- ahead of them it matches first, and a
+// destination the tunnel claims leaves unmarked by the ingress interface instead.
+func TestInternalRoutesOutrankTheClientCIDRReturn(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	// Inside the plan's own client CIDR, which is what makes the order observable.
+	plan.Internals = []domain.InternalNetwork{{
+		TunnelID: "corp", Mark: 0x102, Interface: "vh-corp", Routes: []string{"10.80.0.128/25"},
+	}}
+	rendered := RenderRuleset(plan)
+
+	chain := rendered[strings.Index(rendered, "chain prerouting {"):]
+	chain = chain[:strings.Index(chain, "\t}")]
+
+	marked := "ip daddr @internal_corp meta mark set"
+	returned := "ip daddr " + plan.ClientCIDR + " return"
+	if !strings.Contains(chain, marked) || !strings.Contains(chain, returned) {
+		t.Fatalf("prerouting is missing a rule under test:\n%s", chain)
+	}
+	if strings.Index(chain, returned) < strings.Index(chain, marked) {
+		t.Errorf("the client-CIDR return preempts a private route inside it:\n%s", chain)
+	}
+}
+
 // output_mark marks by destination alone -- it cannot see who asked -- so it must
 // not touch a socket that already chose its way out. The fallback listener's
 // connections carry the mark of their device's egress; re-marking them into a
