@@ -160,7 +160,23 @@ func TestOpenVPNStateReadsPastTheBanner(t *testing.T) {
 			return
 		}
 		defer func() { _ = connection.Close() }()
+		// The banner is unprompted -- OpenVPN greets on connect, before it is asked
+		// anything -- so it goes out ahead of the caller's command.
 		_, _ = connection.Write([]byte(">INFO:OpenVPN Management Interface Version 5 -- type 'help' for more info\r\n"))
+
+		// Wait for that command before going further. The deferred close above would
+		// otherwise race the caller's own "state\n", and writing to a unix socket whose
+		// peer has already closed fails with EPIPE -- the caller then reports an error
+		// instead of reading the reply queued up for it. The read is a synchronisation
+		// point, not a gate: the reply goes out however it turns out, and the deadline
+		// keeps a caller that connects and then says nothing from parking this
+		// goroutine for the rest of the run.
+		_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, _ = connection.Read(make([]byte, 64))
+
+		// The state line has to arrive in a read of its own. Landing together with the
+		// banner it would parse out of a single read, and the accumulate loop this test
+		// exists to cover would never be exercised.
 		time.Sleep(30 * time.Millisecond)
 		_, _ = connection.Write([]byte("1699999999,CONNECTED,SUCCESS,10.8.0.2,203.0.113.7,1194,,\r\nEND\r\n"))
 	}()
