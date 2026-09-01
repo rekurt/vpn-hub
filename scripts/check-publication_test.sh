@@ -5,6 +5,7 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
+failed=0
 
 new_repo() {
 	name=$1
@@ -30,7 +31,7 @@ expect_pass() {
 	commit_fixture
 	if ! (cd "$repo" && sh scripts/check-publication.sh); then
 		echo "$name: expected publication check to pass" >&2
-		exit 1
+		failed=1
 	fi
 }
 
@@ -42,7 +43,7 @@ expect_fail() {
 	commit_fixture
 	if (cd "$repo" && sh scripts/check-publication.sh); then
 		echo "$name: expected publication check to fail" >&2
-		exit 1
+		failed=1
 	fi
 }
 
@@ -61,7 +62,12 @@ expect_fail unknown-json-address printf '%s\n' '{"address":"edge.personal-domain
 expect_fail unknown-prose-host printf '%s\n' 'Contact vpn.personal-domain.xyz for access.'
 expect_fail unknown-prose-ip printf '%s\n' 'The temporary value is 93.184.216.35.'
 expect_fail unknown-public-ip printf '%s\n' 'endpoint: 93.184.216.34:51820'
+expect_fail unknown-no-hyphen-host printf '%s\n' 'endpoint: vpn.example.dev:51820'
+expect_fail unknown-uppercase-host printf '%s\n' 'endpoint: VPN.EXAMPLE.DEV:51820'
+expect_fail unknown-one-letter-label printf '%s\n' 'endpoint: a.b.dev:51820'
+expect_fail unknown-inline-code-host printf '%s\n' 'Use `vpn.vendor.cloud` as the endpoint.'
 expect_pass documentation-host printf '%s\n' 'endpoint: vpn.example.com:51820'
+expect_pass uppercase-documentation-host printf '%s\n' 'endpoint: VPN.EXAMPLE.COM:51820'
 
 new_repo history-secret
 printf '%s\n' 'private_key = BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=' >"$repo/fixture.txt"
@@ -71,5 +77,7 @@ git -C "$repo" add fixture.txt
 git -C "$repo" commit -qm "test: remove fixture"
 if (cd "$repo" && sh scripts/check-publication.sh --history); then
 	echo "history-secret: expected history publication check to fail" >&2
-	exit 1
+	failed=1
 fi
+
+exit "$failed"

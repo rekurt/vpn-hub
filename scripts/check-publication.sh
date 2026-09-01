@@ -34,9 +34,9 @@ is_allowed_ip() {
 }
 
 is_allowed_host() {
-	host=$1
+	host=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
 	case "$host" in
-		*.example.com|*.example.net|*.example.org|example.com|example.net|example.org) return 0 ;;
+		*.example.com|*.example.net|*.example.org|example.com|example.net|example.org|*.internal|*.test|localhost) return 0 ;;
 	esac
 	grep -Fxq "$host" "$allowlist"
 }
@@ -64,15 +64,10 @@ check_addresses() {
 		if ($path =~ /\.go$/) {
 			@text = ($content =~ /(?:"([^"\\]*(?:\\.[^"\\]*)*)"|`([^`]*)`|\/\/\s*(.*))/g);
 			@text = grep defined, @text;
-		} elsif ($path =~ /\.md$/) {
-			$content =~ s/`[^`]*`//g;
-			@text = ($content);
 		} else { @text = ($content); }
 		for $text (@text) {
-			while ($text =~ /(?<![A-Za-z0-9_-])((?:\d{1,3}\.){3}\d{1,3}|(?:[A-Za-z0-9-]{2,}\.)+[A-Za-z]{2,})(?![A-Za-z0-9_-])/g) {
+			while ($text =~ /(?<![A-Za-z0-9_-])((?:\d{1,3}\.){3}\d{1,3}|(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,})(?![A-Za-z0-9_-])/g) {
 				$value = $1;
-				next if $value =~ /[A-Z]/;
-				next if $value !~ /^\d/ && $value !~ /^[^.]+\.[^.]*-[^.]+\.[^.]+$/;
 				print "$value|$line\n";
 			}
 		}
@@ -82,7 +77,6 @@ check_addresses() {
 		is_non_network_literal "$value" && continue
 		case "$value" in
 			*[!0-9.]* )
-				case "$value" in *.internal|*.test|localhost) continue ;; esac
 				if ! is_allowed_host "$value"; then
 					echo "unreviewed public hostname $value: $line" >&2
 					bad=1
