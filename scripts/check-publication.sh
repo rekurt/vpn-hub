@@ -41,42 +41,62 @@ is_allowed_host() {
 	grep -Fxq "$host" "$allowlist"
 }
 
+is_non_network_literal() {
+	# These tracked file names match the DNS grammar but cannot be hostnames.
+	case "$1" in
+		99-vpn-hub.conf|2026-09-01-publication-security-hardening.md|0-release-evidence.md) return 0 ;;
+	esac
+	return 1
+}
+
 check_addresses() {
 	ref=$1
 	if [ -n "$ref" ]; then
-		lines=$(git grep -nE '(^|[^[:alnum:]_])(endpoint|server|host|hostname)[[:space:]]*[:=]|[a-z][a-z0-9+.-]*://' "$ref" -- ':!scripts/check-publication_test.sh' 2>/dev/null || true)
+		lines=$(git grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|([[:alnum:]-]+\.)+[[:alpha:]]{2,}' "$ref" -- ':!scripts/check-publication_test.sh' 2>/dev/null || true)
 	else
-		lines=$(git grep -nE '(^|[^[:alnum:]_])(endpoint|server|host|hostname)[[:space:]]*[:=]|[a-z][a-z0-9+.-]*://' -- ':!scripts/check-publication_test.sh' 2>/dev/null || true)
+		lines=$(git grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|([[:alnum:]-]+\.)+[[:alpha:]]{2,}' -- ':!scripts/check-publication_test.sh' 2>/dev/null || true)
 	fi
 	bad=0
-	while IFS= read -r line; do
-		[ -n "$line" ] || continue
-		if [ -n "$ref" ]; then
-			content=${line#*:*:*:}
-		else
-			content=${line#*:*:}
-		fi
-		for value in $(printf '%s\n' "$content" | perl -nle 'while (/(?:\b(?:endpoint|server|host|hostname)\s*[:=]\s*["\x27]?|[a-z][a-z0-9+.-]*:\/\/(?:[^@\/\s]+@)?)([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)/g) { next if substr($_, pos(), 1) eq "("; print $1 }' || true); do
-			case "$value" in *.*) ;; *) continue ;; esac
-			case "$value" in *.*.[a-zA-Z]|*.[a-zA-Z]) continue ;; esac
-			case "$value" in
-				*[!0-9.]* )
-					case "$value" in *.internal|*.test|localhost) continue ;; esac
-					if ! is_allowed_host "$value"; then
-						echo "unreviewed public hostname $value: $line" >&2
-						bad=1
-					fi
-					;;
-				*)
-					if ! is_allowed_ip "$value"; then
-						echo "unreviewed public IPv4 $value: $line" >&2
-						bad=1
-					fi
-					;;
-			esac
-		done
+	candidates=$(printf '%s\n' "$lines" | perl -ne '
+		$line = $_;
+		chomp $line;
+		($path, $number, $content) = split /:/, $_, 3;
+		if ($path =~ /\.go$/) {
+			@text = ($content =~ /(?:"([^"\\]*(?:\\.[^"\\]*)*)"|`([^`]*)`|\/\/\s*(.*))/g);
+			@text = grep defined, @text;
+		} elsif ($path =~ /\.md$/) {
+			$content =~ s/`[^`]*`//g;
+			@text = ($content);
+		} else { @text = ($content); }
+		for $text (@text) {
+			while ($text =~ /(?<![A-Za-z0-9_-])((?:\d{1,3}\.){3}\d{1,3}|(?:[A-Za-z0-9-]{2,}\.)+[A-Za-z]{2,})(?![A-Za-z0-9_-])/g) {
+				$value = $1;
+				next if $value =~ /[A-Z]/;
+				next if $value !~ /^\d/ && $value !~ /^[^.]+\.[^.]*-[^.]+\.[^.]+$/;
+				print "$value|$line\n";
+			}
+		}
+	' || true)
+	while IFS='|' read -r value line; do
+		[ -n "$value" ] || continue
+		is_non_network_literal "$value" && continue
+		case "$value" in
+			*[!0-9.]* )
+				case "$value" in *.internal|*.test|localhost) continue ;; esac
+				if ! is_allowed_host "$value"; then
+					echo "unreviewed public hostname $value: $line" >&2
+					bad=1
+				fi
+				;;
+			*)
+				if ! is_allowed_ip "$value"; then
+					echo "unreviewed public IPv4 $value: $line" >&2
+					bad=1
+				fi
+				;;
+		esac
 	done <<EOF
-$lines
+$candidates
 EOF
 	[ "$bad" -eq 0 ]
 }
