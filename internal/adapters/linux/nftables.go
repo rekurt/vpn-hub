@@ -74,7 +74,10 @@ func allowedSets(plan domain.FirewallPlan) []struct {
 //	1: forwarded TCP MSS clamp matched on the SYN|RST mask, not a bare `flags syn`.
 //	2: TCP/443 is accepted only when the REALITY fallback is on, and the UDP/443
 //	   redirect moved into this table, scoped to the uplink.
-const rulesetFormatVersion = 3
+//	4: traffic addressed to the client CIDR returns after the private networks and
+//	   before the default-egress mark, so client ACLs are reachable at all without
+//	   shadowing a private route that lies inside the client subnet.
+const rulesetFormatVersion = 4
 
 // Fingerprint identifies a firewall plan by its content and rendering format.
 func Fingerprint(plan domain.FirewallPlan) string {
@@ -163,6 +166,22 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 		line("\t\tip daddr @%s meta mark set 0x%08x ct mark set meta mark return",
 			internalSetName(network.TunnelID), network.Mark)
 	}
+	// Traffic from one client to another never leaves the hub, so it is left unmarked
+	// and stays in the main table, where the ingress subnet is directly attached. The
+	// default-egress rule below matches on source alone: without this return it marks
+	// client-to-client traffic as well, and policy routing hands the packet to an
+	// egress namespace in which the destination does not exist. The forward chain's
+	// client ACLs require oifname == ingress and so would never match -- an ACL the
+	// operator wrote would silently do nothing, and the isolation it is meant to narrow
+	// would be enforced by the packet dying in a namespace rather than by this ruleset.
+	//
+	// It follows the private networks rather than preceding them. Nothing rejects a
+	// route lying inside the client subnet: routes are checked against each other, and
+	// the subnet against the egress link base, but the two are never checked against
+	// one another. Such a destination has to keep taking its tunnel, as it did before
+	// this return existed, so the internal sets are matched first and whatever they
+	// leave is the traffic that genuinely stays on the hub.
+	line("\t\tip daddr %s return", plan.ClientCIDR)
 	for _, group := range plan.Egresses {
 		line("\t\tip saddr @%s meta mark set 0x%08x", setName(group), group.Mark)
 	}
