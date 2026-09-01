@@ -228,8 +228,8 @@ func TestParseOpenVPNConfigAcceptsAdditionalInlineBlocks(t *testing.T) {
 	for _, test := range []struct {
 		name, block, content string
 	}{
-		{"pkcs12", "pkcs12", "encoded-identity"},
-		{"proxy credentials", "http-proxy-user-pass", "proxy-user\nproxy-password"},
+		{"pkcs12", "pkcs12", "<binary-material>"},
+		{"proxy credentials", "http-proxy-user-pass", "proxy-user\n<value>"},
 		{"tls crypt v2", "tls-crypt-v2", "wrapped-key-material"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -243,6 +243,37 @@ func TestParseOpenVPNConfigAcceptsAdditionalInlineBlocks(t *testing.T) {
 				t.Fatal("the inline block was not preserved")
 			}
 		})
+	}
+}
+
+func TestParseOpenVPNConfigParsesRemoteInsideConnection(t *testing.T) {
+	t.Parallel()
+	config := providerOVPN + `<connection>
+remote backup.example.net 443 tcp
+</connection>
+`
+
+	tunnel, err := ParseOpenVPNConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tunnel.Remotes) != 2 {
+		t.Fatalf("remotes = %+v", tunnel.Remotes)
+	}
+	remote := tunnel.Remotes[1]
+	if remote.Host != "backup.example.net" || remote.Port != 443 || remote.Protocol != "tcp" {
+		t.Errorf("remote = %+v", remote)
+	}
+}
+
+func TestParseOpenVPNConfigRejectsExternalReferenceInsideConnection(t *testing.T) {
+	t.Parallel()
+	_, err := ParseOpenVPNConfig(providerOVPN + `<connection>
+auth-user-pass credentials.txt
+</connection>
+`)
+	if err == nil || !strings.Contains(err.Error(), "external file reference") {
+		t.Fatalf("error = %v, want external file reference", err)
 	}
 }
 

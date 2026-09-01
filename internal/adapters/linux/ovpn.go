@@ -106,15 +106,28 @@ func validateOpenVPNInlineBlocks(content string) (map[int]bool, bool, error) {
 
 	for number, raw := range strings.Split(content, "\n") {
 		line := strings.TrimSpace(raw)
-		if block == "auth-user-pass" {
+		if inlineBlocks[block] {
 			inlineLines[number] = true
-			if line == "</auth-user-pass>" {
-				if credentialLines != 2 {
-					return nil, false, inlineCredentialBlockError(blockLine)
+			if line == "</"+block+">" {
+				if block == "auth-user-pass" {
+					if credentialLines != 2 {
+						return nil, false, inlineCredentialBlockError(blockLine)
+					}
+					hasCompleteBlock = true
 				}
-				hasCompleteBlock = true
 				block = ""
-			} else if line != "" {
+				continue
+			}
+			if strings.HasPrefix(line, "<") {
+				name, closing, err := parseOpenVPNInlineTag(line)
+				if err == nil && closing {
+					return nil, false, fmt.Errorf("line %d: mismatched inline block close </%s> for <%s>", number+1, name, block)
+				}
+				if err == nil && isOpenVPNInlineBlock(name) {
+					return nil, false, fmt.Errorf("line %d: nested inline block <%s> inside <%s> is not allowed", number+1, name, block)
+				}
+			}
+			if block == "auth-user-pass" && line != "" {
 				credentialLines++
 			}
 			continue
@@ -141,7 +154,7 @@ func validateOpenVPNInlineBlocks(content string) (map[int]bool, bool, error) {
 				block = ""
 				continue
 			}
-			if !inlineBlocks[name] {
+			if !isOpenVPNInlineBlock(name) {
 				return nil, false, fmt.Errorf("line %d: unsupported inline block <%s>", number+1, name)
 			}
 			if block != "" {
@@ -152,18 +165,16 @@ func validateOpenVPNInlineBlocks(content string) (map[int]bool, bool, error) {
 			blockLine = number + 1
 			continue
 		}
-		if block != "" {
-			inlineLines[number] = true
-			if block == "auth-user-pass" && line != "" {
-				credentialLines++
-			}
-		}
 	}
 
 	if block != "" {
 		return nil, false, fmt.Errorf("line %d: unterminated inline block <%s>", blockLine, block)
 	}
 	return inlineLines, hasCompleteBlock, nil
+}
+
+func isOpenVPNInlineBlock(name string) bool {
+	return inlineBlocks[name] || name == "connection"
 }
 
 func parseOpenVPNInlineTag(line string) (string, bool, error) {
