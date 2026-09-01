@@ -1,6 +1,7 @@
 /plans
 /service
 /bin
+/.worktrees/
 # Everything under configs/ is live hub material (keys, device configs, upstream
 # links); only the template is committed. A blanket ignore keeps a stray `git add`
 # from ever committing a real credential.
