@@ -2,6 +2,7 @@ package linux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,9 +12,46 @@ import (
 )
 
 const (
-	hubResolverUnit      = "vpn-hub-dns"
-	upstreamResolverUnit = "vpn-hub-dns-upstream"
+	hubResolverUnit = "vpn-hub-dns"
+	// resolverUnitPrefix carries every resolver that runs inside a namespace.
+	//
+	// "resolver" rather than "dns" because the older build derived its unit names as
+	// "vpn-hub-dns-" + tunnel id, for any id the identifier rules allow -- which is
+	// nearly all of them, only "direct" being reserved. That build therefore claimed
+	// the whole of the vpn-hub-dns-* space, and no name inside it can be reasoned
+	// about on a host upgraded from it: whatever suffix were chosen, some tunnel
+	// could have been called it. Leaving the space is what makes the sweep's
+	// exemptions sound, and it is why picking a better suffix would not have been
+	// enough -- the first attempt moved the collision from "upstream" to "public"
+	// rather than removing it.
+	resolverUnitPrefix = "vpn-hub-resolver-"
+	// upstreamResolverUnit carries the public forwarder. Its configuration file keeps
+	// the name the domain uses for it; only the unit had to move.
+	upstreamResolverUnit = resolverUnitPrefix + "public"
+	// privateResolverPrefix names the per-network forwarders. The "net-" segment
+	// keeps them clear of upstreamResolverUnit: a tunnel called "public" would
+	// otherwise claim it, which is the same collision one level down.
+	privateResolverPrefix = resolverUnitPrefix + "net-"
+	// legacyResolverPrefix is the space the older build generated into. Everything
+	// under it is stale by construction -- the current build puts nothing there -- so
+	// the sweep reaps it without consulting the plan, which is the only way to be rid
+	// of a forwarder whose name is indistinguishable from a public one. The hub's own
+	// unit has no trailing dash and so is never matched by it.
+	legacyResolverPrefix = "vpn-hub-dns-"
 )
+
+// privateResolverUnit and privateResolverConfig name a network's forwarder.
+//
+// Both the DNS adapter that starts it and the egress adapter that must stop it
+// before deleting its namespace go through these, because a unit started under one
+// spelling and stopped under another is a process nothing ever reaps.
+func privateResolverUnit(tunnelID string) string {
+	return privateResolverPrefix + safeUnitSuffix(tunnelID)
+}
+
+func privateResolverConfig(tunnelID string) string {
+	return "dnsmasq-private-" + safeUnitSuffix(tunnelID) + ".conf"
+}
 
 // RenderHubResolver builds the dnsmasq configuration that answers clients.
 //
@@ -35,7 +73,11 @@ func RenderHubResolver(plan domain.DNSPlan) string {
 	line("local-service")
 
 	for _, zone := range plan.Zones {
-		for _, resolver := range zone.Resolvers {
+		resolvers := zone.Resolvers
+		if zone.ForwardAddress != "" {
+			resolvers = []string{zone.ForwardAddress}
+		}
+		for _, resolver := range resolvers {
 			line("server=/%s/%s", zone.Zone, resolver)
 		}
 		// inet, table vpn_hub, set <name>: addresses learned for this zone start
@@ -72,7 +114,24 @@ func RenderUpstreamResolver(plan domain.DNSPlan) string {
 	return out.String()
 }
 
-// Dnsmasq runs the two resolvers as transient systemd units.
+// RenderPrivateResolver builds a resolver that runs inside a private-network
+// namespace and forwards that network's zones to the DNS servers reachable there.
+func RenderPrivateResolver(resolver domain.DNSPrivateResolver) string {
+	var out strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&out, format+"\n", args...) }
+
+	line("# Managed by vpn-hub. Manual edits are reverted on the next reconcile.")
+	line("no-resolv")
+	line("no-hosts")
+	line("bind-interfaces")
+	line("listen-address=%s", resolver.Address)
+	for _, upstream := range resolver.Resolvers {
+		line("server=%s", upstream)
+	}
+	return out.String()
+}
+
+// Dnsmasq runs the resolvers as transient systemd units.
 //
 // Transient rather than packaged units because the set of namespaces changes with
 // every revision, and a unit file per namespace would need its own lifecycle to stay
@@ -103,6 +162,30 @@ func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan, repopulate bool
 	// its cache would answer from memory without refilling them. Starting over is
 	// what makes the next lookup route correctly.
 	hubChanged = hubChanged || repopulate
+	// Reaping comes before starting, not after: a forwarder this revision dropped
+	// still holds its namespace's address, and one it renamed holds the address its
+	// replacement is about to ask for. Started first, the replacement would fail to
+	// bind and spend its restart backoff waiting for the sweep that follows it.
+	//
+	// The failure is collected rather than returned. Reaping is housekeeping, and
+	// giving up here would skip everything below -- clients would lose DNS entirely
+	// because one bookkeeping command failed. The error still surfaces, once the
+	// resolvers are serving.
+	stale := d.forgetStaleResolvers(ctx, plan)
+
+	// Private-zone resolvers must start before the hub resolver, because the hub
+	// forwards matching zones to them.
+	for _, resolver := range plan.PrivateResolvers {
+		config := filepath.Join(d.configDir(), privateResolverConfig(resolver.TunnelID))
+		changed, err := d.write(config, RenderPrivateResolver(resolver))
+		if err != nil {
+			return err
+		}
+		unit := privateResolverUnit(resolver.TunnelID)
+		if err := d.ensureRunning(ctx, unit, resolver.Namespace, config, changed || repopulate); err != nil {
+			return err
+		}
+	}
 
 	if plan.UpstreamNamespace != "" {
 		upstreamConfig := filepath.Join(d.configDir(), "dnsmasq-upstream.conf")
@@ -119,7 +202,96 @@ func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan, repopulate bool
 
 	// The hub resolver starts last so it never forwards to an upstream that is not
 	// listening yet.
-	return d.ensureRunning(ctx, hubResolverUnit, "", hubConfig, hubChanged)
+	return errors.Join(stale, d.ensureRunning(ctx, hubResolverUnit, "", hubConfig, hubChanged))
+}
+
+// forgetStaleResolvers stops the namespace resolvers this revision no longer names.
+//
+// A tunnel that merely drops its dns_zones keeps its namespace, so the egress adapter
+// never visits it, while the loop below no longer names it either. Nothing else would
+// ever stop its forwarder: the process would go on holding the namespace's veth
+// address for as long as the hub runs, answering from a configuration no revision
+// describes any more.
+//
+// systemd is asked what exists rather than the configuration directory being listed.
+// What has to be stopped is a process, and only systemd knows which ones an earlier
+// pass left behind -- a config file proves a forwarder was once written, not that it
+// is still running, and one started before the directory was reconfigured has no file
+// to be found by at all.
+func (d Dnsmasq) forgetStaleResolvers(ctx context.Context, plan domain.DNSPlan) error {
+	wanted := make(map[string]struct{}, len(plan.PrivateResolvers)+1)
+	for _, resolver := range plan.PrivateResolvers {
+		wanted[privateResolverUnit(resolver.TunnelID)] = struct{}{}
+	}
+	// The public forwarder is spared because it has an owner already: Apply starts it
+	// or stops it by name, according to whether a namespace carries the internet. Two
+	// owners for one unit is how it ends up stopped in the pass that started it. The
+	// exemption is sound only because no other build could have generated this name,
+	// which is what moving out of legacyResolverPrefix bought.
+	wanted[upstreamResolverUnit] = struct{}{}
+
+	// Two spaces, swept by different rules. Nothing current lives under the older
+	// prefix, so everything found there goes without consulting the plan -- that is
+	// the only way to be rid of a forwarder the older build named after a tunnel,
+	// since the name alone cannot say which resolver it belongs to. Listed
+	// separately, and their failures gathered, so that losing one enumeration still
+	// reaps what the other found.
+	legacy, legacyErr := d.listResolverUnits(ctx, legacyResolverPrefix)
+	current, currentErr := d.listResolverUnits(ctx, resolverUnitPrefix)
+
+	for _, unit := range legacy {
+		// No configuration is removed with it. A legacy name shares its file with the
+		// forwarder that replaced it -- dnsmasq-private-<id>.conf for a tunnel this
+		// revision still names, or the public resolver's own -- so deleting by that
+		// name would pull the configuration out from under a running, wanted process.
+		_, _ = d.run(ctx, "systemctl", "stop", unit+".service")
+	}
+	for _, unit := range current {
+		if _, keep := wanted[unit]; keep {
+			continue
+		}
+		_, _ = d.run(ctx, "systemctl", "stop", unit+".service")
+		if tunnelID, private := strings.CutPrefix(unit, privateResolverPrefix); private {
+			// The configuration goes with the process it described. Left behind, it
+			// would accumulate in the runtime directory across every revision that
+			// ever named the network, and read as a resolver still meant to exist.
+			_ = os.Remove(filepath.Join(d.configDir(), privateResolverConfig(tunnelID)))
+		}
+	}
+	return errors.Join(legacyErr, currentErr)
+}
+
+// listResolverUnits asks systemd which resolver units exist under a prefix.
+//
+// A failure is reported rather than read as "there are none". Treating it as an empty
+// host is what would let a withdrawn network's forwarder survive every later
+// reconcile in silence, since each pass would conclude afresh that there was nothing
+// to reap.
+func (d Dnsmasq) listResolverUnits(ctx context.Context, prefix string) ([]string, error) {
+	output, err := d.run(ctx, "systemctl", "list-units", "--all", "--plain", "--no-legend",
+		prefix+"*.service")
+	if err != nil {
+		return nil, fmt.Errorf("list %s* units: %w", prefix, err)
+	}
+	return unitNames(output, prefix), nil
+}
+
+// unitNames reads unit names out of `systemctl list-units` output.
+//
+// The name is found by its prefix rather than taken from a fixed column: a unit in a
+// failed state is printed with a leading bullet, which shifts every column right by
+// one, and a resolver that lost its namespace is exactly the case where that happens.
+func unitNames(output, prefix string) []string {
+	var units []string
+	for _, line := range strings.Split(output, "\n") {
+		for _, field := range strings.Fields(line) {
+			name, isService := strings.CutSuffix(field, ".service")
+			if isService && strings.HasPrefix(name, prefix) {
+				units = append(units, name)
+			}
+		}
+	}
+	return units
 }
 
 // ensureRunning starts the resolver if it is not running, and replaces it only when
@@ -147,6 +319,28 @@ func (d Dnsmasq) restart(ctx context.Context, unit, namespace, config string) er
 	arguments = append(arguments, "dnsmasq", "--keep-in-foreground", "--conf-file="+config)
 	_, err := d.run(ctx, "systemd-run", arguments...)
 	return err
+}
+
+func safeUnitSuffix(value string) string {
+	result := strings.Builder{}
+	for _, symbol := range value {
+		switch {
+		case symbol >= 'a' && symbol <= 'z':
+			result.WriteRune(symbol)
+		case symbol >= 'A' && symbol <= 'Z':
+			result.WriteRune(symbol)
+		case symbol >= '0' && symbol <= '9':
+			result.WriteRune(symbol)
+		case symbol == '-' || symbol == '_':
+			result.WriteRune(symbol)
+		default:
+			result.WriteRune('-')
+		}
+	}
+	if result.Len() == 0 {
+		return "private"
+	}
+	return result.String()
 }
 
 // write reports whether the file's contents changed.
