@@ -3,9 +3,11 @@ package linux
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	runtimeadapter "vpn-hub/internal/adapters/runtime"
@@ -164,7 +166,7 @@ func RenderVLESS(tunnel domain.ProxyTunnel) (string, error) {
 	link := url.URL{
 		Scheme:   "vless",
 		User:     url.User(tunnel.UUID),
-		Host:     fmt.Sprintf("%s:%d", tunnel.Server, tunnel.Port),
+		Host:     net.JoinHostPort(tunnel.Server, strconv.Itoa(int(tunnel.Port))),
 		RawQuery: query.Encode(),
 	}
 	return link.String(), nil
