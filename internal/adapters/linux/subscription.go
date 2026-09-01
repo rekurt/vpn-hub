@@ -38,9 +38,13 @@ func ParseSubscription(payload []byte) ([]domain.ProxyTunnel, error) {
 	var tunnels []domain.ProxyTunnel
 	var skipped int
 	scanner := bufio.NewScanner(strings.NewReader(text))
-	scanner.Buffer(make([]byte, 4096), MaxSubscriptionLineBytes)
+	scanner.Buffer(make([]byte, 4096), MaxSubscriptionLineBytes+2)
 	for scanner.Scan() {
-		line := scanner.Text()
+		rawLine := scanner.Text()
+		if len(rawLine) > MaxSubscriptionLineBytes {
+			return nil, fmt.Errorf("subscription line exceeds %d bytes", MaxSubscriptionLineBytes)
+		}
+		line := rawLine
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
