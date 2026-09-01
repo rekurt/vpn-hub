@@ -2,6 +2,7 @@ package linux
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -69,6 +70,27 @@ func TestEmptySubscriptionIsAnError(t *testing.T) {
 	t.Parallel()
 	if _, err := ParseSubscription([]byte("   \n")); err == nil {
 		t.Fatal("expected an error")
+	}
+}
+
+func TestSubscriptionCandidateLimit(t *testing.T) {
+	t.Parallel()
+	var body strings.Builder
+	for index := range 33 {
+		fmt.Fprintf(&body, "vless://candidate-%d@node-%d.example.net:443?encryption=none&type=tcp\n", index, index)
+	}
+
+	_, err := ParseSubscription([]byte(body.String()))
+	if err == nil || !strings.Contains(err.Error(), "more than 32 usable candidates") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestSubscriptionLineLimit(t *testing.T) {
+	t.Parallel()
+	_, err := ParseSubscription([]byte(strings.Repeat("x", 8193)))
+	if err == nil || !strings.Contains(err.Error(), "line exceeds 8192 bytes") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

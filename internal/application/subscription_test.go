@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"vpn-hub/internal/domain"
 )
@@ -136,5 +137,54 @@ func TestAFailedFetchStopsBeforeProving(t *testing.T) {
 	}
 	if proved {
 		t.Fatal("a failed fetch must not be tried as a candidate")
+	}
+}
+
+func TestSubscriptionRefreshDeadlineStopsBeforeStore(t *testing.T) {
+	writer := &recordingWriter{}
+	refresher := SubscriptionRefresher{
+		Fetch:   fakeFetcher{payload: []byte("payload")},
+		Parse:   func([]byte) ([]domain.ProxyTunnel, error) { return candidates(1), nil },
+		Timeout: 20 * time.Millisecond,
+		Prove: func(ctx context.Context, _ []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
+			<-ctx.Done()
+			return domain.ProxyTunnel{}, nil, ctx.Err()
+		},
+		Store: writer,
+	}
+
+	started := time.Now()
+	_, _, err := refresher.Refresh(context.Background(), subscriptionTunnel())
+	if err == nil || err.Error() != "subscription refresh exceeded 20ms" {
+		t.Fatalf("error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("Refresh took %s, want no more than 200ms", elapsed)
+	}
+	if len(writer.written) != 0 {
+		t.Fatal("the timed-out refresh must not update the active upstream")
+	}
+}
+
+func TestSubscriptionRefreshDeadlineDoesNotMaskParentCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	refresher := SubscriptionRefresher{
+		Fetch:   fakeFetcher{payload: []byte("payload")},
+		Parse:   func([]byte) ([]domain.ProxyTunnel, error) { return candidates(1), nil },
+		Timeout: time.Second,
+		Prove: func(ctx context.Context, _ []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
+			return domain.ProxyTunnel{}, nil, ctx.Err()
+		},
+		Store: &recordingWriter{},
+	}
+
+	_, _, err := refresher.Refresh(ctx, subscriptionTunnel())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want parent cancellation", err)
+	}
+	if strings.Contains(err.Error(), "subscription refresh exceeded") {
+		t.Fatalf("parent cancellation was reported as aggregate timeout: %v", err)
 	}
 }
