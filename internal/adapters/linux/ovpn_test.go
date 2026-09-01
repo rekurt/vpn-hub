@@ -88,9 +88,89 @@ func TestCredentialPromptIsRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "prompt") {
 		t.Fatalf("error = %v", err)
 	}
-	// With a file it is fine: the credentials are already on the host.
-	if _, err := ParseOpenVPNConfig(providerOVPN + "auth-user-pass /etc/vpn-hub/creds\n"); err != nil {
-		t.Fatalf("a credentials file should be accepted: %v", err)
+}
+
+func TestParseOpenVPNConfigRejectsExternalReferences(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name, directive, want string
+	}{
+		{"relative auth file", "auth-user-pass credentials.txt", "external file reference"},
+		{"absolute auth file", "auth-user-pass /etc/shadow", "external file reference"},
+		{"proxy auth file", "http-proxy-user-pass proxy.auth", "external file reference"},
+		{"pkcs12 file", "pkcs12 identity.p12", "external file reference"},
+		{"crl verifier", "crl-verify revoked.pem", "external file reference"},
+		{"askpass file", "askpass passphrase.txt", "external file reference"},
+		{"script verifier", "tls-crypt-v2-verify /usr/local/bin/check", "external command reference"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseOpenVPNConfig(providerOVPN + test.directive + "\n")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestParseOpenVPNConfigAcceptsCompleteInlineCredentials(t *testing.T) {
+	t.Parallel()
+	config := providerOVPN + `auth-user-pass
+<auth-user-pass>
+demo-user
+demo-password
+</auth-user-pass>
+`
+
+	tunnel, err := ParseOpenVPNConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tunnel.Config != config {
+		t.Fatal("the inline credentials were not preserved")
+	}
+	if rendered := RenderOpenVPNConfig(tunnel, "ovpn0", "/run/vpn-hub/x.sock"); !strings.Contains(rendered, "demo-user\ndemo-password") {
+		t.Fatal("the rendered configuration dropped the inline credentials")
+	}
+}
+
+func TestParseOpenVPNConfigRejectsIncompleteInlineCredentials(t *testing.T) {
+	t.Parallel()
+	_, err := ParseOpenVPNConfig(providerOVPN + `auth-user-pass
+<auth-user-pass>
+demo-user
+</auth-user-pass>
+`)
+	if err == nil || !strings.Contains(err.Error(), "prompt") {
+		t.Fatalf("error = %v, want unattended-prompt error", err)
+	}
+}
+
+func TestParseOpenVPNConfigRejectsInlineCredentialsWithoutPassword(t *testing.T) {
+	t.Parallel()
+	_, err := ParseOpenVPNConfig(providerOVPN + `<auth-user-pass>
+demo-user
+</auth-user-pass>
+`)
+	if err == nil || !strings.Contains(err.Error(), "prompt") {
+		t.Fatalf("error = %v, want unattended-prompt error", err)
+	}
+}
+
+func TestParseOpenVPNConfigRejectsAnyIncompleteInlineCredentialBlock(t *testing.T) {
+	t.Parallel()
+	_, err := ParseOpenVPNConfig(providerOVPN + `auth-user-pass
+<auth-user-pass>
+demo-user
+demo-password
+</auth-user-pass>
+<auth-user-pass>
+demo-user
+</auth-user-pass>
+`)
+	if err == nil || !strings.Contains(err.Error(), "prompt") {
+		t.Fatalf("error = %v, want unattended-prompt error", err)
 	}
 }
 

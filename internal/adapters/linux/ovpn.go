@@ -12,6 +12,15 @@ import (
 // rather than shipping alongside it.
 var inlineBlocks = map[string]bool{
 	"ca": true, "cert": true, "key": true, "tls-auth": true, "tls-crypt": true,
+	"auth-user-pass": true,
+}
+
+var externalFileDirectives = map[string]bool{
+	"auth-user-pass":       true,
+	"http-proxy-user-pass": true,
+	"askpass":              true,
+	"pkcs12":               true,
+	"crl-verify":           true,
 }
 
 // ParseOpenVPNConfig reads a provider's .ovpn file.
@@ -23,6 +32,10 @@ var inlineBlocks = map[string]bool{
 // second-guessing.
 func ParseOpenVPNConfig(content string) (domain.OpenVPNTunnel, error) {
 	tunnel := domain.OpenVPNTunnel{Config: content}
+	hasInlineCredentials, err := hasCompleteInlineCredentials(content)
+	if err != nil {
+		return domain.OpenVPNTunnel{}, err
+	}
 
 	var block string
 	for number, raw := range strings.Split(content, "\n") {
@@ -43,6 +56,14 @@ func ParseOpenVPNConfig(content string) (domain.OpenVPNTunnel, error) {
 		}
 
 		fields := strings.Fields(line)
+		if len(fields) > 1 {
+			if externalFileDirectives[fields[0]] {
+				return domain.OpenVPNTunnel{}, fmt.Errorf("line %d: external file reference in %s is not allowed; inline the material in the SOPS-encrypted .ovpn file", number+1, fields[0])
+			}
+			if fields[0] == "tls-crypt-v2-verify" {
+				return domain.OpenVPNTunnel{}, fmt.Errorf("line %d: external command reference in %s is not allowed; inline the material in the SOPS-encrypted .ovpn file", number+1, fields[0])
+			}
+		}
 		switch fields[0] {
 		case "remote":
 			if len(fields) < 2 {
@@ -71,19 +92,57 @@ func ParseOpenVPNConfig(content string) (domain.OpenVPNTunnel, error) {
 		case "redirect-gateway":
 			tunnel.RedirectsGateway = true
 		case "auth-user-pass":
-			// A file argument means the credentials are already on the host; without
-			// one OpenVPN would stop and ask, which no unattended service can answer.
-			tunnel.NeedsCredentials = len(fields) == 1
+			if len(fields) == 1 && !hasInlineCredentials {
+				return domain.OpenVPNTunnel{}, fmt.Errorf("line %d: auth-user-pass without a complete inline <auth-user-pass> block would prompt in unattended mode", number+1)
+			}
 		}
 	}
 
 	if len(tunnel.Remotes) == 0 {
 		return domain.OpenVPNTunnel{}, fmt.Errorf("the configuration names no remote")
 	}
-	if tunnel.NeedsCredentials {
-		return domain.OpenVPNTunnel{}, fmt.Errorf(
-			"the configuration uses auth-user-pass without a file, so OpenVPN would stop and " +
-				"prompt: add the credentials to a file and name it on that line")
-	}
 	return tunnel, nil
+}
+
+func hasCompleteInlineCredentials(content string) (bool, error) {
+	credentialLines := 0
+	hasCompleteBlock := false
+	inBlock := false
+	blockLine := 0
+
+	for number, raw := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(raw)
+		switch line {
+		case "<auth-user-pass>":
+			if inBlock {
+				return false, inlineCredentialBlockError(blockLine)
+			}
+			credentialLines = 0
+			inBlock = true
+			blockLine = number + 1
+		case "</auth-user-pass>":
+			if inBlock {
+				if credentialLines != 2 {
+					return false, inlineCredentialBlockError(blockLine)
+				}
+				hasCompleteBlock = true
+				inBlock = false
+			}
+		case "":
+			continue
+		default:
+			if inBlock {
+				credentialLines++
+			}
+		}
+	}
+
+	if inBlock {
+		return false, inlineCredentialBlockError(blockLine)
+	}
+	return hasCompleteBlock, nil
+}
+
+func inlineCredentialBlockError(line int) error {
+	return fmt.Errorf("line %d: inline <auth-user-pass> must contain exactly two non-empty lines; OpenVPN would prompt in unattended mode", line)
 }
