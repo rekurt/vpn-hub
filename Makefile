@@ -32,6 +32,11 @@ lint:
 test:
 	go test -race ./...
 
+## publication-check: reject secrets and runtime state before publishing
+publication-check:
+	sh scripts/check-publication.sh
+	sh scripts/check-publication_test.sh
+
 ## test-integration: drive real interfaces, rules and traffic (Linux, needs root)
 # Stop any running agent first: it reconciles on a timer and will restore its own
 # ruleset over the one under test.

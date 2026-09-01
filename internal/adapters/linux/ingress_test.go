@@ -45,10 +45,10 @@ func spec() domain.IngressSpec {
 		Interface:  "awg0",
 		Address:    "10.80.0.1/24",
 		ListenPort: 51820,
-		PrivateKey: "cOFA+ItsMPRFpKt4kPsUlqUlkxHnFvJdWuBK5rXqL0Y=",
+		PrivateKey: syntheticInterfacePrivateKey,
 		Parameters: map[string]string{"Jc": "4", "Jmin": "64"},
 		Peers: []domain.PeerSpec{
-			{PublicKey: "aYo1x9b951yd4mtMeKkW/vyOJvU08j2UU96u/Ve9QWA=", AllowedIPs: []string{"10.80.0.2/32"}},
+			{PublicKey: syntheticPeerPublicKey, AllowedIPs: []string{"10.80.0.2/32"}},
 		},
 	}
 }
@@ -72,7 +72,7 @@ func TestApplyCreatesTheInterfaceWhenAbsent(t *testing.T) {
 	if !host.ran("ip link set awg0 up") {
 		t.Error("the interface was not brought up")
 	}
-	if !host.ran("peer aYo1x9b951yd4mtMeKkW/vyOJvU08j2UU96u/Ve9QWA= allowed-ips 10.80.0.2/32") {
+	if !host.ran("peer " + syntheticPeerPublicKey + " allowed-ips 10.80.0.2/32") {
 		t.Error("the peer was not configured")
 	}
 }
@@ -80,7 +80,7 @@ func TestApplyCreatesTheInterfaceWhenAbsent(t *testing.T) {
 // Re-creating the interface on every reconcile would drop live client sessions.
 func TestApplyDoesNotRecreateAnExistingInterface(t *testing.T) {
 	t.Parallel()
-	host := &fakeHost{replies: map[string]string{"awg show awg0 dump": realDump}}
+	host := &fakeHost{replies: map[string]string{"awg show awg0 dump": syntheticDump}}
 	if err := newIngress(t, host).Apply(context.Background(), spec()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -92,14 +92,14 @@ func TestApplyDoesNotRecreateAnExistingInterface(t *testing.T) {
 // A revoked device has to lose its peer entry, or it keeps handshaking.
 func TestApplyRemovesPeersThatAreNoLongerConfigured(t *testing.T) {
 	t.Parallel()
-	host := &fakeHost{replies: map[string]string{"awg show awg0 dump": realDump}}
+	host := &fakeHost{replies: map[string]string{"awg show awg0 dump": syntheticDump}}
 	configuration := spec()
 	configuration.Peers = nil
 
 	if err := newIngress(t, host).Apply(context.Background(), configuration); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if !host.ran("peer aYo1x9b951yd4mtMeKkW/vyOJvU08j2UU96u/Ve9QWA= remove") {
+	if !host.ran("peer " + syntheticPeerPublicKey + " remove") {
 		t.Errorf("the stale peer was not removed; commands: %v", host.commands)
 	}
 }
@@ -107,7 +107,7 @@ func TestApplyRemovesPeersThatAreNoLongerConfigured(t *testing.T) {
 // argv is world-readable through /proc, so the key may only travel by file.
 func TestPrivateKeyNeverAppearsInArguments(t *testing.T) {
 	t.Parallel()
-	host := &fakeHost{replies: map[string]string{"awg show awg0 dump": realDump}}
+	host := &fakeHost{replies: map[string]string{"awg show awg0 dump": syntheticDump}}
 	configuration := spec()
 
 	if err := newIngress(t, host).Apply(context.Background(), configuration); err != nil {
@@ -126,7 +126,7 @@ func TestPrivateKeyNeverAppearsInArguments(t *testing.T) {
 func TestPrivateKeyFileIsNotReadableByOthers(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
-	host := &fakeHost{replies: map[string]string{"awg show awg0 dump": realDump}}
+	host := &fakeHost{replies: map[string]string{"awg show awg0 dump": syntheticDump}}
 	ingress := Ingress{Run: host.run, SecretsDir: directory}
 
 	if err := ingress.Apply(context.Background(), spec()); err != nil {
@@ -145,7 +145,7 @@ func TestPrivateKeyFileIsNotReadableByOthers(t *testing.T) {
 // command and stays diffable.
 func TestParametersAreOrderedAndLowercased(t *testing.T) {
 	t.Parallel()
-	host := &fakeHost{replies: map[string]string{"awg show awg0 dump": realDump}}
+	host := &fakeHost{replies: map[string]string{"awg show awg0 dump": syntheticDump}}
 	if err := newIngress(t, host).Apply(context.Background(), spec()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

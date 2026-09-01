@@ -1,0 +1,7 @@
+# Reviewed external endpoints permitted in public source.
+api.telegram.org
+github.com
+objects.githubusercontent.com
+ppa.launchpadcontent.net
+1.1.1.1
+9.9.9.9

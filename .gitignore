@@ -16,3 +16,8 @@ deploy/terraform/*.tfvars
 
 # Guard against tofu being run from the wrong directory.
 /terraform.tfstate*
+/state/
+/device-profiles/
+/backups/
+desired-state.json
+*.tfstate*
