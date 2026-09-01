@@ -35,8 +35,8 @@ table inet vpn_hub {
 	chain prerouting {
 		type filter hook prerouting priority mangle; policy accept;
 		iifname != "awg0" accept
-		ip daddr 10.80.0.0/24 return
 		ip daddr @internal_corp_a meta mark set 0x00000102 ct mark set meta mark return
+		ip daddr 10.80.0.0/24 return
 		ip saddr @client_direct meta mark set 0x00000100
 		ip saddr @client_provider_nl meta mark set 0x00000101
 		ct mark set meta mark
