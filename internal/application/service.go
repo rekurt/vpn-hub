@@ -46,8 +46,10 @@ func (s Service) LoadAndValidate(ctx context.Context) (domain.Config, error) {
 func (s Service) BuildDesiredState(cfg domain.Config) (domain.DesiredState, error) {
 	devices := append([]domain.Device(nil), cfg.Devices...)
 	tunnels := append([]domain.Tunnel(nil), cfg.Tunnels...)
+	clientACLs := append([]domain.ClientACL(nil), cfg.ClientACLs...)
 	sort.Slice(devices, func(i, j int) bool { return devices[i].ID < devices[j].ID })
 	sort.Slice(tunnels, func(i, j int) bool { return tunnels[i].ID < tunnels[j].ID })
+	sortClientACLs(clientACLs)
 
 	// Disabled tunnels are dropped here rather than filtered downstream: the revision
 	// is what the agent converges on, so a tunnel that survives into it would still
@@ -68,7 +70,7 @@ func (s Service) BuildDesiredState(cfg domain.Config) (domain.DesiredState, erro
 		})
 	}
 
-	state := domain.DesiredState{Hub: cfg.Hub, Devices: deployed, Tunnels: tunnels}
+	state := domain.DesiredState{Hub: cfg.Hub, Devices: deployed, Tunnels: tunnels, ClientACLs: clientACLs}
 	payload, err := json.Marshal(state)
 	if err != nil {
 		return domain.DesiredState{}, fmt.Errorf("marshal desired state: %w", err)
@@ -263,6 +265,10 @@ func Validate(cfg domain.Config) error {
 		}
 	}
 
+	if err := validateClientACLs(cfg.ClientACLs, deviceIDs); err != nil {
+		return err
+	}
+
 	if len(cfg.Devices) > 0 && enabledEgresses == 0 {
 		hasDirect := false
 		for _, device := range cfg.Devices {
@@ -276,6 +282,54 @@ func Validate(cfg domain.Config) error {
 	}
 
 	return validateRouteOverlaps(cfg.Tunnels)
+}
+
+func validateClientACLs(rules []domain.ClientACL, deviceIDs map[string]struct{}) error {
+	seen := map[string]struct{}{}
+	for _, rule := range rules {
+		if rule.Source == "" || rule.Target == "" {
+			return fmt.Errorf("client ACL source and target are required")
+		}
+		if rule.Source != domain.ClientACLAny {
+			if _, exists := deviceIDs[rule.Source]; !exists {
+				return fmt.Errorf("client ACL source %q does not exist", rule.Source)
+			}
+		}
+		if _, exists := deviceIDs[rule.Target]; !exists {
+			return fmt.Errorf("client ACL target %q does not exist", rule.Target)
+		}
+		if rule.Source == rule.Target {
+			return fmt.Errorf("client ACL %s -> %s points at itself", rule.Source, rule.Target)
+		}
+		if rule.Protocol != domain.ClientACLTCP && rule.Protocol != domain.ClientACLUDP {
+			return fmt.Errorf("client ACL %s -> %s uses unsupported protocol %q", rule.Source, rule.Target, rule.Protocol)
+		}
+		if rule.Port == 0 {
+			return fmt.Errorf("client ACL %s -> %s has invalid port 0", rule.Source, rule.Target)
+		}
+		key := fmt.Sprintf("%s\x00%s\x00%s\x00%d", rule.Source, rule.Target, rule.Protocol, rule.Port)
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate client ACL %s -> %s %s/%d", rule.Source, rule.Target, rule.Protocol, rule.Port)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func sortClientACLs(rules []domain.ClientACL) {
+	sort.Slice(rules, func(i, j int) bool {
+		left, right := rules[i], rules[j]
+		switch {
+		case left.Source != right.Source:
+			return left.Source < right.Source
+		case left.Target != right.Target:
+			return left.Target < right.Target
+		case left.Protocol != right.Protocol:
+			return left.Protocol < right.Protocol
+		default:
+			return left.Port < right.Port
+		}
+	})
 }
 
 func validateTunnel(tunnel domain.Tunnel, deviceIDs map[string]struct{}) error {

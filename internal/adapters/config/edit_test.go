@@ -356,3 +356,24 @@ func TestDeviceEgressCanBeChanged(t *testing.T) {
 		t.Fatal("the device egress was not changed")
 	}
 }
+
+func TestClientACLCanBeAddedAndRemoved(t *testing.T) {
+	t.Parallel()
+	path := editable(t, annotated)
+	editor := Editor{Root: path}
+	if err := editor.AddClientACL("any", "laptop", "tcp", 22); err != nil {
+		t.Fatalf("AddClientACL: %v", err)
+	}
+	result := read(t, path)
+	for _, expected := range []string{"client_acls:", "source: any", "target: laptop", "protocol: tcp", "port: 22"} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("missing %q in:\n%s", expected, result)
+		}
+	}
+	if err := editor.RemoveClientACL("any", "laptop", "tcp", 22); err != nil {
+		t.Fatalf("RemoveClientACL: %v", err)
+	}
+	if strings.Contains(read(t, path), "target: laptop") {
+		t.Fatalf("ACL was not removed:\n%s", read(t, path))
+	}
+}

@@ -291,6 +291,7 @@ var botCommands = []tg.BotCommand{
 	{Command: "deploy", Description: "Деплой конфигурации"},
 	{Command: "subs", Description: "Подписки"},
 	{Command: "routes", Description: "Маршруты"},
+	{Command: "client_acls", Description: "Доступ между устройствами"},
 	{Command: "logs", Description: "Логи"},
 	{Command: "host", Description: "Хост и юниты"},
 	{Command: "hub", Description: "Параметры хаба"},
@@ -423,6 +424,8 @@ func (b *Bot) handleCommand(ctx context.Context, command string) {
 		b.sendScreen(ctx, b.buildSubs(ctx))
 	case "routes":
 		b.sendScreen(ctx, b.buildRoutes(ctx))
+	case "client_acls", "acl", "acls":
+		b.sendScreen(ctx, b.buildClientACLs(ctx))
 	case "logs":
 		b.sendScreen(ctx, b.buildLogsMenu(ctx))
 	case "host":
@@ -500,6 +503,8 @@ func (b *Bot) routeCallback(ctx context.Context, cb *tg.CallbackQuery, parts []s
 		return b.routeSubs(ctx, cb, action, args)
 	case "rt":
 		return b.show(ctx, cb, b.buildRoutes(ctx))
+	case "acl":
+		return b.routeClientACLs(ctx, cb, action, args)
 	case "log":
 		return b.routeLogs(ctx, cb, action, args)
 	case "host":

@@ -37,6 +37,7 @@ func NewHubctlCommand(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(newDeviceCommand(&configPath))
 	root.AddCommand(newTunnelCommand(&configPath))
 	root.AddCommand(newRoutesCommand(&configPath))
+	root.AddCommand(newClientACLCommand(&configPath))
 	root.AddCommand(newConfirmCommand())
 	root.AddCommand(newRollbackCommand())
 	root.AddCommand(newKeygenCommand())

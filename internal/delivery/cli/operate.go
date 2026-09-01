@@ -199,6 +199,10 @@ func newRoutesCommand(configPath *string) *cobra.Command {
 					_, _ = fmt.Fprintf(writer, "*.%s\t%s\tprivate domain\n", zone, tunnel.ID)
 				}
 			}
+			for _, rule := range state.ClientACLs {
+				_, _ = fmt.Fprintf(writer, "%s %s/%d	%s	client-to-client ACL\n",
+					rule.Target, rule.Protocol, rule.Port, rule.Source)
+			}
 
 			byEgress := map[string][]string{}
 			for _, device := range state.Devices {

@@ -244,6 +244,119 @@ func (e Editor) RemoveTunnelMapField(tunnelID, mapName, key string) error {
 	return fmt.Errorf("no tunnel %q in %s", tunnelID, e.Root)
 }
 
+func (e Editor) clientACLFiles() []string {
+	if !IsDirectory(e.Root) {
+		return []string{e.Root}
+	}
+	return []string{filepath.Join(e.Root, hubFile)}
+}
+
+func (e Editor) AddClientACL(source, target, protocol string, port uint16) error {
+	release, err := e.lock()
+	if err != nil {
+		return err
+	}
+	defer release()
+	entry := clientACLNode(source, target, protocol, port)
+	for _, path := range e.clientACLFiles() {
+		document, err := readDocument(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if duplicateClientACL(document, source, target, protocol, port) {
+			return fmt.Errorf("client ACL %s -> %s %s/%d already exists", source, target, protocol, port)
+		}
+		root := document.Content[0]
+		list := findValue(root, "client_acls")
+		if list == nil {
+			root.Content = append(root.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "client_acls"},
+				&yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"})
+			list = root.Content[len(root.Content)-1]
+		}
+		if list.Kind != yaml.SequenceNode {
+			*list = yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		}
+		if len(list.Content) == 0 {
+			list.Style = 0
+		}
+		list.Content = append(list.Content, entry)
+		return writeDocument(path, document)
+	}
+	return fmt.Errorf("no config file in %s", e.Root)
+}
+
+func (e Editor) RemoveClientACL(source, target, protocol string, port uint16) error {
+	release, err := e.lock()
+	if err != nil {
+		return err
+	}
+	defer release()
+	for _, path := range e.clientACLFiles() {
+		document, err := readDocument(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		list := documentList(document, "client_acls")
+		if list == nil {
+			continue
+		}
+		for index, entry := range list.Content {
+			if clientACLMatches(entry, source, target, protocol, port) {
+				list.Content = append(list.Content[:index], list.Content[index+1:]...)
+				return writeDocument(path, document)
+			}
+		}
+	}
+	return fmt.Errorf("no client ACL %s -> %s %s/%d in %s", source, target, protocol, port, e.Root)
+}
+
+func clientACLNode(source, target, protocol string, port uint16) *yaml.Node {
+	entry := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	for _, pair := range [][2]string{{"source", source}, {"target", target}, {"protocol", protocol}} {
+		entry.Content = append(entry.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: pair[0]},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: pair[1]})
+	}
+	entry.Content = append(entry.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "port"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: fmt.Sprint(port)})
+	return entry
+}
+
+func duplicateClientACL(document *yaml.Node, source, target, protocol string, port uint16) bool {
+	list := documentList(document, "client_acls")
+	if list == nil {
+		return false
+	}
+	for _, entry := range list.Content {
+		if clientACLMatches(entry, source, target, protocol, port) {
+			return true
+		}
+	}
+	return false
+}
+
+func clientACLMatches(entry *yaml.Node, source, target, protocol string, port uint16) bool {
+	return scalarValue(entry, "source") == source &&
+		scalarValue(entry, "target") == target &&
+		scalarValue(entry, "protocol") == protocol &&
+		scalarValue(entry, "port") == fmt.Sprint(port)
+}
+
+func scalarValue(mapping *yaml.Node, key string) string {
+	if value := findValue(mapping, key); value != nil {
+		return value.Value
+	}
+	return ""
+}
+
 // documentMap returns a top-level mapping by key, nil when absent.
 func documentMap(document *yaml.Node, section string) *yaml.Node {
 	if len(document.Content) == 0 {
