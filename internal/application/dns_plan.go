@@ -39,15 +39,26 @@ func BuildDNSPlan(state domain.DesiredState, plan domain.FirewallPlan, specs []d
 				"tunnel %q declares dns_zones but no dns_servers, so its names have nowhere to resolve",
 				network.TunnelID)
 		}
+		forwardAddress, namespace := privateResolverPlacement(network.TunnelID, specs)
+		if forwardAddress != "" {
+			result.PrivateResolvers = append(result.PrivateResolvers, domain.DNSPrivateResolver{
+				TunnelID:  network.TunnelID,
+				Namespace: namespace,
+				Address:   forwardAddress,
+				Resolvers: append([]string(nil), network.Resolvers...),
+			})
+		}
 		for _, zone := range network.Zones {
 			result.Zones = append(result.Zones, domain.DNSZoneRoute{
-				Zone:      zone,
-				Resolvers: network.Resolvers,
-				Set:       "internal_" + safeIdentifier(network.TunnelID),
+				Zone:           zone,
+				Resolvers:      network.Resolvers,
+				ForwardAddress: forwardAddress,
+				Set:            "internal_" + safeIdentifier(network.TunnelID),
 			})
 		}
 	}
 	sort.Slice(result.Zones, func(i, j int) bool { return result.Zones[i].Zone < result.Zones[j].Zone })
+	sort.Slice(result.PrivateResolvers, func(i, j int) bool { return result.PrivateResolvers[i].TunnelID < result.PrivateResolvers[j].TunnelID })
 
 	// Public queries follow whichever tunnel carries the internet for most devices.
 	// With everyone on `direct` there is no namespace to hide in and the hub resolves
@@ -66,6 +77,15 @@ func BuildDNSPlan(state domain.DesiredState, plan domain.FirewallPlan, specs []d
 
 // busiestEgress picks the egress most devices use, so the resolver sits where most
 // traffic already goes. Ties break by name to stay reproducible.
+func privateResolverPlacement(tunnelID string, specs []domain.EgressSpec) (address, namespace string) {
+	for _, spec := range specs {
+		if spec.TunnelID == tunnelID {
+			return hostOf(spec.PeerAddress), spec.Namespace
+		}
+	}
+	return "", ""
+}
+
 func busiestEgress(devices []domain.DeployedDevice) string {
 	counts := map[string]int{}
 	for _, device := range devices {
