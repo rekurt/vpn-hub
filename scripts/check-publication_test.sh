@@ -56,6 +56,10 @@ expect_fail unknown-server-host printf '%s\n' 'server: vpn.personal-domain.net:5
 expect_fail unknown-vless-host printf '%s\n' 'vless://id@vpn.personal-domain.net:443'
 expect_fail unknown-dev-host printf '%s\n' 'server: vpn.personal-domain.dev:51820'
 expect_fail unknown-ru-host printf '%s\n' 'server: vpn.personal-domain.ru:51820'
+expect_fail unknown-dns-name printf '%s\n' 'dns_name: vpn.personal-domain.dev'
+expect_fail unknown-json-address printf '%s\n' '{"address":"edge.personal-domain.ru"}'
+expect_fail unknown-prose-host printf '%s\n' 'Contact vpn.personal-domain.xyz for access.'
+expect_fail unknown-prose-ip printf '%s\n' 'The temporary value is 93.184.216.35.'
 expect_fail unknown-public-ip printf '%s\n' 'endpoint: 93.184.216.34:51820'
 expect_pass documentation-host printf '%s\n' 'endpoint: vpn.example.com:51820'
 
