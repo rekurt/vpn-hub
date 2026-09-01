@@ -165,15 +165,6 @@ certificate
 `,
 		},
 		{
-			name: "nested block",
-			config: providerOVPN + `<ca>
-<cert>
-certificate
-</cert>
-</ca>
-`,
-		},
-		{
 			name: "unterminated block bypass",
 			config: providerOVPN + `<ca>
 certificate
@@ -188,6 +179,24 @@ auth-user-pass credentials.txt
 				t.Fatalf("error = %v, want inline block error with line evidence", err)
 			}
 		})
+	}
+}
+
+func TestParseOpenVPNConfigAcceptsKnownTagAsOpaqueInlineCredentialPassword(t *testing.T) {
+	t.Parallel()
+	config := providerOVPN + `auth-user-pass
+<auth-user-pass>
+demo-user
+<ca>
+</auth-user-pass>
+`
+
+	tunnel, err := ParseOpenVPNConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tunnel.Config != config {
+		t.Fatal("the inline credential password was not preserved")
 	}
 }
 
@@ -219,6 +228,24 @@ auth-user-pass credentials.txt
 `)
 	if err == nil || !strings.Contains(err.Error(), "inline block") {
 		t.Fatalf("error = %v, want inline block error", err)
+	}
+}
+
+func TestParseOpenVPNConfigAcceptsTagLikeOpaqueInlineProxyCredentials(t *testing.T) {
+	t.Parallel()
+	config := providerOVPN + `<http-proxy-user-pass>
+proxy-user
+<ca>
+</anything>
+</http-proxy-user-pass>
+`
+
+	tunnel, err := ParseOpenVPNConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tunnel.Config != config {
+		t.Fatal("the inline proxy credentials were not preserved")
 	}
 }
 
@@ -268,12 +295,36 @@ remote backup.example.net 443 tcp
 
 func TestParseOpenVPNConfigRejectsExternalReferenceInsideConnection(t *testing.T) {
 	t.Parallel()
-	_, err := ParseOpenVPNConfig(providerOVPN + `<connection>
-auth-user-pass credentials.txt
-</connection>
-`)
-	if err == nil || !strings.Contains(err.Error(), "external file reference") {
-		t.Fatalf("error = %v, want external file reference", err)
+
+	for _, directive := range []string{"auth-user-pass credentials.txt", "--auth-user-pass credentials.txt"} {
+		directive := directive
+		t.Run(directive, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseOpenVPNConfig(providerOVPN + "<connection>\n" + directive + "\n</connection>\n")
+			if err == nil || !strings.Contains(err.Error(), "external file reference") {
+				t.Fatalf("error = %v, want external file reference", err)
+			}
+		})
+	}
+}
+
+func TestParseOpenVPNConfigRejectsMalformedConnectionBlocks(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name, config string
+	}{
+		{"malformed opener", providerOVPN + "<connection/>\n"},
+		{"nested connection", providerOVPN + "<connection>\n<connection>\n</connection>\n</connection>\n"},
+		{"unterminated connection", providerOVPN + "<connection>\nremote backup.example.net\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseOpenVPNConfig(test.config)
+			if err == nil || !strings.Contains(err.Error(), "line") || !strings.Contains(err.Error(), "inline block") {
+				t.Fatalf("error = %v, want inline block error with line evidence", err)
+			}
+		})
 	}
 }
 
