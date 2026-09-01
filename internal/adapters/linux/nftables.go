@@ -74,7 +74,9 @@ func allowedSets(plan domain.FirewallPlan) []struct {
 //	1: forwarded TCP MSS clamp matched on the SYN|RST mask, not a bare `flags syn`.
 //	2: TCP/443 is accepted only when the REALITY fallback is on, and the UDP/443
 //	   redirect moved into this table, scoped to the uplink.
-const rulesetFormatVersion = 3
+//	4: traffic addressed to the client CIDR returns before the default-egress mark,
+//	   so client ACLs are reachable at all.
+const rulesetFormatVersion = 4
 
 // Fingerprint identifies a firewall plan by its content and rendering format.
 func Fingerprint(plan domain.FirewallPlan) string {
@@ -155,6 +157,15 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\tchain prerouting {")
 	line("\t\ttype filter hook prerouting priority mangle; policy accept;")
 	line("\t\tiifname != %q accept", plan.IngressInterface)
+	// Traffic from one client to another never leaves the hub, so it is left unmarked
+	// and stays in the main table, where the ingress subnet is directly attached. The
+	// default-egress rule below matches on source alone: without this return it marks
+	// client-to-client traffic as well, and policy routing hands the packet to an
+	// egress namespace in which the destination does not exist. The forward chain's
+	// client ACLs require oifname == ingress and so would never match -- an ACL the
+	// operator wrote would silently do nothing, and the isolation it is meant to narrow
+	// would be enforced by the packet dying in a namespace rather than by this ruleset.
+	line("\t\tip daddr %s return", plan.ClientCIDR)
 	for _, network := range plan.Internals {
 		// `return` ends the chain here so the default-egress rule below cannot
 		// overwrite the mark. Without it a private destination would be marked and
