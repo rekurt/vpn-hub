@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -72,10 +73,11 @@ func TestMarkedTrafficCannotReachTheHubsOwnServices(t *testing.T) {
 		}},
 	}
 	t.Cleanup(func() { try("nft delete table inet vpn_hub") })
-	if err := os.WriteFile("/tmp/localguard.nft", []byte(linux.RenderRuleset(plan)), 0o600); err != nil {
+	rulesPath := filepath.Join(t.TempDir(), "localguard.nft")
+	if err := os.WriteFile(rulesPath, []byte(linux.RenderRuleset(plan)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("nft", "-f", "/tmp/localguard.nft").CombinedOutput(); err != nil {
+	if out, err := exec.Command("nft", "-f", rulesPath).CombinedOutput(); err != nil {
 		t.Fatalf("the ruleset did not load: %v\n%s", err, out)
 	}
 
