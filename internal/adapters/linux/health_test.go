@@ -245,6 +245,13 @@ func TestConnectedWithoutAProbeIsUnknownNotHealthy(t *testing.T) {
 
 // openvpnStub answers one connection on a management socket with a canned reply, so
 // the OpenVPN health path can be exercised without OpenVPN.
+//
+// The reply waits for the caller's command. The management interface is a
+// request/response protocol, and answering the instant a client connects lets the
+// hang-up that follows overtake the caller's own "state\n": writing to a unix socket
+// whose peer has already closed fails with EPIPE, and the caller then reports an
+// unhealthy tunnel without ever reading the reply queued up for it. Waiting for the
+// command orders the two by construction rather than by hoping the caller wins.
 func openvpnStub(t *testing.T, path, reply string) {
 	t.Helper()
 	listener, err := net.Listen("unix", path)
@@ -259,6 +266,12 @@ func openvpnStub(t *testing.T, path, reply string) {
 			if err != nil {
 				return
 			}
+			// The read is a synchronisation point, not a gate: the reply goes out
+			// however it turns out, and the deadline keeps a client that connects
+			// and then says nothing from parking this goroutine for the rest of
+			// the run.
+			_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
+			_, _ = connection.Read(make([]byte, 64))
 			_, _ = connection.Write([]byte(reply))
 			_ = connection.Close()
 		}
