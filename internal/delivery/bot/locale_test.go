@@ -10,9 +10,6 @@ import (
 
 func TestLocaleProductionSourcesContainNoUnexpectedCyrillic(t *testing.T) {
 	t.Parallel()
-	allowedUntilLaterTasks := map[string]bool{
-		"notify.go": true,
-	}
 
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -20,7 +17,7 @@ func TestLocaleProductionSourcesContainNoUnexpectedCyrillic(t *testing.T) {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == "locale_ru.go" || allowedUntilLaterTasks[name] {
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == "locale_ru.go" {
 			continue
 		}
 		body, err := os.ReadFile(name)

@@ -62,15 +62,6 @@ const (
 	msgPluralDeviceMany         MessageID = "plural/device/many"
 )
 
-// task2LegacyRussianLocalizer keeps the remaining legacy messages atomic until Tasks 4–5 localize their callers.
-var task2LegacyRussianLocalizer = func() Localizer {
-	l, err := NewLocalizer(LocaleRussian)
-	if err != nil {
-		panic(err)
-	}
-	return l
-}()
-
 func esc(value string) string { return html.EscapeString(value) }
 
 func btn(text, data string) tg.InlineKeyboardButton {
