@@ -36,7 +36,7 @@ For a provider egress, compare the observed public address with the provider's d
 
 ## Prove fail-closed behavior
 
-Use a dedicated non-critical device whose egress is a dedicated WireGuard tunnel named `kill-switch-wg`. Do not disable that tunnel in YAML: validation rejects a disabled egress while a device references it. First prove the device has connectivity:
+Use a dedicated non-critical device whose egress is a dedicated WireGuard tunnel named `ks-wg`. Do not disable that tunnel in YAML: validation rejects a disabled egress while a device references it. First prove the device has connectivity:
 
 ```bash
 curl --max-time 10 --fail --silent --show-error https://example.com/ >/dev/null
@@ -49,12 +49,12 @@ systemd-run --unit=vpn-hub-kill-switch-test --collect --wait \
   --property=RuntimeMaxSec=90 \
   /bin/bash -ceu '
 restore() {
-  ip -n vpn-hub-kill-switch-wg link set wg0 up || true
+  ip -n vpn-hub-ks-wg link set wg0 up || true
   systemctl start vpn-hub-agent
 }
 trap restore EXIT INT TERM
 systemctl stop vpn-hub-agent
-ip -n vpn-hub-kill-switch-wg link set wg0 down
+ip -n vpn-hub-ks-wg link set wg0 down
 sleep 45
 '
 ```
@@ -74,11 +74,11 @@ fi
 
 ```bash
 systemctl is-active vpn-hub-agent
-ip -n vpn-hub-kill-switch-wg link show wg0
-hubctl --config /etc/vpn-hub/hub.yaml test tunnel kill-switch-wg
+ip -n vpn-hub-ks-wg link show wg0
+hubctl --config /etc/vpn-hub/hub.yaml test tunnel ks-wg
 ```
 
-The agent should be `active`, `wg0` should be `UP`, and the configured tunnel probe should succeed. An unconfigured probe returns `unknown` as an error; it is not reported healthy. If recovery fails, run `ip -n vpn-hub-kill-switch-wg link set wg0 up` and `systemctl start vpn-hub-agent` from the independent SSH session, then inspect the journal before continuing.
+The agent should be `active`, `wg0` should be `UP`, and the configured tunnel probe should succeed. An unconfigured probe returns `unknown` as an error; it is not reported healthy. If recovery fails, run `ip -n vpn-hub-ks-wg link set wg0 up` and `systemctl start vpn-hub-agent` from the independent SSH session, then inspect the journal before continuing.
 
 <VerifyBlock command="sudo nft list table inet vpn_hub >/dev/null && sudo ip link show awg0 >/dev/null" expected="both commands exit zero" />
 

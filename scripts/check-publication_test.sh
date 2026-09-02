@@ -63,6 +63,19 @@ expect_fail_path() {
 	fi
 }
 
+expect_pass_path() {
+	name=$1
+	path=$2
+	shift 2
+	new_repo "$name"
+	"$@" >"$repo/$path"
+	commit_fixture "$path"
+	if ! (cd "$repo" && sh scripts/check-publication.sh); then
+		echo "$name: expected publication check to pass" >&2
+		failed=1
+	fi
+}
+
 expect_package_lock_pass() {
 	name=$1
 	shift
@@ -301,6 +314,39 @@ expect_fail unknown-one-letter-label printf '%s\n' 'endpoint: a.b.dev:51820'
 expect_fail unknown-inline-code-host printf '%s\n' 'Use `vpn.vendor.cloud` as the endpoint.'
 expect_fail_path unknown-go-block-comment fixture.go printf '%s\n' 'package fixture' '' '/* block-comment.personal-domain.dev */'
 expect_fail_path unknown-go-multiline-raw-string fixture.go printf '%s\n' 'package fixture' '' 'var endpoint = `' 'raw-string.personal-domain.cloud 93.184.216.36' '`'
+expect_pass_path code-member-expressions fixture.mjs printf '%s\n' \
+	'const moduleURL = import.meta.url;' \
+	'fields.push(source.kind);'
+expect_pass_path task3-config-identifiers fixture.mdx printf '%s\n' \
+	'Use `source.kind` and `Interface.DNS`.' \
+	'Identity: `/etc/vpn-hub/age/recipient.txt`.' \
+	'Provider: `secrets/edge-wg.conf.sops.binary`.'
+expect_fail_path unknown-js-quoted-host fixture.mjs printf '%s\n' \
+	'const endpoint = "quoted.personal-domain.dev";'
+expect_fail_path unknown-js-mixed-case-host fixture.mjs printf '%s\n' \
+	'const endpoint = "Quoted.Personal-Domain.dev";'
+expect_fail_path unknown-go-quoted-host fixture.go printf '%s\n' \
+	'package fixture' \
+	'const endpoint = "quoted.personal-domain.dev"'
+expect_fail_path unknown-yaml-host fixture.yaml printf '%s\n' \
+	'endpoint: edge.personal-domain.lan'
+expect_fail_path filename-shaped-yaml-host fixture.yaml printf '%s\n' \
+	'endpoint: corp.ovpn'
+expect_fail_path filename-shaped-server-host fixture.yaml printf '%s\n' \
+	'server: corp.ovpn'
+expect_fail_path filename-shaped-js-host fixture.mjs printf '%s\n' \
+	'const endpoint = "server.key.previous";'
+expect_fail_path filename-shaped-go-host fixture.go printf '%s\n' \
+	'package fixture' \
+	'const host = "server.key.previous"'
+expect_fail_path filename-shaped-prose-host fixture.mdx printf '%s\n' \
+	'Connect to corp.ovpn for access.'
+expect_fail_path unknown-doc-code-host fixture.mdx printf '%s\n' \
+	'```yaml' \
+	'endpoint: edge.personal-domain.lan' \
+	'```'
+expect_fail_path unknown-internal-prose-host fixture.mdx printf '%s\n' \
+	'Connect to payroll.corp.internal for access.'
 expect_pass documentation-host printf '%s\n' 'endpoint: vpn.example.com:51820'
 expect_pass uppercase-documentation-host printf '%s\n' 'endpoint: VPN.EXAMPLE.COM:51820'
 expect_package_lock_pass npm-registry-lock printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://registry.npmjs.org/example/-/example-1.0.0.tgz"}}}'
@@ -322,6 +368,16 @@ expect_invalid_utf8_package_lock_path_fail invalid-utf8-lock-path
 expect_large_lock_blob_pass large-lock-blob
 expect_large_tree_listing_pass large-tree-listing
 expect_oversized_lock_blob_fail_clearly oversized-lock-blob
+
+new_repo tracked-filename-host
+printf '%s\n' 'local profile fixture' >"$repo/corp.ovpn"
+printf '%s\n' 'endpoint: corp.ovpn' >"$repo/fixture.yaml"
+git -C "$repo" add -- corp.ovpn fixture.yaml
+git -C "$repo" commit -qm "test: add tracked filename host fixture"
+if (cd "$repo" && sh scripts/check-publication.sh); then
+	echo "tracked-filename-host: tracked basename must not approve a network value" >&2
+	failed=1
+fi
 
 if [ -e "$script_dir/../site/.gitattributes" ]; then
 	echo "package-lock must not use a binary attribute workaround" >&2

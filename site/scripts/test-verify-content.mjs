@@ -1,5 +1,6 @@
-import { equal, match, notEqual } from 'node:assert/strict';
+import { deepEqual, equal, match, notEqual, ok } from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 const scriptsDir = dirname(process['argv'][1]);
@@ -35,5 +36,22 @@ for (const [fixture, expected] of [
   notEqual(result['status'], 0, `${fixture} must fail verification`);
   match(result['stderr'], new RegExp(expected));
 }
+
+const verificationRecipe = readFileSync(resolve(scriptsDir, '../src/content/docs/en/docs/start/verify.mdx'), 'utf8');
+const runtimeValidation = readFileSync(resolve(scriptsDir, '../../internal/application/validation_netip.go'), 'utf8');
+const runtimeTunnelLimit = Number(runtimeValidation['match'](/const maxTunnelIDLength = (\d+)/)?.[1]);
+const runtimeIdentifierPattern = runtimeValidation['match'](/identifierPattern = regexp\.MustCompile\(`([^`]+)`\)/)?.[1];
+ok(runtimeTunnelLimit, 'runtime tunnel ID limit remains discoverable');
+ok(runtimeIdentifierPattern, 'runtime identifier pattern remains discoverable');
+const recipeTunnelID = verificationRecipe['match'](/tunnel named `([a-z0-9-]+)`/)?.[1];
+ok(recipeTunnelID, 'kill-switch recipe declares its tunnel ID');
+ok(recipeTunnelID['length'] <= runtimeTunnelLimit, 'kill-switch recipe tunnel ID fits the runtime maximum');
+match(recipeTunnelID, new RegExp(runtimeIdentifierPattern), 'kill-switch recipe tunnel ID passes identifier validation');
+const derivedRecipeIDs = [
+  ...[...verificationRecipe['matchAll'](/ip -n vpn-hub-([a-z0-9-]+)/g)]['map']((item) => item[1]),
+  ...[...verificationRecipe['matchAll'](/test tunnel ([a-z0-9-]+)/g)]['map']((item) => item[1]),
+];
+deepEqual([...new Set(derivedRecipeIDs)], [recipeTunnelID],
+  'kill-switch namespace and probe references derive from the declared tunnel ID');
 
 console['log']('Content verifier fixtures passed.');
