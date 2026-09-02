@@ -1,0 +1,31 @@
+---
+title: Complete operations map
+description: What every Telegram bot section controls and how to use it safely.
+---
+
+The bot is an operator UI, not a bypass. Make one deliberate change, review its deploy plan, and confirm the resulting revision only after verifying the intended path.
+
+| Section | Use it for | Check before leaving |
+| --- | --- | --- |
+| Status | revision, convergence and pending work | revision and warnings are expected |
+| Devices | issue, reissue, revoke and select egress | profile reaches only the intended operator |
+| Tunnels | inspect, enable, disable and test | a probe succeeds before production traffic |
+| Subscriptions | inspect candidates, accept one or restore known-good | health result and selected upstream |
+| Routes | explain destination-to-tunnel decisions | each private destination has its intended path |
+| Between devices | add or remove a narrow client ACL | source, target, protocol and port are intentional |
+| Hub | hub, fallback and probe settings; key rotation | rotation is scheduled and profile impact is understood |
+| Host and Logs | diagnose services and restart the agent | active revision and failure signal are recorded first |
+
+## Deploy and incident path
+
+The Deploy screen shows current and proposed revisions plus a confirmation deadline. Confirm only after a probe works; otherwise let the timer restore the previous revision or choose rollback explicitly.
+
+1. Record the active revision in Status.
+2. Inspect the affected tunnel or subscription health result.
+3. Review remediation in Deploy.
+4. Confirm after a successful probe, or restore/rollback.
+5. Use Host and Logs when the agent itself is failing.
+
+## Notifications
+
+Settings persists per-category alerts for automatic rollbacks/deploys, agent errors, convergence, tunnel health, host drift, subscriptions and out-of-band changes. Reduce noise by disabling only informational categories; keep critical failure alerts enabled.

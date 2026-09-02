@@ -1,0 +1,40 @@
+---
+title: Device lifecycle
+description: Admit a device, change its egress path, and revoke lost access without opening the network.
+---
+
+## Admit a device
+
+Choose an unused address inside `hub.client_cidr`, a tunnel ID (or `direct`), and a protected output location. The private key goes directly into the profile and is not retained by the hub.
+
+```sh
+hubctl device add laptop \
+  --address 10.80.0.2/32 \
+  --egress corp-egress \
+  --output ./laptop.conf
+hubctl validate
+hubctl deploy --confirm-within 5m
+hubctl confirm
+```
+
+## Change the internet path
+
+This changes only the selected device's default egress; private routes stay governed by tunnel routes and zones.
+
+```sh
+hubctl device set-egress laptop direct
+hubctl deploy --confirm-within 5m
+hubctl confirm
+```
+
+## Revoke or recover
+
+Revoke a lost profile first. Reissue with a fresh profile rather than copying a private key. Reverse only an accidental revocation.
+
+```sh
+hubctl device revoke laptop
+hubctl device unrevoke laptop
+hubctl device list
+```
+
+Use `hubctl routes` to explain active destination paths. If the revision is unhealthy before confirmation, run `hubctl rollback`.
