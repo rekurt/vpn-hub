@@ -27,10 +27,45 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Token != "1:AA" || cfg.AdminID != 42 {
 		t.Fatalf("unexpected config %+v", cfg)
 	}
+	if cfg.Locale != LocaleEnglish {
+		t.Fatalf("Locale = %q, want %q", cfg.Locale, LocaleEnglish)
+	}
 	if cfg.Notifications.HealthInterval != 5*time.Minute ||
 		cfg.Notifications.DriftInterval != 30*time.Minute ||
 		cfg.Notifications.SubscriptionRefresh != 6*time.Hour {
 		t.Fatalf("unexpected defaults %+v", cfg.Notifications)
+	}
+}
+
+func TestLoadConfigLocale(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		body       string
+		wantLocale Locale
+		wantErr    string
+	}{
+		{"omitted defaults to English", "token: t\nadmin_id: 42\n", LocaleEnglish, ""},
+		{"Russian accepted", "token: t\nadmin_id: 42\nlocale: ru\n", LocaleRussian, ""},
+		{"unsupported rejected", "token: t\nadmin_id: 42\nlocale: de\n", "", `locale "de" is not supported; use en or ru`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := LoadConfig(context.Background(), writeBotConfig(t, tc.body))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("LoadConfig error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if cfg.Locale != tc.wantLocale {
+				t.Fatalf("Locale = %q, want %q", cfg.Locale, tc.wantLocale)
+			}
+		})
 	}
 }
 

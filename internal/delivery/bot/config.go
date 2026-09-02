@@ -22,6 +22,7 @@ import (
 type Config struct {
 	Token         string
 	AdminID       int64
+	Locale        Locale
 	Notifications Notifications
 }
 
@@ -62,6 +63,7 @@ func LoadConfig(ctx context.Context, path string) (Config, error) {
 	var wire struct {
 		Token         string `yaml:"token"`
 		AdminID       int64  `yaml:"admin_id"`
+		Locale        Locale `yaml:"locale"`
 		Notifications struct {
 			HealthInterval      string `yaml:"health_interval"`
 			DriftInterval       string `yaml:"drift_interval"`
@@ -81,7 +83,15 @@ func LoadConfig(ctx context.Context, path string) (Config, error) {
 		return Config{}, fmt.Errorf("%s: admin_id is required; @userinfobot tells you yours", path)
 	}
 
-	cfg := Config{Token: wire.Token, AdminID: wire.AdminID}
+	locale := wire.Locale
+	if locale == "" {
+		locale = LocaleEnglish
+	}
+	if _, err := NewLocalizer(locale); err != nil {
+		return Config{}, err
+	}
+
+	cfg := Config{Token: wire.Token, AdminID: wire.AdminID, Locale: locale}
 	intervals := []struct {
 		name     string
 		value    string
