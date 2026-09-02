@@ -45,9 +45,12 @@ variable "ssh_allowed_cidrs" {
   type        = list(string)
 
   validation {
-    condition = alltrue([
+    condition = length(var.ssh_allowed_cidrs) > 0 && alltrue([
       for cidr in var.ssh_allowed_cidrs : can(cidrhost(cidr, 0)) && (
-        var.allow_global_ssh || !contains(["0.0.0.0/0", "::/0"], cidr)
+        var.allow_global_ssh || !contains(
+          ["0.0.0.0/0", "::/0"],
+          try(cidrsubnet(cidr, 0, 0), ""),
+        )
       )
     ])
     error_message = "ssh_allowed_cidrs must contain valid CIDRs and cannot include 0.0.0.0/0 or ::/0 unless allow_global_ssh is true."
