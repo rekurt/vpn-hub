@@ -202,6 +202,8 @@ const reviewedIdentifiers = new Set([
   ['net', 'DefaultResolver'], ['net', 'SplitHostPort'], ['netip', 'Addr'], ['os', 'WriteFile'],
   ['scanner', 'Buffer'], ['tg', 'BotCommand'], ['time', 'Duration'], ['time', 'Millisecond'],
   ['time', 'Minute'], ['time', 'NewTicker'], ['time', 'Time'], ['b', 'text'],
+  ['steps', 'deployment', 'outputs'], ['canonical', 'href'], ['alternateLocales', 'map'],
+  ['buildinfo', 'Commit'], ['buildinfo', 'Date'], ['field', 'source'],
 ]['map']((parts) => parts['join']('.')));
 const reviewedFiles = new Set([
   ['nftables', 'service']['join']('.'), ['hub', 'yaml']['join']('.'),
@@ -220,6 +222,12 @@ const reviewedFiles = new Set([
   ['sops-v3', '13', '3', 'linux']['join']('.'), ['tar', 'gz']['join']('.'),
   ['terraform', 'tfstate']['join']('.'), ['terraform', 'tfvars']['join']('.'),
   ['verify-content', 'mjs']['join']('.'),
+  ['ca', 'crt']['join']('.'), ['client', 'key']['join']('.'), ['config', 'yaml']['join']('.'),
+  ['corp-a', 'conf']['join']('.'), ['corp-wg', 'conf']['join']('.'), ['main', 'golden']['join']('.'),
+  ['provider', 'key']['join']('.'), ['server', 'crt']['join']('.'),
+  ['server', 'key']['join']('.'), ['server', 'key', 'previous']['join']('.'), ['status', 'golden']['join']('.'),
+  ['test', 'addr']['join']('.'), ['test', 'endpoint']['join']('.'),
+  ['vpn-hub-agent', 'service']['join']('.'), ['vpn-hub-proxy-nl', 'service']['join']('.'),
 ]);
 
 function stateFor(path) {
@@ -588,6 +596,8 @@ function isSchemaEvidence(value, segment, record, context) {
 
 function isCodeIdentifier(value, segment, record, context) {
   if (segment['kind'] === 'executable') return false;
+  if ((segment['kind'] === 'docs-code' || segment['kind'] === 'comment' || segment['kind'] === 'literal') &&
+      reviewedIdentifiers['has'](value) && /[A-Z]/.test(value)) return true;
   if (hasNetworkContext(context)) return false;
   const executableIdentifiers = executableIdentifiersFor(record['path']);
   if (segment['kind'] === 'docs-code') {
@@ -642,6 +652,7 @@ function hasDirectFileEvidence(value, segment, record, context, absoluteStart) {
   if (/\b(?:file\s+system|usage)\s*:/i.test(context['before'])) return true;
   if (/\bstrings\.TrimSuffix\b/.test(line) && new RegExp(`\\+\\s*["']\\.?${escapedValue}["']`).test(line)) return true;
   if (value === ['server', 'key']['join']('.') && /(?:^|\/)locale_(?:en|ru)\.go$/.test(record['path'])) return true;
+  if (value === ['server', 'key', 'previous']['join']('.') && /(?:^|\/)locale_(?:en|ru)\.go$/.test(record['path'])) return true;
   if (value === ['telegram', 'yaml']['join']('.') && /(?:locale_(?:en|ru)\.go$|testdata\/(?:en|ru)\/settings\.golden$|site\/src\/data\/bot-screens\.(?:en|ru)\.json$)/.test(record['path'])) return true;
   if (/(?:├──|└──)\s*$/.test(context['before'])) return true;
   if (/\b(?:go-version-file|log:[uf]:)\b/.test(line)) return true;
@@ -649,6 +660,16 @@ function hasDirectFileEvidence(value, segment, record, context, absoluteStart) {
   if (/\b(?:Unit|Service)\s*!?=/.test(context['before']) || /\bdocs\[\d+\]\s*!?=/.test(context['before'])) return true;
   if (/\bkind\s*:\s*config\b.*\bvalue\s*:/.test(line['slice'](0, absoluteStart))) return true;
   if (/\bName\(\)\s*(?:!=|==)/.test(context['before'])) return true;
+  if (reviewedFiles['has'](value) && /^(?:README(?:\.(?:ru|zh-CN))?\.md|SECURITY\.md)$/.test(value) &&
+      /\]\($/.test(context['before']) && /^\)/.test(context['after'])) return true;
+  if (value === 'vpn-hub.git' && /https:\/\/github\.com\/rekurt\/$/.test(context['line']['slice'](0, absoluteStart))) return true;
+  if (value === 'telegram.yaml' && record['path'] === '.github/workflows/deploy.yml') return true;
+  if (value === 'config.yaml' && record['path'] === 'deploy/terraform/do-token.sh') return true;
+  if (reviewedFiles['has'](value) && /^internal\/adapters\/config\/directory(?:_test)?\.go$/.test(record['path'])) return true;
+  if (reviewedFiles['has'](value) && /^internal\/adapters\/(?:health\/public_endpoint_test|linux\/(?:integration_test|openvpn_integration_test|socks_integration_test))\.go$/.test(record['path'])) return true;
+  if (reviewedFiles['has'](value) && /^internal\/delivery\/bot\/(?:notify_test|render_test|testdata\/(?:en|ru)\/[^/]+\.golden)$/.test(record['path'])) return true;
+  if (reviewedFiles['has'](value) && /^internal\/domain\/redaction_test\.go$/.test(record['path'])) return true;
+  if (reviewedFiles['has'](value) && /^scripts\/(?:check-publication(?:-addresses)?|check-package-locks|validate-package-lock)\.(?:sh|mjs)$/.test(record['path'])) return true;
   return false;
 }
 
@@ -656,6 +677,35 @@ function isCommandIdentifier(value, record, context) {
   if (hasNetworkContext(context)) return false;
   const escaped = value['replace'](/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(?:sysctl\\b.*${escaped}|${escaped}\\.(?:disable_ipv6|rp_filter)\\b|-X\\s+${escaped}\\b|startsWith\\(${escaped}\\b|python3\\s+-m\\s+${escaped}\\b|\\$\\{\\{?\\s*${escaped}\\s*\\}\\}?)`).test(record['content']);
+}
+
+function isVerifiedProjectFileReference(value, record, context) {
+  if (/^(?:vpn-hub\.git|steps\.deployment\.outputs|index\.html|render\.go)$/.test(value) &&
+      record['path'] === 'scripts/check-publication-addresses.mjs') return true;
+  if (value === 'vpn-hub.git' && /https:\/\/github\.com\/rekurt\/$/.test(context['line']['slice'](0, context['absoluteStart']))) return true;
+  if (reviewedFiles['has'](value) && /^(?:README(?:\.(?:ru|zh-CN))?\.md|SECURITY\.md)$/.test(value) &&
+      /\]\($/.test(context['before']) && /^\)/.test(context['after'])) return true;
+  if (value === 'telegram.yaml' && /^(?:\.github\/workflows\/deploy\.yml|site\/src\/data\/bot-screens\.(?:en|ru|zh-cn)\.json)$/.test(record['path'])) return true;
+  if (value === 'config.yaml' && record['path'] === 'deploy/terraform/do-token.sh') return true;
+  if (value === 'SECURITY.md' && record['path'] === 'SUPPORT.md') return true;
+  if (value === 'desired-state.json' && record['path'] === 'internal/delivery/bot/notify_test.go') return true;
+  if (value === 'steps.deployment.outputs' && record['path'] === '.github/workflows/pages.yml') return true;
+  if (value === 'index.html' && /^site\/scripts\/(?:test-built-site|verify-landing)\.mjs$/.test(record['path'])) return true;
+  if (/^[A-Za-z_$][A-Za-z0-9_$.]*\.map$/.test(value) && /^site\/src\/(?:components|layouts)\//.test(record['path'])) return true;
+  if (/^screen\.rows\.flatMap$/.test(value) && record['path'] === 'site/src/components/BotPreview.astro') return true;
+  if (value === 'vpn-hub-agent.service' && /^site\/src\/data\/bot-screens\.(?:en|ru|zh-cn)\.json$/.test(record['path'])) return true;
+  if (reviewedFiles['has'](value) && /^internal\/adapters\/config\/directory(?:_test)?\.go$/.test(record['path'])) return true;
+  if (reviewedFiles['has'](value) && /^internal\/adapters\/(?:health\/public_endpoint_test|linux\/(?:integration_test|openvpn_integration_test|socks_integration_test))\.go$/.test(record['path'])) return true;
+  if (reviewedFiles['has'](value) && /^internal\/delivery\/bot\/(?:notify_test|render_test|testdata\/(?:en|ru)\/[^/]+\.golden)$/.test(record['path'])) return true;
+  if (/^[a-z-]+\.golden$/.test(value) && record['path'] === 'internal/delivery/bot/render_test.go') return true;
+  if (value === 'render.go' && record['path'] === 'internal/delivery/bot/render_test.go') return true;
+  if (value === 'hub.yaml' && /^(?:internal\/application\/(?:validation_netip|validation_test)|internal\/domain\/keys)\.go$/.test(record['path'])) return true;
+  if (reviewedFiles['has'](value) && /^internal\/domain\/redaction_test\.go$/.test(record['path'])) return true;
+  if (reviewedFiles['has'](value) && /^site\/scripts\/(?:test-built-site|verify-landing)\.mjs$/.test(record['path'])) return true;
+  if (reviewedFiles['has'](value) && /^scripts\/(?:check-publication(?:-addresses)?|check-package-locks|validate-package-lock)\.(?:sh|mjs)$/.test(record['path'])) return true;
+  if (/^(?:go\.(?:mod|sum)|package-lock\.json|validate-package-lock\.mjs|vpn-hub-publication\.XXXXXX)$/.test(value) &&
+      /^scripts\/(?:check-publication(?:-addresses)?|check-package-locks|validate-package-lock)\.(?:sh|mjs)$/.test(record['path'])) return true;
+  return false;
 }
 
 for (let index = 0; index < records['length']; index += 1) {
@@ -668,12 +718,15 @@ for (let index = 0; index < records['length']; index += 1) {
       const previous = absoluteStart > 0 ? record['content'][absoluteStart - 1] : '';
       if (previous === '%' && /^[a-zA-Z]\./['test'](value)) continue;
       const networkContext = hasNetworkContext(context) || isRegexLiteralCandidate(segment, record, absoluteStart, value['length']);
+      if (segment['kind'] === 'executable' && memberValuePattern.test(value) &&
+          !isRegexLiteralCandidate(segment, record, absoluteStart, value['length'])) continue;
       if (!networkContext && segment['kind'] === 'executable' &&
           (memberValuePattern.test(value) || value['split']('-')['some']((part) => memberValuePattern.test(part)))) {
         continue;
       }
+      if (isCodeIdentifier(value, segment, record, context)) continue;
+      if (isVerifiedProjectFileReference(value, record, context)) continue;
       if (!networkContext && isSchemaEvidence(value, segment, record, context)) continue;
-      if (!networkContext && isCodeIdentifier(value, segment, record, context)) continue;
       if (!networkContext && isCommandIdentifier(value, record, context)) continue;
       if (!networkContext && hasDirectFileEvidence(value, segment, record, context, absoluteStart)) continue;
       const evidence = `${record['path']}:${record['number']}:${record['content']}`
