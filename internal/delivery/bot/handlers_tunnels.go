@@ -2,12 +2,46 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	tg "vpn-hub/internal/adapters/telegram"
 	"vpn-hub/internal/domain"
+)
+
+const (
+	msgFailureTunnelNotFound   MessageID = "failure/tunnel_not_found"
+	msgReasonTunnelNotFound    MessageID = "reason/tunnel_not_found"
+	msgTunnelRequired          MessageID = "tunnel/required"
+	msgTunnelEnableConfirm     MessageID = "tunnel/enable_confirm"
+	msgTunnelDisableConfirm    MessageID = "tunnel/disable_confirm"
+	msgTunnelRoutePrompt       MessageID = "tunnel/route_prompt"
+	msgTunnelZonePrompt        MessageID = "tunnel/zone_prompt"
+	msgValueRequired           MessageID = "value/required"
+	msgProbeKindRequired       MessageID = "probe/kind_required"
+	msgOperationTunnelEnable   MessageID = "operation/tunnel_enable"
+	msgOperationTunnelDisable  MessageID = "operation/tunnel_disable"
+	msgTunnelEnabled           MessageID = "tunnel/enabled"
+	msgTunnelDisabled          MessageID = "tunnel/disabled"
+	msgOperationTunnelListEdit MessageID = "operation/tunnel_list_edit"
+	msgTunnelListRevertFailed  MessageID = "tunnel/list_revert_failed"
+	msgTunnelListReverted      MessageID = "tunnel/list_reverted"
+	msgTunnelListAdded         MessageID = "tunnel/list_added"
+	msgTunnelListRemoved       MessageID = "tunnel/list_removed"
+	msgFailureProbeStart       MessageID = "failure/probe_start"
+	msgToastTesting            MessageID = "toast/testing"
+	msgNoEnabledTunnels        MessageID = "tunnel/no_enabled"
+	msgTunnelTestStart         MessageID = "tunnel/test_start"
+	msgFailureStart            MessageID = "failure/start"
+	msgTunnelTestProgress      MessageID = "tunnel/test_progress"
+	msgTunnelTestProbeFailed   MessageID = "tunnel/test_probe_failed"
+	msgTunnelTestResult        MessageID = "tunnel/test_result"
+	msgTunnelTestComplete      MessageID = "tunnel/test_complete"
+	msgToastTestingAll         MessageID = "toast/testing_all"
+	msgOperationTunnelAccess   MessageID = "operation/tunnel_access"
+	msgButtonToAccess          MessageID = "button/to_access"
 )
 
 func (b *Bot) tunnelEntries(ctx context.Context) ([]tunnelEntry, error) {
@@ -26,27 +60,27 @@ func (b *Bot) tunnelEntries(ctx context.Context) ([]tunnelEntry, error) {
 func (b *Bot) buildTunnels(ctx context.Context) screen {
 	entries, err := b.tunnelEntries(ctx)
 	if err != nil {
-		return renderFailure("конфигурация не читается", err)
+		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
 	}
-	return scr(renderTunnels(task2EnglishLocalizer, entries))
+	return scr(renderTunnels(b.L, entries))
 }
 
 func (b *Bot) buildTunnelCard(ctx context.Context, tunnelID string) screen {
 	entries, err := b.tunnelEntries(ctx)
 	if err != nil {
-		return renderFailure("конфигурация не читается", err)
+		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
 	}
 	for _, entry := range entries {
 		if entry.Tunnel.ID == tunnelID {
-			return scr(renderTunnelCard(task2EnglishLocalizer, entry, b.Now()))
+			return scr(renderTunnelCard(b.L, entry, b.Now()))
 		}
 	}
-	return renderFailure("туннель не найден", fmt.Errorf("нет туннеля %q", tunnelID))
+	return renderFailure(b.L, b.text(msgFailureTunnelNotFound), errors.New(b.text(msgReasonTunnelNotFound, tunnelID)))
 }
 
 func (b *Bot) routeTunnels(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {
 	if action != "" && action != "x" && action != "ta" && len(args) < 1 {
-		return result{toast: "Не указан туннель"}
+		return result{toast: b.text(msgTunnelRequired)}
 	}
 	switch action {
 	case "":
@@ -57,9 +91,11 @@ func (b *Bot) routeTunnels(ctx context.Context, cb *tg.CallbackQuery, action str
 	case "c":
 		return b.show(ctx, cb, b.buildTunnelCard(ctx, args[0]))
 	case "on", "off":
-		verb := map[string]string{"on": "Включить", "off": "Выключить"}[action]
-		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
-			fmt.Sprintf("%s туннель <b>%s</b>?", verb, esc(args[0])),
+		question := b.text(msgTunnelDisableConfirm, esc(args[0]))
+		if action == "on" {
+			question = b.text(msgTunnelEnableConfirm, esc(args[0]))
+		}
+		return b.show(ctx, cb, scr(renderConfirm(b.L, question,
 			"tun:"+action+"!:"+args[0], "tun:c:"+args[0])))
 	case "on!":
 		return b.toggleTunnel(ctx, cb, args[0], true)
@@ -70,23 +106,23 @@ func (b *Bot) routeTunnels(ctx context.Context, cb *tg.CallbackQuery, action str
 	case "ra":
 		b.dialogs.start(dialogRouteAdd, map[string]string{"tunnel": args[0]})
 		return b.show(ctx, cb, screen{
-			text:   fmt.Sprintf("➕ Какой маршрут добавить в <b>%s</b>? Пришлите подсеть, например <code>10.20.0.0/16</code>.", esc(args[0])),
-			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ Отмена", "tun:x")}),
+			text:   b.text(msgTunnelRoutePrompt, esc(args[0])),
+			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ "+b.text(msgButtonCancel), "tun:x")}),
 		})
 	case "za":
 		b.dialogs.start(dialogZoneAdd, map[string]string{"tunnel": args[0]})
 		return b.show(ctx, cb, screen{
-			text:   fmt.Sprintf("➕ Какую DNS-зону добавить в <b>%s</b>? Пришлите домен, например <code>corp.internal</code>.", esc(args[0])),
-			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ Отмена", "tun:x")}),
+			text:   b.text(msgTunnelZonePrompt, esc(args[0])),
+			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ "+b.text(msgButtonCancel), "tun:x")}),
 		})
 	case "rd":
 		if len(args) < 2 {
-			return result{toast: "Нет значения"}
+			return result{toast: b.text(msgValueRequired)}
 		}
 		return b.editTunnelList(ctx, cb, args[0], "routes", args[1], false)
 	case "zd":
 		if len(args) < 2 {
-			return result{toast: "Нет значения"}
+			return result{toast: b.text(msgValueRequired)}
 		}
 		return b.editTunnelList(ctx, cb, args[0], "dns_zones", args[1], false)
 	case "ta":
@@ -95,7 +131,7 @@ func (b *Bot) routeTunnels(ctx context.Context, cb *tg.CallbackQuery, action str
 		return b.show(ctx, cb, b.buildAccess(ctx, args[0]))
 	case "at":
 		if len(args) < 2 {
-			return result{toast: "Нет устройства"}
+			return result{toast: b.text(msgDeviceRequired)}
 		}
 		return b.toggleAccess(ctx, cb, args[0], args[1])
 	case "pr":
@@ -103,16 +139,16 @@ func (b *Bot) routeTunnels(ctx context.Context, cb *tg.CallbackQuery, action str
 		return b.show(ctx, cb, b.buildProbes(ctx, args[0]))
 	case "ps":
 		if len(args) < 2 {
-			return result{toast: "Нет вида пробы"}
+			return result{toast: b.text(msgProbeKindRequired)}
 		}
 		return b.startProbeDialog(ctx, cb, args[0], args[1])
 	case "pd":
 		if len(args) < 2 {
-			return result{toast: "Нет вида пробы"}
+			return result{toast: b.text(msgProbeKindRequired)}
 		}
 		return b.removeProbe(ctx, cb, args[0], args[1])
 	default:
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 }
 
@@ -120,32 +156,32 @@ func (b *Bot) routeTunnels(ctx context.Context, cb *tg.CallbackQuery, action str
 // revert discipline: disabling a tunnel a device depends on is refused with the
 // exact reason.
 func (b *Bot) toggleTunnel(ctx context.Context, cb *tg.CallbackQuery, tunnelID string, enable bool) result {
-	name := "выключение туннеля "
+	name := b.text(msgOperationTunnelDisable, tunnelID)
 	if enable {
-		name = "включение туннеля "
+		name = b.text(msgOperationTunnelEnable, tunnelID)
 	}
-	release, busy := b.claim(name + tunnelID)
+	release, busy := b.claim(name)
 	if busy != nil {
 		return *busy
 	}
 	defer release()
 
 	if err := b.Editor.SetTunnelField(tunnelID, "enabled", fmt.Sprint(enable)); err != nil {
-		return result{toast: err.Error(), alert: true}
+		return result{toast: b.text(msgOperationFailed, err.Error()), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		view := revertEdit("Отменено, конфигурация не проходит проверку", err, func() error {
+		view := revertEdit(b.L, b.text(msgRevertInvalidConfig), err, func() error {
 			return b.Editor.SetTunnelField(tunnelID, "enabled", fmt.Sprint(!enable))
 		})
-		view.markup = keyboard([]tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID)})
+		view.markup = keyboard([]tg.InlineKeyboardButton{btn("⬅️ "+b.text(msgButtonToTunnel), "tun:c:"+tunnelID)})
 		return b.show(ctx, cb, view)
 	}
-	state := "выключен"
+	text := b.text(msgTunnelDisabled, esc(tunnelID))
 	if enable {
-		state = "включён"
+		text = b.text(msgTunnelEnabled, esc(tunnelID))
 	}
-	outcome := b.show(ctx, cb, b.afterConfigChange(fmt.Sprintf("Туннель <b>%s</b> %s.", esc(tunnelID), state), backToTunnels))
-	outcome.toast = "Готово"
+	outcome := b.show(ctx, cb, b.afterConfigChange(text, b.backToTunnels()))
+	outcome.toast = b.text(msgToastDone)
 	return outcome
 }
 
@@ -153,7 +189,7 @@ func (b *Bot) toggleTunnel(ctx context.Context, cb *tg.CallbackQuery, tunnelID s
 // that was written but no longer validates is reported rather than silently left to
 // fail at deploy.
 func (b *Bot) editTunnelList(ctx context.Context, cb *tg.CallbackQuery, tunnelID, field, value string, add bool) result {
-	release, busy := b.claim("правка " + field + " у " + tunnelID)
+	release, busy := b.claim(b.text(msgOperationTunnelListEdit, field, tunnelID))
 	if busy != nil {
 		return *busy
 	}
@@ -166,7 +202,7 @@ func (b *Bot) editTunnelList(ctx context.Context, cb *tg.CallbackQuery, tunnelID
 		err = b.Editor.RemoveListItem(tunnelID, field, value)
 	}
 	if err != nil {
-		return result{toast: err.Error(), alert: true}
+		return result{toast: b.text(msgOperationFailed, err.Error()), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
 		// Revert, like every other mutator does. AppendListItem/RemoveListItem write
@@ -182,26 +218,24 @@ func (b *Bot) editTunnelList(ctx context.Context, cb *tg.CallbackQuery, tunnelID
 		}
 		if revertErr != nil {
 			return b.show(ctx, cb, screen{
-				text: "⚠️ Изменение сделало конфигурацию невалидной, и откат не удался:\n<code>" +
-					esc(revertErr.Error()) + "</code>\n\nПравьте конфигурацию на хосте.",
-				markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID)}),
+				text:   b.text(msgTunnelListRevertFailed, esc(revertErr.Error())),
+				markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ "+b.text(msgButtonToTunnel), "tun:c:"+tunnelID)}),
 			})
 		}
 		return b.show(ctx, cb, screen{
-			text: "↩️ Изменение отменено, конфигурация не проходит проверку:\n<code>" +
-				esc(err.Error()) + "</code>",
-			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID)}),
+			text:   b.text(msgTunnelListReverted, esc(err.Error())),
+			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ "+b.text(msgButtonToTunnel), "tun:c:"+tunnelID)}),
 		})
 	}
 	outcome := b.show(ctx, cb, b.buildTunnelCard(ctx, tunnelID))
 	// Name what changed -- a one-tap removal otherwise leaves no trace of which
 	// value went. Routes and zones, unlike a subscription upstream, only take
 	// effect on a deploy, so say that too.
-	verb := "добавлено"
+	messageID := msgTunnelListAdded
 	if !add {
-		verb = "удалено"
+		messageID = msgTunnelListRemoved
 	}
-	outcome.toast = clampToast(fmt.Sprintf("%s: %s — вступит в силу после деплоя", verb, value))
+	outcome.toast = clampToast(b.text(messageID, value))
 	return outcome
 }
 
@@ -211,18 +245,18 @@ func (b *Bot) testTunnel(ctx context.Context, cb *tg.CallbackQuery, tunnelID str
 	b.spawn("test-"+tunnelID, func() {
 		cfg, err := b.Service.LoadAndValidate(ctx)
 		if err != nil {
-			b.sendScreen(ctx, renderFailure("конфигурация не читается", err))
+			b.sendScreen(ctx, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 			return
 		}
 		health, err := b.Service.TestTunnel(ctx, cfg, tunnelID)
 		if err != nil {
-			b.sendScreen(ctx, renderFailure("проба не запустилась", err))
+			b.sendScreen(ctx, renderFailure(b.L, b.text(msgFailureProbeStart), err))
 			return
 		}
 		b.health.store(healthEntry{ID: tunnelID, Status: health.Status, Reason: health.Reason, CheckedAt: health.CheckedAt})
 		b.show(ctx, cb, b.buildTunnelCard(ctx, tunnelID))
 	})
-	return result{toast: "🩺 Проверяю…"}
+	return result{toast: b.text(msgToastTesting)}
 }
 
 // testAllTunnels probes every enabled tunnel in the background, editing one
@@ -230,7 +264,7 @@ func (b *Bot) testTunnel(ctx context.Context, cb *tg.CallbackQuery, tunnelID str
 func (b *Bot) testAllTunnels(ctx context.Context, _ *tg.CallbackQuery) result {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		b.sendScreen(ctx, renderFailure("конфигурация не читается", err))
+		b.sendScreen(ctx, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 		return result{}
 	}
 	var subjects []domain.Tunnel
@@ -241,19 +275,19 @@ func (b *Bot) testAllTunnels(ctx context.Context, _ *tg.CallbackQuery) result {
 	}
 	sort.Slice(subjects, func(i, j int) bool { return subjects[i].ID < subjects[j].ID })
 	if len(subjects) == 0 {
-		return result{toast: "Нет включённых туннелей"}
+		return result{toast: b.text(msgNoEnabledTunnels)}
 	}
 
 	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,
-		legacyRussianTunnelTestProgress(len(subjects)), nil)
+		b.text(msgTunnelTestStart, len(subjects), plural(b.L, len(subjects), msgPluralTunnelOne, msgPluralTunnelFew, msgPluralTunnelMany)), nil)
 	if err != nil {
-		return result{toast: "Не удалось начать: " + err.Error(), alert: true}
+		return result{toast: b.text(msgFailureStart, err.Error()), alert: true}
 	}
 
 	b.spawn("test-all", func() {
 		var lines []string
 		for index, tunnel := range subjects {
-			text := fmt.Sprintf("🩺 %d из %d: проверяю <code>%s</code>…\n%s",
+			text := b.text(msgTunnelTestProgress,
 				index+1, len(subjects), esc(tunnel.ID), strings.Join(lines, "\n"))
 			if err := b.API.EditMessageText(ctx, message.Chat.ID, message.ID, text, nil); err != nil {
 				b.logf("test-all edit: %v", err)
@@ -261,26 +295,21 @@ func (b *Bot) testAllTunnels(ctx context.Context, _ *tg.CallbackQuery) result {
 
 			health, err := b.Service.TestTunnel(ctx, cfg, tunnel.ID)
 			if err != nil {
-				lines = append(lines, fmt.Sprintf("⚪️ <code>%s</code> — проба не запустилась: %s", esc(tunnel.ID), esc(err.Error())))
+				lines = append(lines, b.text(msgTunnelTestProbeFailed, esc(tunnel.ID), esc(err.Error())))
 				continue
 			}
 			b.health.store(healthEntry{ID: tunnel.ID, Status: health.Status, Reason: health.Reason, CheckedAt: health.CheckedAt})
-			lines = append(lines, fmt.Sprintf("%s <code>%s</code> — %s", healthIcon(health.Status), esc(tunnel.ID), esc(health.Reason)))
+			lines = append(lines, b.text(msgTunnelTestResult, healthIcon(health.Status), esc(tunnel.ID), esc(health.Reason)))
 		}
-		final := "🩺 <b>Проверка завершена</b>\n\n" + strings.Join(lines, "\n")
+		final := b.text(msgTunnelTestComplete, strings.Join(lines, "\n"))
 		view := screen{text: final, markup: keyboard(
-			[]tg.InlineKeyboardButton{btn("🚇 Туннели", "tun"), btn("📊 Статус", "st")},
+			[]tg.InlineKeyboardButton{btn("🚇 "+b.text(msgButtonTunnels), "tun"), btn("📊 "+b.text(MsgButtonStatus), "st")},
 		)}
 		if err := b.API.EditMessageText(ctx, message.Chat.ID, message.ID, view.text, view.markup); err != nil {
 			b.logf("test-all edit: %v", err)
 		}
 	})
-	return result{toast: "Проверяю все"}
-}
-
-func legacyRussianTunnelTestProgress(count int) string {
-	return fmt.Sprintf("🩺 Проверяю %d %s…", count,
-		plural(task2LegacyRussianLocalizer, count, msgPluralTunnelOne, msgPluralTunnelFew, msgPluralTunnelMany))
+	return result{toast: b.text(msgToastTestingAll)}
 }
 
 // --- allowed_devices -------------------------------------------------------
@@ -288,7 +317,7 @@ func legacyRussianTunnelTestProgress(count int) string {
 func (b *Bot) buildAccess(ctx context.Context, tunnelID string) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return renderFailure("конфигурация не читается", err)
+		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
 	}
 	devices := make([]string, 0, len(cfg.Devices))
 	for _, device := range cfg.Devices {
@@ -297,17 +326,17 @@ func (b *Bot) buildAccess(ctx context.Context, tunnelID string) screen {
 	sort.Strings(devices)
 	for _, tunnel := range cfg.Tunnels {
 		if tunnel.ID == tunnelID {
-			return scr(renderAccess(task2EnglishLocalizer, tunnelID, devices, tunnel.AllowedDevices))
+			return scr(renderAccess(b.L, tunnelID, devices, tunnel.AllowedDevices))
 		}
 	}
-	return renderFailure("туннель не найден", fmt.Errorf("нет туннеля %q", tunnelID))
+	return renderFailure(b.L, b.text(msgFailureTunnelNotFound), errors.New(b.text(msgReasonTunnelNotFound, tunnelID)))
 }
 
 // toggleAccess flips one device in allowed_devices, with the usual revert when the
 // resulting config no longer validates -- excluding the only device that uses this
 // egress is exactly the mistake validation exists to catch.
 func (b *Bot) toggleAccess(ctx context.Context, cb *tg.CallbackQuery, tunnelID, deviceID string) result {
-	release, busy := b.claim("доступ к " + tunnelID)
+	release, busy := b.claim(b.text(msgOperationTunnelAccess, tunnelID))
 	if busy != nil {
 		return *busy
 	}
@@ -315,7 +344,7 @@ func (b *Bot) toggleAccess(ctx context.Context, cb *tg.CallbackQuery, tunnelID, 
 
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 	}
 	allowed := false
 	for _, tunnel := range cfg.Tunnels {
@@ -334,10 +363,10 @@ func (b *Bot) toggleAccess(ctx context.Context, cb *tg.CallbackQuery, tunnelID, 
 		err = b.Editor.AppendListItem(tunnelID, "allowed_devices", deviceID)
 	}
 	if err != nil {
-		return result{toast: err.Error(), alert: true}
+		return result{toast: b.text(msgOperationFailed, err.Error()), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		view := revertEdit("Отменено, конфигурация не проходит проверку", err, func() error {
+		view := revertEdit(b.L, b.text(msgRevertInvalidConfig), err, func() error {
 			if allowed {
 				return b.Editor.AppendListItem(tunnelID, "allowed_devices", deviceID)
 			}
@@ -345,11 +374,11 @@ func (b *Bot) toggleAccess(ctx context.Context, cb *tg.CallbackQuery, tunnelID, 
 		})
 		return b.show(ctx, cb, screen{
 			text:   view.text,
-			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К доступу", "tun:ac:"+tunnelID)}),
+			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ "+b.text(msgButtonToAccess), "tun:ac:"+tunnelID)}),
 		})
 	}
 	outcome := b.show(ctx, cb, b.buildAccess(ctx, tunnelID))
-	outcome.toast = "Изменение вступит в силу после деплоя"
+	outcome.toast = b.text(msgChangeAfterDeploy)
 	return outcome
 }
 
@@ -362,7 +391,7 @@ func (b *Bot) handleListAddInput(ctx context.Context, dialog *dialog, text strin
 	}
 	b.dialogs.clear()
 	outcome := b.editTunnelList(ctx, nil, tunnelID, field, text, true)
-	if outcome.toast != "" && outcome.toast != "Готово" {
-		b.send(ctx, "⚠️ "+esc(outcome.toast), keyboard([]tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID)}))
+	if outcome.toast != "" && outcome.toast != b.text(msgToastDone) {
+		b.send(ctx, "⚠️ "+esc(outcome.toast), keyboard([]tg.InlineKeyboardButton{btn("⬅️ "+b.text(msgButtonToTunnel), "tun:c:"+tunnelID)}))
 	}
 }

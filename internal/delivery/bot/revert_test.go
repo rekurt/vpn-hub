@@ -16,41 +16,55 @@ func TestRevertEditTellsTheTruthWhenTheUndoFails(t *testing.T) {
 	t.Parallel()
 	invalid := errors.New("device macbook has no way out")
 
-	t.Run("an undo that worked reports the cancellation", func(t *testing.T) {
-		t.Parallel()
-		undone := false
-		view := revertEdit("отменено: конфигурация не проходит проверку", invalid, func() error {
-			undone = true
-			return nil
-		})
-		if !undone {
-			t.Fatal("the change was not undone")
-		}
-		if !strings.Contains(view.text, "отменено") {
-			t.Errorf("the operator was not told the change was taken back:\n%s", view.text)
-		}
-		if !strings.Contains(view.text, invalid.Error()) {
-			t.Errorf("the reason is missing:\n%s", view.text)
-		}
-	})
+	locales := []struct {
+		locale          Locale
+		cancelledMarker string
+		brokenMarker    string
+	}{
+		{LocaleEnglish, "Change canceled", "remains invalid"},
+		{LocaleRussian, "Изменение отменено", "осталась сломанной"},
+	}
+	for _, tt := range locales {
+		t.Run(string(tt.locale), func(t *testing.T) {
+			l, err := NewLocalizer(tt.locale)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	t.Run("an undo that failed says the file is still broken", func(t *testing.T) {
-		t.Parallel()
-		undoErr := errors.New("read-only file system")
-		view := revertEdit("отменено: конфигурация не проходит проверку", invalid, func() error {
-			return undoErr
+			t.Run("an undo that worked reports the cancellation", func(t *testing.T) {
+				undone := false
+				view := revertEdit(l, l.Text(msgRevertInvalidConfig), invalid, func() error {
+					undone = true
+					return nil
+				})
+				if !undone {
+					t.Fatal("the change was not undone")
+				}
+				if !strings.Contains(view.text, tt.cancelledMarker) {
+					t.Errorf("the operator was not told the change was taken back:\n%s", view.text)
+				}
+				if !strings.Contains(view.text, invalid.Error()) {
+					t.Errorf("the reason is missing:\n%s", view.text)
+				}
+			})
+
+			t.Run("an undo that failed says the file is still broken", func(t *testing.T) {
+				undoErr := errors.New("read-only file system")
+				view := revertEdit(l, l.Text(msgRevertInvalidConfig), invalid, func() error {
+					return undoErr
+				})
+				if strings.Contains(view.text, tt.cancelledMarker) {
+					t.Errorf("a failed undo was reported as a cancellation:\n%s", view.text)
+				}
+				if !strings.Contains(view.text, tt.brokenMarker) {
+					t.Errorf("the operator was not told the configuration is still broken:\n%s", view.text)
+				}
+				if !strings.Contains(view.text, invalid.Error()) || !strings.Contains(view.text, undoErr.Error()) {
+					t.Errorf("one of the two reasons is missing:\n%s", view.text)
+				}
+			})
 		})
-		if strings.Contains(view.text, "отменено") {
-			t.Errorf("a failed undo was reported as a cancellation:\n%s", view.text)
-		}
-		if !strings.Contains(view.text, "сломанной") {
-			t.Errorf("the operator was not told the configuration is still broken:\n%s", view.text)
-		}
-		// Both halves matter: what the change broke, and why it could not be undone.
-		if !strings.Contains(view.text, invalid.Error()) || !strings.Contains(view.text, undoErr.Error()) {
-			t.Errorf("one of the two reasons is missing:\n%s", view.text)
-		}
-	})
+	}
 }
 
 // The hub carries the whole client prefix on its ingress interface, so the last

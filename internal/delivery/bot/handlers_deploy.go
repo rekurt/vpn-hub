@@ -31,14 +31,14 @@ func (b *Bot) compileNext(ctx context.Context) (domain.DesiredState, []string, e
 func (b *Bot) buildDeployPreview(ctx context.Context) screen {
 	next, revoked, err := b.compileNext(ctx)
 	if err != nil {
-		return renderFailure("деплой невозможен", err)
+		return renderFailure(b.L, "деплой невозможен", err)
 	}
 	view := deployView{Next: next, Revoked: revoked}
 	if current, err := b.Revisions.Load(ctx); err == nil {
 		view.Current = &current
-		view.Changes = diffStates(task2EnglishLocalizer, &current, next)
+		view.Changes = diffStates(b.L, &current, next)
 	}
-	return scr(renderDeployPreview(task2EnglishLocalizer, view))
+	return scr(renderDeployPreview(b.L, view))
 }
 
 func (b *Bot) routeDeploy(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {
@@ -49,7 +49,7 @@ func (b *Bot) routeDeploy(ctx context.Context, cb *tg.CallbackQuery, action stri
 		if len(args) < 1 {
 			return result{toast: "Нет ревизии"}
 		}
-		return b.show(ctx, cb, scr(renderConfirmWithinChoice(task2EnglishLocalizer, args[0])))
+		return b.show(ctx, cb, scr(renderConfirmWithinChoice(b.L, args[0])))
 	case "go":
 		if len(args) < 2 {
 			return result{toast: "Нет параметров"}
@@ -63,7 +63,7 @@ func (b *Bot) routeDeploy(ctx context.Context, cb *tg.CallbackQuery, action stri
 		if len(args) < 1 {
 			return result{toast: "Нет ревизии"}
 		}
-		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
+		return b.show(ctx, cb, scr(renderConfirm(b.L,
 			"Применить <b>без страховки</b>? Если ревизия отрежет доступ, чинить придётся руками через консоль провайдера.",
 			"dep:now!:"+args[0], "dep")))
 	case "now!":
@@ -74,7 +74,7 @@ func (b *Bot) routeDeploy(ctx context.Context, cb *tg.CallbackQuery, action stri
 	case "ok":
 		return b.confirmDeploy(ctx, cb)
 	case "rb":
-		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
+		return b.show(ctx, cb, scr(renderConfirm(b.L,
 			"Вернуть предыдущую ревизию? Агент применит её на ближайшем проходе.",
 			"dep:rb!", "dep")))
 	case "rb!":
@@ -94,7 +94,7 @@ func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRev
 
 	state, _, err := b.compileNext(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("деплой невозможен", err))
+		return b.show(ctx, cb, renderFailure(b.L, "деплой невозможен", err))
 	}
 	// The button was rendered against a specific revision; applying whatever the
 	// config says *now* would deploy something the admin never previewed.
@@ -110,9 +110,9 @@ func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRev
 	if err != nil {
 		var stage application.DeployError
 		if errors.As(err, &stage) && stage.Stage == application.DeployStageArm {
-			return b.show(ctx, cb, renderFailure("страховка не взвелась", stage.Err))
+			return b.show(ctx, cb, renderFailure(b.L, "страховка не взвелась", stage.Err))
 		}
-		return b.show(ctx, cb, renderFailure("ревизия не сохранилась", err))
+		return b.show(ctx, cb, renderFailure(b.L, "ревизия не сохранилась", err))
 	}
 	armed := applied.Armed
 
@@ -122,10 +122,10 @@ func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRev
 		// armed is worse than knowing there is none.
 		return b.show(ctx, cb, screen{
 			text:   "✅ Ревизия <code>" + esc(state.Revision) + "</code> сохранена. Отката не будет: это первый деплой, возвращаться не к чему. Агент применит её на ближайшем проходе.",
-			markup: keyboard(backRow(task2EnglishLocalizer)),
+			markup: keyboard(backRow(b.L)),
 		})
 	case confirmWithin > 0:
-		outcome := b.show(ctx, cb, scr(renderCountdown(task2EnglishLocalizer, state.Revision, confirmWithin)))
+		outcome := b.show(ctx, cb, scr(renderCountdown(b.L, state.Revision, confirmWithin)))
 		if cb != nil && cb.Message != nil {
 			b.startCountdown(ctx, cb.Message.Chat.ID, cb.Message.ID, state.Revision)
 		}
@@ -134,7 +134,7 @@ func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRev
 	default:
 		return b.show(ctx, cb, screen{
 			text:   "⚡ Ревизия <code>" + esc(state.Revision) + "</code> сохранена без страховки. Агент применит её на ближайшем проходе.",
-			markup: keyboard(backRow(task2EnglishLocalizer)),
+			markup: keyboard(backRow(b.L)),
 		})
 	}
 }
@@ -163,7 +163,7 @@ func (b *Bot) confirmDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
 	b.deploy.stop()
 	outcome := b.show(ctx, cb, screen{
 		text:   "✅ Ревизия <code>" + esc(pending.Revision) + "</code> подтверждена, страховка снята.",
-		markup: keyboard(backRow(task2EnglishLocalizer)),
+		markup: keyboard(backRow(b.L)),
 	})
 	outcome.toast = "Подтверждено"
 	return outcome
@@ -184,7 +184,7 @@ func (b *Bot) rollbackDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
 	b.deploy.stop()
 	outcome := b.show(ctx, cb, screen{
 		text:   "↩️ Восстановлена ревизия <code>" + esc(state.Revision) + "</code>; агент применит её на ближайшем проходе.",
-		markup: keyboard(backRow(task2EnglishLocalizer)),
+		markup: keyboard(backRow(b.L)),
 	})
 	outcome.toast = "Откатил"
 	return outcome
@@ -223,9 +223,9 @@ func (b *Bot) resumePendingDeploy(ctx context.Context) {
 	left := pending.Deadline.Sub(b.Now())
 	var view screen
 	if left > 0 {
-		view = scr(renderCountdown(task2EnglishLocalizer, pending.Revision, left))
+		view = scr(renderCountdown(b.L, pending.Revision, left))
 	} else {
-		view = scr(renderCountdownOverdue(task2EnglishLocalizer, pending.Revision))
+		view = scr(renderCountdownOverdue(b.L, pending.Revision))
 	}
 	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,
 		"↻ Возобновлён отсчёт после перезапуска бота.\n\n"+view.text, view.markup)
@@ -266,9 +266,9 @@ func (b *Bot) startCountdown(ctx context.Context, chatID, messageID int64, revis
 				left := pending.Deadline.Sub(b.Now())
 				var view screen
 				if left > 0 {
-					view = scr(renderCountdown(task2EnglishLocalizer, revision, left))
+					view = scr(renderCountdown(b.L, revision, left))
 				} else {
-					view = scr(renderCountdownOverdue(task2EnglishLocalizer, revision))
+					view = scr(renderCountdownOverdue(b.L, revision))
 				}
 				if err := b.API.EditMessageText(watchCtx, chatID, messageID, view.text, view.markup); err != nil {
 					b.logf("countdown edit: %v", err)
@@ -279,7 +279,7 @@ func (b *Bot) startCountdown(ctx context.Context, chatID, messageID int64, revis
 				if state, err := b.Revisions.Load(watchCtx); err == nil && state.Revision != revision {
 					text = "⛔ Ревизия <code>" + esc(revision) + "</code> не подтверждена: восстановлена <code>" + esc(state.Revision) + "</code>."
 				}
-				if err := b.API.EditMessageText(watchCtx, chatID, messageID, text, keyboard(backRow(task2EnglishLocalizer))); err != nil {
+				if err := b.API.EditMessageText(watchCtx, chatID, messageID, text, keyboard(backRow(b.L))); err != nil {
 					b.logf("countdown edit: %v", err)
 				}
 				return

@@ -62,17 +62,7 @@ const (
 	msgPluralDeviceMany         MessageID = "plural/device/many"
 )
 
-// task2EnglishLocalizer is the temporary compilation seam until Bot owns the
-// configured localizer in Task 3.
-var task2EnglishLocalizer = func() Localizer {
-	l, err := NewLocalizer(LocaleEnglish)
-	if err != nil {
-		panic(err)
-	}
-	return l
-}()
-
-// task2LegacyRussianLocalizer keeps three legacy messages atomic until Tasks 3–5 localize their callers.
+// task2LegacyRussianLocalizer keeps the remaining legacy messages atomic until Tasks 4–5 localize their callers.
 var task2LegacyRussianLocalizer = func() Localizer {
 	l, err := NewLocalizer(LocaleRussian)
 	if err != nil {

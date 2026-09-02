@@ -25,9 +25,9 @@ var hubFieldTitles = map[string]string{
 func (b *Bot) buildHub(ctx context.Context) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return renderFailure("конфигурация не читается", err)
+		return renderFailure(b.L, "конфигурация не читается", err)
 	}
-	return scr(renderHub(task2EnglishLocalizer, cfg.Hub))
+	return scr(renderHub(b.L, cfg.Hub))
 }
 
 func (b *Bot) routeHub(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {
@@ -63,7 +63,7 @@ func (b *Bot) routeHub(ctx context.Context, cb *tg.CallbackQuery, action string,
 	case "rk":
 		return b.routeKeyRotation(ctx, cb, args)
 	case "dl":
-		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
+		return b.show(ctx, cb, scr(renderConfirm(b.L,
 			"Выгрузить YAML-конфигурацию в чат? Файлы содержат подписочные URL с токенами — это секреты. Файлы провайдеров и ключи не выгружаются.",
 			"hub:dl!", "hub")))
 	case "dl!":
@@ -150,7 +150,7 @@ func (b *Bot) handleHubEditInput(ctx context.Context, dialog *dialog, text strin
 
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		b.sendScreen(ctx, renderFailure("конфигурация не читается", err))
+		b.sendScreen(ctx, renderFailure(b.L, "конфигурация не читается", err))
 		return
 	}
 	previous := map[string]string{
@@ -160,11 +160,11 @@ func (b *Bot) handleHubEditInput(ctx context.Context, dialog *dialog, text strin
 	}[field]
 
 	if err := b.Editor.SetHubField(field, text); err != nil {
-		b.sendScreen(ctx, renderFailure("значение не записалось", err))
+		b.sendScreen(ctx, renderFailure(b.L, "значение не записалось", err))
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		b.sendScreen(ctx, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+		b.sendScreen(ctx, revertEdit(b.L, "отменено: конфигурация не проходит проверку", err, func() error {
 			return b.Editor.SetHubField(field, previous)
 		}))
 		return
@@ -206,7 +206,7 @@ func (b *Bot) handleAWGSetInput(ctx context.Context, _ *dialog, text string) {
 
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		b.sendScreen(ctx, renderFailure("конфигурация не читается", err))
+		b.sendScreen(ctx, renderFailure(b.L, "конфигурация не читается", err))
 		return
 	}
 	// The config decodes keys lower-cased; write the same shape it already holds.
@@ -214,11 +214,11 @@ func (b *Bot) handleAWGSetInput(ctx context.Context, _ *dialog, text string) {
 	previous, existed := cfg.Hub.AWGInterface[key]
 
 	if err := b.Editor.SetHubMapField("awg_interface", key, value); err != nil {
-		b.sendScreen(ctx, renderFailure("параметр не записался", err))
+		b.sendScreen(ctx, renderFailure(b.L, "параметр не записался", err))
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		b.sendScreen(ctx, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+		b.sendScreen(ctx, revertEdit(b.L, "отменено: конфигурация не проходит проверку", err, func() error {
 			if existed {
 				return b.Editor.SetHubMapField("awg_interface", key, previous)
 			}
@@ -249,7 +249,7 @@ func (b *Bot) removeAWGParameter(ctx context.Context, cb *tg.CallbackQuery, key 
 
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+		return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
 	}
 	previous, existed := cfg.Hub.AWGInterface[key]
 	if !existed {
@@ -260,7 +260,7 @@ func (b *Bot) removeAWGParameter(ctx context.Context, cb *tg.CallbackQuery, key 
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		return b.show(ctx, cb, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+		return b.show(ctx, cb, revertEdit(b.L, "отменено: конфигурация не проходит проверку", err, func() error {
 			return b.Editor.SetHubMapField("awg_interface", key, previous)
 		}))
 	}
@@ -407,7 +407,7 @@ func (b *Bot) rotateHubKey(ctx context.Context, chatID, messageID int64) {
 			"Остался деплой. Страховка тут не поможет: откат ревизии не вернёт старый ключ, поэтому деплойте сразу.",
 		markup: keyboard(
 			[]tg.InlineKeyboardButton{btn("🚀 К деплою", "dep")},
-			backRow(task2EnglishLocalizer),
+			backRow(b.L),
 		),
 	})
 	edit("🔑 Ротация выполнена, детали ниже.")
@@ -457,14 +457,14 @@ func probeValue(h domain.HealthCheck, kindKey string) string {
 func (b *Bot) buildProbes(ctx context.Context, tunnelID string) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return renderFailure("конфигурация не читается", err)
+		return renderFailure(b.L, "конфигурация не читается", err)
 	}
 	for _, tunnel := range cfg.Tunnels {
 		if tunnel.ID == tunnelID {
-			return scr(renderProbes(task2EnglishLocalizer, tunnelID, tunnel.Health))
+			return scr(renderProbes(b.L, tunnelID, tunnel.Health))
 		}
 	}
-	return renderFailure("туннель не найден", fmt.Errorf("нет туннеля %q", tunnelID))
+	return renderFailure(b.L, "туннель не найден", fmt.Errorf("нет туннеля %q", tunnelID))
 }
 
 func (b *Bot) startProbeDialog(ctx context.Context, cb *tg.CallbackQuery, tunnelID, kindKey string) result {
@@ -511,11 +511,11 @@ func (b *Bot) handleProbeSetInput(ctx context.Context, dialog *dialog, text stri
 	defer release()
 
 	if err := b.Editor.SetTunnelMapField(tunnelID, "health", field, text); err != nil {
-		b.sendScreen(ctx, renderFailure("проба не записалась", err))
+		b.sendScreen(ctx, renderFailure(b.L, "проба не записалась", err))
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		b.sendScreen(ctx, revertEdit("отменено: конфигурация не проходит проверку", err, func() error {
+		b.sendScreen(ctx, revertEdit(b.L, "отменено: конфигурация не проходит проверку", err, func() error {
 			return b.Editor.RemoveTunnelMapField(tunnelID, "health", field)
 		}))
 		return
@@ -551,7 +551,7 @@ func (b *Bot) removeProbe(ctx context.Context, cb *tg.CallbackQuery, tunnelID, k
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		return b.show(ctx, cb, revertEdit("отменено: удаление пробы сделало конфигурацию невалидной", err, func() error {
+		return b.show(ctx, cb, revertEdit(b.L, "отменено: удаление пробы сделало конфигурацию невалидной", err, func() error {
 			if previous == "" {
 				// Nothing to put back: the probe had no value to begin with.
 				return nil

@@ -1,11 +1,46 @@
 package bot
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
 	"unicode"
 )
+
+func TestLocaleProductionSourcesContainNoUnexpectedCyrillic(t *testing.T) {
+	t.Parallel()
+	allowedUntilLaterTasks := map[string]bool{
+		"handlers_client_acls.go": true,
+		"handlers_deploy.go":      true,
+		"handlers_hub.go":         true,
+		"handlers_subs.go":        true,
+		"handlers_view.go":        true,
+		"ops.go":                  true,
+		"notify.go":               true,
+	}
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == "locale_ru.go" || allowedUntilLaterTasks[name] {
+			continue
+		}
+		body, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range string(body) {
+			if unicode.Is(unicode.Cyrillic, value) {
+				t.Errorf("%s contains Cyrillic outside the Russian catalog", name)
+				break
+			}
+		}
+	}
+}
 
 func TestCatalogMessageIDsAreNotDNSNames(t *testing.T) {
 	t.Parallel()
