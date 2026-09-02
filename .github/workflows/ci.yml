@@ -48,78 +48,40 @@ jobs:
   # traffic. Uses plain WireGuard because AmneziaWG needs a DKMS build an ephemeral
   # runner cannot do; the obfuscation aside the protocol is identical, and none of the
   # hub machinery under test depends on it.
+  #
+  # Run inside the throwaway box rather than on the runner itself. The suite takes
+  # ownership of the host's networking and removes the default route along the way --
+  # deploy/testbox exists precisely to give it a host it may break, and a runner is
+  # not one: the agent reporting back to GitHub lives on it, so the run that dropped
+  # the route dropped the agent with it. That is why every one of these jobs died
+  # around the hour mark with no logs and without `-timeout 15m` ever firing -- the
+  # suite was still running, but nothing was left to carry its output home. The box
+  # installs the same packages and the same pinned sing-box the runner used to, so
+  # what is exercised does not change.
   integration:
     runs-on: ubuntu-latest
+    # The suite bounds itself with `go test -timeout 15m`; this bounds everything
+    # around it. A runner that stops answering is not failed until GitHub gives up on
+    # it an hour later, and that hour was being spent on every push.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
 
-      - name: Install network tooling
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq wireguard-tools nftables jq conntrack microsocks dnsmasq dnsutils openvpn openssl
-          # The packaged resolver would hold port 53; the hub runs its own as
-          # transient units, in the namespaces they belong in.
-          sudo systemctl disable --now dnsmasq || true
-
-      # The proxy path needs sing-box, which is not in the archive. Same release and
-      # checksum the hub installs, so CI exercises what the host runs.
-      - name: Install sing-box
-        run: |
-          version=1.11.15
-          archive="sing-box-${version}-linux-amd64.tar.gz"
-          curl -fsSLO "https://github.com/SagerNet/sing-box/releases/download/v${version}/${archive}"
-          echo "950af37eb2d7e55dddae34a18411cd617303fd99d2dc75bc76b6dd9fcd97d9c5  ${archive}" | sha256sum -c -
-          tar xzf "${archive}"
-          sudo install -m 0755 "sing-box-${version}-linux-amd64/sing-box" /usr/local/bin/sing-box
-
-      - name: Enable forwarding
-        run: |
-          sudo sysctl -w net.ipv4.ip_forward=1
-          # Loose reverse-path filtering, the same setting cloud-init gives a real
-          # hub. Policy routing sends a reply back through an interface the main
-          # table does not name, and strict filtering drops it -- so a runner
-          # without this fails the private-network scenarios for a reason the hub
-          # is not responsible for.
-          sudo sysctl -w net.ipv4.conf.all.rp_filter=2
-          sudo sysctl -w net.ipv4.conf.default.rp_filter=2
-
-      # Runners ship Docker, which sets the iptables filter FORWARD policy to DROP.
-      # Netfilter runs every chain registered on a hook, so that DROP kills forwarded
-      # packets regardless of what the hub's own table accepts. The hub assumes it
-      # owns forwarding on its host; this makes the runner match that assumption.
-      - name: Stand down the competing FORWARD policy
-        run: |
-          sudo iptables -P FORWARD ACCEPT || true
-          sudo ip6tables -P FORWARD ACCEPT || true
-
-      # -v so a scenario that skipped itself is visible. A skip reads as a pass in
-      # the summary, and a test skipped for a missing binary is a test that has never
-      # run at all.
+      # No tooling step: the box builds its own Go, packages and sing-box, sets
+      # forwarding and rp_filter and stands the FORWARD policy down inside itself,
+      # and fails the run itself when a scenario skipped for a missing package.
       - name: Integration tests
-        run: |
-          # pipefail, or tee's exit status hides a failing test behind a successful
-          # copy of its output.
-          set -o pipefail
-          sudo -E env "PATH=$PATH" go test -tags=integration -count=1 -timeout 15m -v \
-            ./internal/adapters/linux/ 2>&1 | tee /tmp/integration.log
+        run: deploy/testbox/run.sh
 
-      # A scenario that skips because a package is missing has never run, and a skip
-      # reads as a pass in the summary -- so the runner not having what the tests need
-      # is a build failure, not a quiet note. Skips for an unreachable network are
-      # left alone: those say something about the runner's connectivity, not about
-      # whether the hub works, and failing on them would only make CI flap.
-      - name: Fail if a scenario skipped for a missing package
-        run: |
-          if grep -q "is not installed" /tmp/integration.log; then
-            echo "the runner is missing something the tests need:"
-            grep "is not installed" /tmp/integration.log
-            exit 1
-          fi
-          grep -- "--- SKIP" /tmp/integration.log || echo "no scenario skipped itself"
+      # The runner outlives the suite now, so a failure can leave its full output
+      # behind -- which is the one thing the host-side runs never managed.
+      - name: Keep the log of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-log
+          path: /tmp/vpn-hub-testbox.log
+          if-no-files-found: ignore
 
   terraform:
     runs-on: ubuntu-latest
