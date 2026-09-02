@@ -196,6 +196,12 @@ func New(cfg Config, client *tg.Client, configPath, stateDir, configDir, runtime
 
 // init sets up the internal state New and the tests both need.
 func (b *Bot) init() {
+	locale, err := normalizeLocale(b.Cfg.Locale)
+	if err != nil {
+		panic(err)
+	}
+	b.Cfg.Locale = locale
+
 	if b.events == nil {
 		b.events = make(chan event, 128)
 	}

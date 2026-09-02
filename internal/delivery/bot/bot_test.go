@@ -228,6 +228,39 @@ tunnels:
 	return instance, api
 }
 
+func TestBotInitNormalizesLocale(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   Locale
+		want Locale
+	}{
+		{"empty defaults to English", "", LocaleEnglish},
+		{"Russian is preserved", LocaleRussian, LocaleRussian},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := &Bot{Cfg: Config{Locale: tt.in}}
+			instance.init()
+			if got := instance.Cfg.Locale; got != tt.want {
+				t.Fatalf("Locale = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBotInitRejectsUnsupportedLocale(t *testing.T) {
+	t.Parallel()
+	instance := &Bot{Cfg: Config{Locale: Locale("de")}}
+	defer func() {
+		if got := recover(); got == nil || got.(error).Error() != `locale "de" is not supported; use en or ru` {
+			t.Fatalf("init panic = %v", got)
+		}
+	}()
+	instance.init()
+}
+
 // testWriter surfaces the bot's own diagnostics -- including recovered panics --
 // as test log lines instead of swallowing them.
 type testWriter struct{ t *testing.T }

@@ -42,8 +42,10 @@ func newStrictLocalizer(locale Locale) (Localizer, error) {
 }
 
 func newLocalizer(locale Locale, strict bool) (Localizer, error) {
-	if locale == "" {
-		locale = LocaleEnglish
+	var err error
+	locale, err = normalizeLocale(locale)
+	if err != nil {
+		return Localizer{}, err
 	}
 
 	var catalog Catalog
@@ -52,11 +54,21 @@ func newLocalizer(locale Locale, strict bool) (Localizer, error) {
 		catalog = englishCatalog()
 	case LocaleRussian:
 		catalog = russianCatalog()
-	default:
-		return Localizer{}, unsupportedLocaleError(locale)
 	}
 
 	return Localizer{locale: locale, catalog: catalog, strict: strict}, nil
+}
+
+func normalizeLocale(locale Locale) (Locale, error) {
+	if locale == "" {
+		return LocaleEnglish, nil
+	}
+	switch locale {
+	case LocaleEnglish, LocaleRussian:
+		return locale, nil
+	default:
+		return "", unsupportedLocaleError(locale)
+	}
 }
 
 func unsupportedLocaleError(locale Locale) error {
