@@ -470,6 +470,8 @@ expect_fail_path unknown-doc-code-host fixture.mdx printf '%s\n' \
 	'```'
 expect_fail_path unknown-internal-prose-host fixture.mdx printf '%s\n' \
 	'Connect to payroll.corp.internal for access.'
+expect_pass_path root-relative-svg-asset fixture.astro printf '%s\n' \
+	'<link rel="icon" type="image/svg+xml" href="/vpn-hub/favicon.svg" />'
 expect_pass documentation-host printf '%s\n' 'endpoint: vpn.example.com:51820'
 expect_pass uppercase-documentation-host printf '%s\n' 'endpoint: VPN.EXAMPLE.COM:51820'
 expect_package_lock_pass npm-registry-lock printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://registry.npmjs.org/example/-/example-1.0.0.tgz"}}}'

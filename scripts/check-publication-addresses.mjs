@@ -163,6 +163,10 @@ try {
     if (!path || !/^[1-9][0-9]*$/['test'](number)) {
       throw new Error('invalid path or line number in git grep record');
     }
+    if (path['endsWith']('package-lock.json')) {
+      inputOffset = end + 1;
+      continue;
+    }
     records['push']({ path, number, content });
     inputOffset = end + 1;
   }
@@ -544,6 +548,15 @@ function isRegexLiteralCandidate(segment, record, absoluteStart, length) {
   return false;
 }
 
+function isExplicitNetworkMemberAssignment(value, record, absoluteStart) {
+  const root = value['split']('.')[0];
+  if (declaredRootsFor(record['path'])['has'](root)) return false;
+  const before = record['content']['slice'](0, absoluteStart);
+  const name = '(?:endpoint|hostname|url|dns_name|server|host|source|address|route)';
+  if (new RegExp(`(?:^|[;{]\\s*|(?:const|let|var)\\s+)${name}\\s*(?::=|=>|:|=)\\s*$`)['test'](before)) return true;
+  return new RegExp('(?:^|[;{]\\s*|(?:const|let|var)\\s+)' + name + '\\s*(?::=|=>|:|=)\\s*`[^`]*\\$\\{')['test'](before);
+}
+
 function closedCallContainsCandidate(line, absoluteStart, absoluteEnd) {
   const callPattern = /\b(?:filepath\.Join|path\.join|resolve|join|os\.(?:Open|ReadFile|WriteFile|Rename|Remove|Stat)|fs\.(?:readFileSync|writeFileSync|openSync|renameSync|rmSync|statSync|lstatSync)|ReadFile|WriteFile|readFileSync|writeFileSync|openSync|rename|remove|copyFile|install|stat|lstat|create|read|write|SendDocument)\s*\(/g;
   for (const match of line['matchAll'](callPattern)) {
@@ -618,6 +631,7 @@ function hasDirectFileEvidence(value, segment, record, context, absoluteStart) {
   const previous = absoluteStart > 0 ? record['content'][absoluteStart - 1] : '';
   const line = record['content'];
   const pathPrefix = line['slice'](Math['max'](0, absoluteStart - 200), absoluteStart);
+  if (/(?:^|[`"'(\s=:,+])\/(?!\/)[^\s`"'()<>]*$/.test(pathPrefix)) return true;
   if (/(?:^|[`"'(\s=:,+])(?:\/etc\/|\/var\/|\/tmp\/|\/run\/|\/usr\/|\/opt\/|\/home\/|\/root\/|\.\.\/|\.\/|\.github\/|assets\/|bin\/|cmd\/|configs\/|deploy\/|docs\/|internal\/|scripts\/|secrets\/|site\/|testdata\/|tests\/|tunnels\/)[^\s`"'()<>]*$/i.test(pathPrefix)) return true;
   if (/(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\$\([^)]+\)|\$\{path\.module\}|[A-Za-z_][A-Za-z0-9_]*(?:Dir|Root|Path))\s*[}"']*\s*\+?\s*["']?\/[^\s`"'()<>]*$/i.test(pathPrefix)) return true;
   if (record['path'] === 'go.sum' && previous === '/' && value === 'go.mod') return true;
@@ -719,7 +733,8 @@ for (let index = 0; index < records['length']; index += 1) {
       if (previous === '%' && /^[a-zA-Z]\./['test'](value)) continue;
       const networkContext = hasNetworkContext(context) || isRegexLiteralCandidate(segment, record, absoluteStart, value['length']);
       if (segment['kind'] === 'executable' && memberValuePattern.test(value) &&
-          !isRegexLiteralCandidate(segment, record, absoluteStart, value['length'])) continue;
+          !isRegexLiteralCandidate(segment, record, absoluteStart, value['length']) &&
+          !isExplicitNetworkMemberAssignment(value, record, absoluteStart)) continue;
       if (!networkContext && segment['kind'] === 'executable' &&
           (memberValuePattern.test(value) || value['split']('-')['some']((part) => memberValuePattern.test(part)))) {
         continue;

@@ -32,3 +32,5 @@ intranet.corp.internal
 service.corp.internal
 tcp.corp.internal
 schema.org
+# SVG XML namespace used by the public favicon; metadata only, never a runtime endpoint.
+www.w3.org
