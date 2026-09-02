@@ -4,6 +4,19 @@ All notable user-facing changes are recorded here. The project follows conventio
 
 ## Unreleased
 
+## [0.1.2] - 2026-09-03
+
+### Changed
+
+- Landing page was redesigned with a premium product interface and interactive routing controls.
+- English, Russian, and Simplified Chinese repository entry points were restored and aligned with the public site.
+
+### Security
+
+- Publication checks distinguish local root-relative assets and package-lock files from external endpoints while preserving detection for explicit endpoint assignments.
+
+## [0.1.1] - 2026-09-02
+
 ### Added
 
 - Public documentation site with English as the default language, plus Russian and Simplified Chinese navigation.
