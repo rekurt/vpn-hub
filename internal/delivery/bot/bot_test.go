@@ -35,14 +35,15 @@ type sent struct {
 }
 
 type fakeAPI struct {
-	mu      sync.Mutex
-	sent    []sent
-	edits   []sent
-	screens []sent // sent + edits in delivery order
-	docs    []string
-	photos  []string
-	toasts  []string
-	nextID  int64
+	mu          sync.Mutex
+	sent        []sent
+	edits       []sent
+	screens     []sent // sent + edits in delivery order
+	docs        []string
+	photos      []string
+	toasts      []string
+	commandSets int
+	nextID      int64
 	// failDocumentsAfter, when > 0, makes SendDocument fail once that many have
 	// succeeded -- used to drive partial-failure flows.
 	failDocumentsAfter int
@@ -91,7 +92,12 @@ func (f *fakeAPI) SendPhoto(_ context.Context, _ int64, filename string, _ []byt
 	return tg.Message{}, nil
 }
 
-func (f *fakeAPI) SetMyCommands(context.Context, []tg.BotCommand) error { return nil }
+func (f *fakeAPI) SetMyCommands(context.Context, []tg.BotCommand) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commandSets++
+	return nil
+}
 
 func (f *fakeAPI) lastScreen(t *testing.T) sent {
 	t.Helper()
@@ -253,12 +259,27 @@ func TestBotInitNormalizesLocale(t *testing.T) {
 func TestBotInitRejectsUnsupportedLocale(t *testing.T) {
 	t.Parallel()
 	instance := &Bot{Cfg: Config{Locale: Locale("de")}}
-	defer func() {
-		if got := recover(); got == nil || got.(error).Error() != `locale "de" is not supported; use en or ru` {
-			t.Fatalf("init panic = %v", got)
-		}
-	}()
 	instance.init()
+	if got := instance.Cfg.Locale; got != Locale("de") {
+		t.Fatalf("Locale = %q, want unsupported locale preserved", got)
+	}
+	if err := instance.initErr; err == nil || err.Error() != `locale "de" is not supported; use en or ru` {
+		t.Fatalf("initErr = %v", err)
+	}
+}
+
+func TestBotRunRejectsUnsupportedLocaleBeforeAPICalls(t *testing.T) {
+	t.Parallel()
+	api := &fakeAPI{}
+	instance := &Bot{API: api, Cfg: Config{Locale: Locale("de")}}
+	if err := instance.Run(context.Background()); err == nil || err.Error() != `locale "de" is not supported; use en or ru` {
+		t.Fatalf("Run error = %v", err)
+	}
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if len(api.sent) != 0 || len(api.edits) != 0 || api.commandSets != 0 {
+		t.Fatalf("Run made API calls: sent=%d edits=%d commandSets=%d", len(api.sent), len(api.edits), api.commandSets)
+	}
 }
 
 // testWriter surfaces the bot's own diagnostics -- including recovered panics --
