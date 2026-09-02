@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"regexp"
 	"slices"
 	"testing"
 	"unicode"
@@ -43,8 +42,8 @@ func TestNewLocalizerRejectsUnsupportedLocale(t *testing.T) {
 
 func TestLocalizerTextFormatsArguments(t *testing.T) {
 	t.Parallel()
-	l := Localizer{catalog: Catalog{MessageID("test.value"): "Value: %d"}}
-	if got := l.Text(MessageID("test.value"), 7); got != "Value: 7" {
+	l := Localizer{catalog: Catalog{MessageID("test_value"): "Value: %d"}}
+	if got := l.Text(MessageID("test_value"), 7); got != "Value: 7" {
 		t.Fatalf("Text() = %q, want %q", got, "Value: 7")
 	}
 }
@@ -55,7 +54,7 @@ func TestLocalizerTextReturnsIDForMissingMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := l.Text(MessageID("missing.message")); got != "missing.message" {
+	if got := l.Text(MessageID("missing_message")); got != "missing_message" {
 		t.Fatalf("Text() = %q, want missing MessageID", got)
 	}
 }
@@ -71,7 +70,7 @@ func TestStrictLocalizerPanicsForMissingMessage(t *testing.T) {
 			t.Fatal("Text did not panic for a missing MessageID")
 		}
 	}()
-	l.Text(MessageID("missing.message"))
+	l.Text(MessageID("missing_message"))
 }
 
 func TestNewLocalizerDoesNotShareMutableCatalog(t *testing.T) {
@@ -106,8 +105,8 @@ func TestCatalogsHaveParity(t *testing.T) {
 		if englishText == "" || russianText == "" {
 			t.Errorf("%q has an empty translation", id)
 		}
-		if got, want := formatVerbs(englishText), formatVerbs(russianText); !slices.Equal(got, want) {
-			t.Errorf("%q placeholders = %v in English, %v in Russian", id, got, want)
+		if !catalogFormatsMatch(englishText, russianText) {
+			t.Errorf("%q fmt directives differ: English=%q Russian=%q", id, englishText, russianText)
 		}
 		for _, r := range englishText {
 			if unicode.Is(unicode.Cyrillic, r) {
@@ -123,22 +122,192 @@ func TestCatalogsHaveParity(t *testing.T) {
 	}
 }
 
-var formatVerbPattern = regexp.MustCompile(`%(?:\[[0-9]+\])?[+#0\- ]*(?:[0-9]+|\*)?(?:\.(?:[0-9]+|\*))?[vTtbcdoOxXUeEfgGsqxXp]`)
-
-func formatVerbs(text string) []string {
-	matches := formatVerbPattern.FindAllString(text, -1)
-	verbs := make([]string, 0, len(matches))
-	for _, match := range matches {
-		verbs = append(verbs, match[len(match)-1:])
-	}
-	return verbs
+type formatArgument struct {
+	role  byte
+	index int
 }
 
-func TestFormatVerbsPreservesPlaceholderOrder(t *testing.T) {
+type formatDimension struct {
+	present  bool
+	argument bool
+	literal  string
+}
+
+type formatDirective struct {
+	escaped   bool
+	verb      byte
+	flags     string
+	width     formatDimension
+	precision formatDimension
+	args      [3]formatArgument
+	argsLen   int
+}
+
+func catalogFormatsMatch(english, russian string) bool {
+	englishDirectives, ok := parseFormatDirectives(english)
+	if !ok {
+		return false
+	}
+	russianDirectives, ok := parseFormatDirectives(russian)
+	return ok && slices.Equal(englishDirectives, russianDirectives)
+}
+
+func parseFormatDirectives(text string) ([]formatDirective, bool) {
+	directives := make([]formatDirective, 0)
+	nextArgument := 1
+	for i := 0; i < len(text); i++ {
+		if text[i] != '%' {
+			continue
+		}
+		i++
+		if i == len(text) {
+			return nil, false
+		}
+		if text[i] == '%' {
+			directives = append(directives, formatDirective{escaped: true})
+			continue
+		}
+
+		directive := formatDirective{}
+		flagsStart := i
+		for i < len(text) && isFormatFlag(text[i]) {
+			i++
+		}
+		directive.flags = text[flagsStart:i]
+
+		var ok bool
+		directive.width, i, nextArgument, ok = parseFormatDimension(text, i, nextArgument, false, &directive)
+		if !ok {
+			return nil, false
+		}
+		if i < len(text) && text[i] == '.' {
+			i++
+			directive.precision, i, nextArgument, ok = parseFormatDimension(text, i, nextArgument, true, &directive)
+			if !ok {
+				return nil, false
+			}
+		}
+
+		if index, next, indexed := parseFormatIndex(text, i); indexed {
+			nextArgument = index + 1
+			directive.addArgument('v', index)
+			i = next
+		} else {
+			directive.addArgument('v', nextArgument)
+			nextArgument++
+		}
+		if i == len(text) || !isFormatVerb(text[i]) {
+			return nil, false
+		}
+		directive.verb = text[i]
+		directives = append(directives, directive)
+	}
+	return directives, true
+}
+
+func parseFormatDimension(text string, start, nextArgument int, precision bool, directive *formatDirective) (formatDimension, int, int, bool) {
+	dimension := formatDimension{present: precision}
+	if start == len(text) {
+		return dimension, start, nextArgument, precision
+	}
+	if text[start] == '*' {
+		dimension.present = true
+		dimension.argument = true
+		directive.addArgument(dimensionRole(precision), nextArgument)
+		return dimension, start + 1, nextArgument + 1, true
+	}
+	if index, next, indexed := parseFormatIndex(text, start); indexed && next < len(text) && text[next] == '*' {
+		dimension.present = true
+		dimension.argument = true
+		directive.addArgument(dimensionRole(precision), index)
+		return dimension, next + 1, index + 1, true
+	}
+	end := start
+	for end < len(text) && text[end] >= '0' && text[end] <= '9' {
+		end++
+	}
+	if end != start {
+		dimension.present = true
+		dimension.literal = text[start:end]
+	}
+	return dimension, end, nextArgument, true
+}
+
+func (d *formatDirective) addArgument(role byte, index int) {
+	d.args[d.argsLen] = formatArgument{role: role, index: index}
+	d.argsLen++
+}
+
+func dimensionRole(precision bool) byte {
+	if precision {
+		return 'p'
+	}
+	return 'w'
+}
+
+func parseFormatIndex(text string, start int) (int, int, bool) {
+	if start == len(text) || text[start] != '[' {
+		return 0, start, false
+	}
+	i := start + 1
+	if i == len(text) || text[i] < '1' || text[i] > '9' {
+		return 0, start, false
+	}
+	index := 0
+	for i < len(text) && text[i] >= '0' && text[i] <= '9' {
+		index = index*10 + int(text[i]-'0')
+		i++
+	}
+	if i == len(text) || text[i] != ']' {
+		return 0, start, false
+	}
+	return index, i + 1, true
+}
+
+func isFormatFlag(value byte) bool {
+	return value == '#' || value == '0' || value == '+' || value == '-' || value == ' '
+}
+
+func isFormatVerb(value byte) bool {
+	return value == 'v' || value == 'T' || value == 't' || value == 'b' || value == 'c' ||
+		value == 'd' || value == 'o' || value == 'O' || value == 'q' || value == 'x' ||
+		value == 'X' || value == 'U' || value == 'e' || value == 'E' || value == 'f' ||
+		value == 'F' || value == 'g' || value == 'G' || value == 's' || value == 'p'
+}
+
+func TestCatalogFormatsMatchFullDirectiveStructure(t *testing.T) {
 	t.Parallel()
-	got := formatVerbs("Device %s used %.1f%%")
-	want := []string{"s", "f"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("formatVerbs() = %v, want %v", got, want)
+	tests := []struct {
+		name    string
+		english string
+		russian string
+		want    bool
+	}{
+		{
+			name:    "equivalent explicit argument positions",
+			english: "%s %d%%",
+			russian: "%[1]s %[2]d%%",
+			want:    true,
+		},
+		{
+			name:    "equivalent indexed width and precision arguments",
+			english: "%*.*f",
+			russian: "%[1]*.[2]*[3]f",
+			want:    true,
+		},
+		{
+			name:    "different positional order and missing escaped percent",
+			english: "%[2]s %[1]d%%",
+			russian: "%[1]s %[2]d",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := catalogFormatsMatch(tt.english, tt.russian); got != tt.want {
+				t.Fatalf("catalogFormatsMatch(%q, %q) = %v, want %v", tt.english, tt.russian, got, tt.want)
+			}
+		})
 	}
 }
