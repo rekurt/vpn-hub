@@ -148,6 +148,7 @@ type Bot struct {
 	candidates candidateCache
 	events     chan event
 	wg         sync.WaitGroup
+	initErr    error
 }
 
 // New wires the production bot. Fields stay exported so tests can build a Bot by
@@ -198,9 +199,11 @@ func New(cfg Config, client *tg.Client, configPath, stateDir, configDir, runtime
 func (b *Bot) init() {
 	locale, err := normalizeLocale(b.Cfg.Locale)
 	if err != nil {
-		panic(err)
+		b.initErr = err
+		return
 	}
 	b.Cfg.Locale = locale
+	b.initErr = nil
 
 	if b.events == nil {
 		b.events = make(chan event, 128)
@@ -313,6 +316,9 @@ var botCommands = []tg.BotCommand{
 // its own -- watching, probing, scheduled refreshes -- starts here too.
 func (b *Bot) Run(ctx context.Context) error {
 	b.init()
+	if b.initErr != nil {
+		return b.initErr
+	}
 	b.loadAlertSettings(ctx)
 	if err := b.API.SetMyCommands(ctx, botCommands); err != nil {
 		b.logf("setMyCommands: %v", err)

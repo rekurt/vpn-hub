@@ -169,6 +169,13 @@ func parseFormatDirectives(text string) ([]formatDirective, bool) {
 		}
 
 		directive := formatDirective{}
+		if index, next, present, ok := parseOptionalFormatIndex(text, i); present {
+			if !ok {
+				return nil, false
+			}
+			nextArgument = index
+			i = next
+		}
 		flagsStart := i
 		for i < len(text) && isFormatFlag(text[i]) {
 			i++
@@ -176,50 +183,54 @@ func parseFormatDirectives(text string) ([]formatDirective, bool) {
 		directive.flags = text[flagsStart:i]
 
 		var ok bool
-		directive.width, i, nextArgument, ok = parseFormatDimension(text, i, nextArgument, false, &directive)
+		directive.width, i, nextArgument, ok = parseFormatWidth(text, i, nextArgument, &directive)
 		if !ok {
 			return nil, false
 		}
 		if i < len(text) && text[i] == '.' {
 			i++
-			directive.precision, i, nextArgument, ok = parseFormatDimension(text, i, nextArgument, true, &directive)
+			directive.precision, i, nextArgument, ok = parseFormatPrecision(text, i, nextArgument, &directive)
 			if !ok {
 				return nil, false
 			}
 		}
 
-		if index, next, indexed := parseFormatIndex(text, i); indexed {
-			nextArgument = index + 1
+		if index, next, present, ok := parseOptionalFormatIndex(text, i); present {
+			if !ok {
+				return nil, false
+			}
+			nextArgument = index
 			directive.addArgument('v', index)
 			i = next
 		} else {
 			directive.addArgument('v', nextArgument)
-			nextArgument++
 		}
 		if i == len(text) || !isFormatVerb(text[i]) {
 			return nil, false
 		}
 		directive.verb = text[i]
+		nextArgument++
 		directives = append(directives, directive)
 	}
 	return directives, true
 }
 
-func parseFormatDimension(text string, start, nextArgument int, precision bool, directive *formatDirective) (formatDimension, int, int, bool) {
-	dimension := formatDimension{present: precision}
+func parseFormatWidth(text string, start, nextArgument int, directive *formatDirective) (formatDimension, int, int, bool) {
+	dimension := formatDimension{}
 	if start == len(text) {
-		return dimension, start, nextArgument, precision
+		return dimension, start, nextArgument, true
 	}
 	if text[start] == '*' {
-		dimension.present = true
-		dimension.argument = true
-		directive.addArgument(dimensionRole(precision), nextArgument)
+		dimension = formatDimension{present: true, argument: true}
+		directive.addArgument('w', nextArgument)
 		return dimension, start + 1, nextArgument + 1, true
 	}
-	if index, next, indexed := parseFormatIndex(text, start); indexed && next < len(text) && text[next] == '*' {
-		dimension.present = true
-		dimension.argument = true
-		directive.addArgument(dimensionRole(precision), index)
+	if index, next, present, ok := parseOptionalFormatIndex(text, start); present {
+		if !ok || next == len(text) || text[next] != '*' {
+			return formatDimension{}, start, nextArgument, false
+		}
+		dimension = formatDimension{present: true, argument: true}
+		directive.addArgument('w', index)
 		return dimension, next + 1, index + 1, true
 	}
 	end := start
@@ -233,35 +244,53 @@ func parseFormatDimension(text string, start, nextArgument int, precision bool, 
 	return dimension, end, nextArgument, true
 }
 
+func parseFormatPrecision(text string, start, nextArgument int, directive *formatDirective) (formatDimension, int, int, bool) {
+	if start == len(text) {
+		return formatDimension{}, start, nextArgument, false
+	}
+	if text[start] == '*' {
+		directive.addArgument('p', nextArgument)
+		return formatDimension{present: true, argument: true}, start + 1, nextArgument + 1, true
+	}
+	if index, next, present, ok := parseOptionalFormatIndex(text, start); present {
+		if !ok || next == len(text) || text[next] != '*' {
+			return formatDimension{}, start, nextArgument, false
+		}
+		directive.addArgument('p', index)
+		return formatDimension{present: true, argument: true}, next + 1, index + 1, true
+	}
+	end := start
+	for end < len(text) && text[end] >= '0' && text[end] <= '9' {
+		end++
+	}
+	if end == start {
+		return formatDimension{}, start, nextArgument, false
+	}
+	return formatDimension{present: true, literal: text[start:end]}, end, nextArgument, true
+}
+
 func (d *formatDirective) addArgument(role byte, index int) {
 	d.args[d.argsLen] = formatArgument{role: role, index: index}
 	d.argsLen++
 }
 
-func dimensionRole(precision bool) byte {
-	if precision {
-		return 'p'
-	}
-	return 'w'
-}
-
-func parseFormatIndex(text string, start int) (int, int, bool) {
+func parseOptionalFormatIndex(text string, start int) (index, next int, present, ok bool) {
 	if start == len(text) || text[start] != '[' {
-		return 0, start, false
+		return 0, start, false, true
 	}
 	i := start + 1
 	if i == len(text) || text[i] < '1' || text[i] > '9' {
-		return 0, start, false
+		return 0, start, true, false
 	}
-	index := 0
+	index = 0
 	for i < len(text) && text[i] >= '0' && text[i] <= '9' {
 		index = index*10 + int(text[i]-'0')
 		i++
 	}
 	if i == len(text) || text[i] != ']' {
-		return 0, start, false
+		return 0, start, true, false
 	}
-	return index, i + 1, true
+	return index, i + 1, true, true
 }
 
 func isFormatFlag(value byte) bool {
@@ -307,6 +336,48 @@ func TestCatalogFormatsMatchFullDirectiveStructure(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := catalogFormatsMatch(tt.english, tt.russian); got != tt.want {
 				t.Fatalf("catalogFormatsMatch(%q, %q) = %v, want %v", tt.english, tt.russian, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseFormatDirectivesAcceptsValidGrammar(t *testing.T) {
+	t.Parallel()
+	for _, format := range []string{
+		"%s",
+		"%[2]s",
+		"%[2]+d",
+		"%[2]05d",
+		"%5.2f",
+		"%*.*f",
+		"%[2]*.[1]*[3]f",
+		"%%",
+	} {
+		t.Run(format, func(t *testing.T) {
+			if _, ok := parseFormatDirectives(format); !ok {
+				t.Fatalf("parseFormatDirectives(%q) rejected valid format", format)
+			}
+		})
+	}
+}
+
+func TestParseFormatDirectivesRejectsMalformedGrammar(t *testing.T) {
+	t.Parallel()
+	for _, format := range []string{
+		"%",
+		"%[",
+		"%[]s",
+		"%[0]s",
+		"%[2",
+		"%[a]s",
+		"%.",
+		"%.s",
+		"%*.[2]f",
+		"%[2]*.[1]f",
+	} {
+		t.Run(format, func(t *testing.T) {
+			if _, ok := parseFormatDirectives(format); ok {
+				t.Fatalf("parseFormatDirectives(%q) accepted malformed format", format)
 			}
 		})
 	}
