@@ -1,0 +1,49 @@
+---
+title: Requirements
+description: Check the host, workstation, network, and recovery access VPN Hub needs.
+---
+
+import VerifyBlock from '../../../../../components/VerifyBlock.astro';
+
+VPN Hub is a privileged Linux networking service. Use a dedicated host, keep an independent SSH path, and treat the host as part of your security boundary.
+
+## Prerequisites
+
+- Ubuntu 24.04 x86-64 is the provisioned and tested deployment target.
+- Root access through an SSH key, restricted at the cloud firewall to operator CIDRs.
+- A public IPv4 address and inbound 22/TCP from the management CIDR, 51820/UDP, optional 443/TCP and 443/UDP, and ICMP.
+- Go 1.26, Git, and SSH for a direct source install.
+- OpenTofu for the provided Terraform Make targets; `doctl` or `DIGITALOCEAN_TOKEN` for DigitalOcean authentication.
+- On the hub: `nftables`, `conntrack`, `iproute2`, `amneziawg-tools`, `wireguard-tools`, `dnsmasq`, `openvpn`, `microsocks`, `sing-box`, `sops`, and `systemd`.
+- Provider configurations stored on the hub. Provider credentials are untrusted secret input, not repository content.
+
+The implementation is IPv4-first and disables host IPv6. It is not a multi-tenant control plane or an anonymity guarantee.
+
+## Check the workstation
+
+```bash
+go version
+git --version
+ssh -V
+export SSH_PUBLIC_KEY_PATH="${SSH_PUBLIC_KEY_PATH:-$HOME/.ssh/id_ed25519.pub}"
+test -r "$SSH_PUBLIC_KEY_PATH" && printf 'SSH public key: %s\n' "$SSH_PUBLIC_KEY_PATH"
+```
+
+**Expected result:** each tool prints a version, `go version` reports Go 1.26 or newer, and the selected public key is readable. The default key path is only an example; set `ssh_public_key_path` in `terraform.tfvars` to the same chosen path.
+
+For the Terraform provisioning path, run the additional checks:
+
+```bash
+tofu version
+test -n "${DIGITALOCEAN_TOKEN:-}" || doctl account get >/dev/null
+```
+
+<VerifyBlock command={'tofu version >/dev/null && { test -n "${DIGITALOCEAN_TOKEN:-}" || doctl account get >/dev/null; } && echo ready'} expected="ready" />
+
+## Roll back
+
+Nothing has changed yet. If the requirements cannot be met, do not expose a partially prepared host; delete the unused cloud instance through its provider console.
+
+## Next
+
+Choose [a direct installation](../install/) or [OpenTofu/Terraform provisioning](../terraform/).

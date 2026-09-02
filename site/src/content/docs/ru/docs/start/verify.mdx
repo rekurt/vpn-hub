@@ -1,0 +1,95 @@
+---
+title: Verify a deployment
+description: Prove the desired revision, client address, DNS path, selected egress, and kill switch.
+---
+
+import VerifyBlock from '../../../../../components/VerifyBlock.astro';
+
+Do not confirm a remote change merely because the client connected. Verify the control state and the data path from the affected device.
+
+## Prerequisites
+
+- The device is connected using its newly issued profile.
+- An independent SSH session remains open.
+- The deploy used `--confirm-within` when a previous revision existed.
+
+## Check control state on the hub
+
+```bash
+sudo hubctl status
+sudo vpn-hub-agent status
+sudo systemctl is-active vpn-hub-agent
+sudo journalctl -u vpn-hub-agent --since '-5 minutes' --no-pager
+sudo hubctl --config /etc/vpn-hub/hub.yaml routes
+```
+
+**Expected result:** `hubctl` and the agent name the same desired revision, the unit is active, the journal has no repeating reconcile error, and routes name the intended egresses.
+
+## Check from the device
+
+```bash
+curl --fail --silent --show-error https://example.com/ >/dev/null
+nslookup example.com 10.80.0.1
+```
+
+For a provider egress, compare the observed public address with the provider's documented exit by using an operator-chosen diagnostic endpoint. VPN Hub does not bundle a third-party “what is my IP” dependency.
+
+## Prove fail-closed behavior
+
+Use a dedicated non-critical device whose egress is a dedicated WireGuard tunnel named `ks-wg`. Do not disable that tunnel in YAML: validation rejects a disabled egress while a device references it. First prove the device has connectivity:
+
+```bash
+curl --max-time 10 --fail --silent --show-error https://example.com/ >/dev/null
+```
+
+In an independent root SSH session, run a bounded transient unit. It stops the reconciler, lowers only that tunnel's `wg0`, waits 45 seconds, then raises the interface and restarts the agent even on interruption. The 90-second runtime limit provides a second recovery bound.
+
+```bash
+systemd-run --unit=vpn-hub-kill-switch-test --collect --wait \
+  --property=RuntimeMaxSec=90 \
+  /bin/bash -ceu '
+restore() {
+  ip -n vpn-hub-ks-wg link set wg0 up || true
+  systemctl start vpn-hub-agent
+}
+trap restore EXIT INT TERM
+systemctl stop vpn-hub-agent
+ip -n vpn-hub-ks-wg link set wg0 down
+sleep 45
+'
+```
+
+During that 45-second window, run this on the dedicated device:
+
+```bash
+if curl --max-time 10 --fail --silent --show-error https://example.com/ >/dev/null; then
+  echo 'unexpected connectivity: investigate before continuing' >&2
+  exit 1
+else
+  echo 'blocked as expected'
+fi
+```
+
+**Expected result:** the request fails and prints `blocked as expected`; it must not leave through `direct`. After the transient unit exits, verify recovery on the hub:
+
+```bash
+systemctl is-active vpn-hub-agent
+ip -n vpn-hub-ks-wg link show wg0
+hubctl --config /etc/vpn-hub/hub.yaml test tunnel ks-wg
+```
+
+The agent should be `active`, `wg0` should be `UP`, and the configured tunnel probe should succeed. An unconfigured probe returns `unknown` as an error; it is not reported healthy. If recovery fails, run `ip -n vpn-hub-ks-wg link set wg0 up` and `systemctl start vpn-hub-agent` from the independent SSH session, then inspect the journal before continuing.
+
+<VerifyBlock command="sudo nft list table inet vpn_hub >/dev/null && sudo ip link show awg0 >/dev/null" expected="both commands exit zero" />
+
+## Roll back or confirm
+
+```bash
+sudo hubctl confirm
+```
+
+If any check fails, do not confirm. Run `sudo hubctl rollback` over SSH or let the confirmation deadline restore the previous revision.
+
+## Next
+
+Read [Architecture](../../concepts/architecture/) and the [Configuration overview](../../configuration/overview/).

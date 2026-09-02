@@ -1,0 +1,29 @@
+---
+type UseCase = {
+  title: string;
+  summary: string;
+  commandHint: string;
+  category: string;
+};
+
+type Props = {
+  items: UseCase[];
+};
+
+const { items } = Astro.props as Props;
+---
+
+<section class="landing-section" id="use-cases">
+  <h2>Use cases</h2>
+  <div class="usecase-grid">
+    {items.map((item) => (
+      <article class="usecase-grid__card">
+        <h3>{item.title}</h3>
+        <p class="usecase-grid__category">{item.category}</p>
+        <p>{item.summary}</p>
+        <p><code>{item.commandHint}</code></p>
+      </article>
+    ))}
+  </div>
+</section>
+

@@ -1,0 +1,31 @@
+---
+import type { LandingCopy } from '../data/landing';
+import '../styles/landing.css';
+import SiteHeader from '../components/SiteHeader.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+
+type Props = {
+  copy: LandingCopy;
+};
+
+const { copy } = Astro.props;
+---
+
+<!doctype html>
+<html lang={copy.htmlLang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={copy.description} />
+    <title>{copy.title}</title>
+  </head>
+  <body>
+    <a href="#main-content" class="skip-link">{copy.skipToContent}</a>
+    <SiteHeader copy={copy} />
+    <main id="main-content">
+      <slot />
+    </main>
+    <SiteFooter copy={copy} />
+  </body>
+</html>
+

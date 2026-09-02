@@ -1,0 +1,21 @@
+---
+title: Subscription canary rollout
+description: Promote a new upstream safely through a temporary candidate.
+---
+
+## Scenario
+
+Upstream provider endpoint changed, and traffic must keep passing during evaluation.
+
+## Sequence
+
+1. Update candidate list and keep current revision active.
+2. Run `hubctl subscription refresh` to test candidates in canary namespace.
+3. Compare health status and apply only if candidates stay healthy.
+
+```sh
+hubctl subscription refresh corp-egress --timeout 20m
+hubctl status --state-dir /var/lib/vpn-hub
+hubctl deploy --confirm-within 5m
+```
+

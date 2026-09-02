@@ -1,0 +1,58 @@
+---
+import enScreens from '../data/bot-screens.en.json';
+import ruScreens from '../data/bot-screens.ru.json';
+import zhScreens from '../data/bot-screens.zh-cn.json';
+import type { LandingCopy } from '../data/landing';
+
+type Props = {
+  copy: LandingCopy;
+};
+
+type BotScreen = {
+  id: string;
+  locale: string;
+  title: string;
+  text: string;
+  rows: Array<Array<{ label: string; callback: string }>>;
+};
+
+const { copy } = Astro.props as Props;
+const screens = (copy.locale === 'ru' ? ruScreens : copy.locale === 'zh-cn' ? zhScreens : enScreens) as BotScreen[];
+const ordered = ['deploy-preview', 'devices', 'tunnels', 'subscriptions', 'status', 'settings'];
+const featured = ordered
+  .map((id) => screens.find((item) => item.id === id))
+  .filter(Boolean) as BotScreen[];
+const defaultRows = [
+  ['Review pending changes', 'Confirm deployment'],
+  ['Inspect devices', 'Inspect tunnels'],
+  ['Open status', 'Open settings'],
+];
+---
+
+<section class="landing-section" id="bot-management">
+  <h2>{copy.bot.heading}</h2>
+  <p>{copy.bot.intro}</p>
+
+  <div class="bot-preview">
+    <div id="bot-preview__screen" class="bot-preview__screen" role="group" aria-label={copy.bot.heading}>
+      <div class="bot-preview__header">Telegram bot</div>
+      {featured.map((screen) => (
+        <article class="bot-preview__message">
+          <h3>{screen.title}</h3>
+          <p set:html={screen.text} />
+          <div class="bot-preview__buttons">
+            {screen.rows.flatMap((row) => row).map((button) => <span>{button.label}</span>)}
+          </div>
+        </article>
+      ))}
+    </div>
+    <aside id="bot-preview__panel" class="bot-preview__panel">
+      <h3>Sample operator flow</h3>
+      <ol>
+        {copy.bot.steps.map((step) => <li>{step}</li>)}
+      </ol>
+    </aside>
+  </div>
+  <a class="secondary-cta" href="/vpn-hub/docs/telegram-bot/">View bot operation docs</a>
+  <div class="screen-reader-only">Fallback bot flow: {defaultRows.flat().join(', ')}</div>
+</section>

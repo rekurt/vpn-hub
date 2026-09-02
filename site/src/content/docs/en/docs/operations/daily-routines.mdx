@@ -1,0 +1,25 @@
+---
+title: Daily operations routine
+description: Daily checks that keep routing behavior explicit and auditable.
+---
+
+## Checklist
+
+- `hubctl status --state-dir /var/lib/vpn-hub`
+- confirm `vpn-hub-agent` is `active (running)`
+- inspect revision and pending timer in deploy preview
+- run `hubctl verify` on staged config changes
+- review `bot` logs for alert categories
+
+## Example
+
+```sh
+HUB_STATE=/var/lib/vpn-hub
+hubctl status --state-dir "$HUB_STATE"
+hubctl verify --config /etc/vpn-hub/hub.yaml
+```
+
+## Expected result
+
+All checks return a clean health summary and no hidden fallback paths.
+

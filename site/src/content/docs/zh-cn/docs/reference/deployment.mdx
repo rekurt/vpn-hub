@@ -1,0 +1,20 @@
+---
+title: Deployment reference
+description: Canonical paths, config anchors, and expected state locations.
+---
+
+## Files
+
+- `/etc/vpn-hub/hub.yaml`
+- `/etc/vpn-hub/devices.yaml`
+- `/etc/vpn-hub/tunnels/`
+- `/var/lib/vpn-hub/`
+
+## Commands
+
+- `hubctl deploy`
+- `hubctl verify`
+- `hubctl status`
+
+All production installs should keep binaries in `/usr/local/bin` and systemd units under `/etc/systemd/system`.
+

@@ -1,0 +1,12 @@
+---
+title: Private networks
+description: Combine destination routes, split DNS, access lists, and a separate Internet egress.
+---
+
+A tunnel with role `private-network` is reached by destination, not selected as a device's default Internet egress. Its static `routes` and DNS-learned addresses share a dedicated nftables set and packet mark. This lets one device reach `10.20.0.0/16` through an office tunnel while ordinary traffic uses another provider.
+
+`allowed_devices` narrows who may reach the network. An empty list allows all enrolled devices. Each referenced device must exist. Route overlaps and DNS-zone overlaps across tunnels are rejected because ownership must be unambiguous.
+
+For OpenVPN, a private-network provider file must not request `redirect-gateway`; otherwise it would try to capture the namespace default path. Provider files may contain only inline credential material—external file and command references are rejected.
+
+Next: [Configuration for private networks](../../configuration/private-networks/).

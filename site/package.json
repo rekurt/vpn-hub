@@ -11,6 +11,7 @@
     "preview": "astro preview",
     "check": "astro check",
     "verify:content": "node scripts/verify-content.mjs",
+    "verify:landing": "node scripts/verify-landing.mjs",
     "verify:content:en": "node scripts/verify-content.mjs --source-locale en",
     "verify:config": "node scripts/extract-config-schema.mjs --check",
     "test:verify-content": "node scripts/test-verify-content.mjs",

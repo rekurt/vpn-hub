@@ -1,0 +1,29 @@
+---
+import type { LandingCopy } from '../data/landing';
+
+type Props = {
+  copy: LandingCopy;
+};
+
+const { copy } = Astro.props;
+---
+
+<header class="landing-header">
+  <div class="landing-header__content">
+    <a class="landing-brand" href="/vpn-hub/">VPN Hub</a>
+    <nav aria-label={copy.nav.home} class="landing-nav">
+      <ul class="landing-nav__list">
+        <li><a href="/vpn-hub/docs/" class="landing-nav__link">{copy.nav.docs}</a></li>
+        <li><a href="/vpn-hub/docs/telegram-bot/" class="landing-nav__link">{copy.nav.bot}</a></li>
+        <li><a href="/vpn-hub/docs/cookbook/" class="landing-nav__link">{copy.nav.cookbook}</a></li>
+        <li><a href="/vpn-hub/docs/use-cases/" class="landing-nav__link">{copy.nav.useCases}</a></li>
+      </ul>
+    </nav>
+    <div class="landing-locale">
+      <a href="/vpn-hub/">EN</a>
+      <a href="/vpn-hub/ru/">RU</a>
+      <a href="/vpn-hub/zh-cn/">ZH</a>
+    </div>
+  </div>
+</header>
+

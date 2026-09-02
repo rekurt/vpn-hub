@@ -1,0 +1,12 @@
+---
+title: Limitations and trust boundaries
+description: Operational limits and explicit trust boundaries for production use.
+---
+
+- DNS-over-HTTPS cannot be fully blocked in opaque client paths.
+- Auto-migration on provider failure is intentionally absent.
+- Single hub model only; no built-in multi-tenant HA.
+- Host OS must remain dedicated to keep forwarding path predictable.
+
+Any production extension should be validated in staging first.
+

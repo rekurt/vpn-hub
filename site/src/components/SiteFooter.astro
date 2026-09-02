@@ -1,0 +1,22 @@
+---
+import type { LandingCopy } from '../data/landing';
+
+type Props = {
+  copy: LandingCopy;
+};
+
+const { copy } = Astro.props;
+---
+
+<footer id="landing-footer" class="landing-footer">
+  <p>
+    <span>{copy.nav.home}</span>
+    ·
+    <a href="https://github.com/rekurt/vpn-hub" target="_blank" rel="noreferrer">GitHub</a>
+    ·
+    <a href="/vpn-hub/docs/operations/">{copy.nav.docs}</a>
+  </p>
+  <p>
+    © 2026 VPN Hub.
+  </p>
+</footer>

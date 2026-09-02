@@ -1,0 +1,14 @@
+---
+title: Kill switch and no silent fallback
+description: Understand the packet-filter invariant that stops failed provider traffic instead of leaking it.
+---
+
+The nftables forward chain defaults to `drop`. A device is accepted only when its source belongs to an explicit egress group and the packet leaves through that group's interface. Selecting `direct` creates a distinct explicit group; it is never an automatic fallback.
+
+If a provider namespace is absent, half-built, or its tunnel is down, the marked packet has no permitted alternative. It stops. Validation also refuses to disable an egress still assigned to a device.
+
+Private destinations are matched before default egress. DNS-learned addresses enter a per-private-network nftables set, so the result follows the same private path as an explicit CIDR. Client-to-client traffic is dropped unless a narrow ACL accepts it.
+
+Limits matter: VPN Hub cannot distinguish DNS-over-HTTPS from ordinary HTTPS, and root can replace the host rules. Verify from a client and preserve an independent SSH path rather than treating a configuration claim as proof.
+
+Next: [DNS](../dns/) and [Client isolation](../client-isolation/).

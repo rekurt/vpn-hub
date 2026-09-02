@@ -1,0 +1,12 @@
+---
+title: Health probes and status
+description: Interpret TCP, HTTPS, and DNS probes without mistaking unknown for healthy.
+---
+
+A tunnel can define any combination of `tcp_address`, `https_url`, and `dns_name`. The checker runs configured probes inside the tunnel's namespace. A tunnel with no probes is `unknown`, not healthy, and `hubctl test tunnel` exits with an error.
+
+TCP targets must be `host:port`; HTTPS targets must use `https` and contain no whitespace; DNS names must be safe IP or hostname shapes. A successful probe proves that operation at that moment. It does not prove provider privacy, throughput, every destination, or the client-to-hub ingress.
+
+OpenVPN status also reads its protected management socket. The `status` commands report desired revision state; they do not replace a client traffic and DNS test.
+
+Next: [Health configuration](../../configuration/health/).

@@ -1,0 +1,30 @@
+---
+title: Architecture and trust boundaries
+description: Understand configuration, revisions, reconciliation, traffic policy, and external provider boundaries.
+---
+
+import ArchitectureDiagram from '../../../../../components/ArchitectureDiagram.astro';
+
+<ArchitectureDiagram />
+
+## Control plane
+
+The operator owns YAML configuration and provider files. `hubctl` validates that input and compiles an immutable desired-state revision. The revision contains public device material and redacted tunnel sources; credential-bearing subscription URLs are not persisted verbatim. It is intent, not proof of the live host.
+
+The optional Telegram bot is another operator seat. It enforces one configured administrator ID, edits the same configuration, invokes the same deployment pipeline, and can retain device profile private keys for re-delivery. It does not replace SSH recovery.
+
+## Privileged reconciliation
+
+`vpn-hub-agent` runs as root with bounded systemd capabilities because it creates network namespaces, interfaces, routes, nftables rules, DNS forwarders, and transient services. It reads the persisted revision, observes selected host state, and reconciles on a timer. `hubctl deploy` itself does not alter networking.
+
+## Data plane
+
+Devices enter through one AmneziaWG interface. nftables marks traffic by destination first and then by source device. Policy routing sends the mark into a dedicated tunnel namespace. WireGuard, AmneziaWG, Xray/VLESS, and OpenVPN providers run independently; a failed namespace does not authorize direct egress.
+
+Private zones have per-network forwarders. Public DNS is source-aware: a device's query is redirected to the resolver paired with that device's selected egress.
+
+## External boundaries
+
+Cloud firewalls, the Linux host, Telegram, DNS upstreams, VPN providers, subscription servers, and imitated REALITY server names are external trust boundaries. VPN Hub validates shapes and isolates providers, but it cannot make an untrusted provider honest or replace host patching, SSH policy, and cloud access control.
+
+Next: [Desired state](../desired-state/) and [Secrets](../secrets/).

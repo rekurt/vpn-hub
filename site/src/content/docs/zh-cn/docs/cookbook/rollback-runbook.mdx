@@ -1,0 +1,19 @@
+---
+title: Rollback runbook
+description: Deterministic recovery path when a deploy or drift event is discovered.
+---
+
+## Steps
+
+1. Stop further writes.
+2. Re-run status and capture failing checks.
+3. Re-apply last-known-good state through confirm timer.
+4. Audit logs and archive artifacts.
+
+## Minimal recovery
+
+```sh
+hubctl status --state-dir /var/lib/vpn-hub
+hubctl deploy --confirm-within 5m
+```
+

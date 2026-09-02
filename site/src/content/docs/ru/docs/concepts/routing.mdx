@@ -1,0 +1,18 @@
+---
+title: Routing and packet marks
+description: See how destinations, device defaults, namespaces, and SOCKS endpoints select a path.
+---
+
+Every enabled tunnel gets an isolated network namespace and a deterministic `/30` veth link from `10.90.0.0/16`. Policy routing tables begin at 100. Provider routes and processes stay inside their namespace instead of competing in the host's main table.
+
+The order is intentional:
+
+1. A destination in a configured private route or a DNS-learned private set receives that private tunnel's mark.
+2. Client-to-client traffic remains in the ingress subnet and is evaluated by explicit ACLs.
+3. All remaining traffic receives the source device's configured egress mark.
+
+`direct` is a reserved egress name for the hub uplink. It must be selected explicitly and cannot be used as a tunnel ID. A SOCKS endpoint provides an additional application-only path, but it is reachable only by devices allowed to use that tunnel.
+
+Overlapping static routes and overlapping DNS zones are rejected because the compiler cannot choose two owners. Private routes take precedence over the device's default Internet egress.
+
+Next: [Kill switch](../kill-switch/) and [Private networks](../private-networks/).

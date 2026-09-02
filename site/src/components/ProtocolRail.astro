@@ -1,0 +1,27 @@
+---
+type Protocol = {
+  name: string;
+  role: string;
+  notes: string;
+};
+
+type Props = {
+  protocols: Protocol[];
+};
+
+const { protocols } = Astro.props as Props;
+---
+
+<section class="landing-section" id="protocols">
+  <h2>Protocols</h2>
+  <div class="protocol-rail">
+    {protocols.map((protocol) => (
+      <article class="protocol-rail__card">
+        <h3>{protocol.name}</h3>
+        <p class="protocol-rail__role">{protocol.role}</p>
+        <p>{protocol.notes}</p>
+      </article>
+    ))}
+  </div>
+</section>
+

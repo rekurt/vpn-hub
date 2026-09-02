@@ -1,0 +1,80 @@
+---
+title: WireGuard upstreams
+description: Import the supported subset of a provider WireGuard configuration without putting credentials in hub YAML.
+coverage: []
+---
+
+Use `type: wireguard`, `source.kind: config`, and a file below `/etc/vpn-hub`. The parser reads one `[Interface]` and exactly one `[Peer]`.
+
+Required provider fields are `Interface.PrivateKey`, `Interface.Address`, `Peer.PublicKey`, and `Peer.Endpoint`. Supported optional fields are `Interface.DNS`, `Interface.MTU`, `Peer.PresharedKey`, `Peer.AllowedIPs`, and `Peer.PersistentKeepalive`. `Interface.DNS` is parsed as provider metadata but does not change VPN Hub's public DNS plan, which currently uses `1.1.1.1` and `9.9.9.9` through the selected egress. Unknown provider keys are ignored because provider files commonly carry tool-specific additions.
+
+```ini
+[Interface]
+PrivateKey = SYNTHETIC-PRIVATE-KEY-REPLACE-BEFORE-USE
+Address = 192.0.2.2/32
+DNS = 192.0.2.53
+MTU = 1380
+
+[Peer]
+PublicKey = W/kKaUP1n48AgIzxs8po0HKV+UEk1vMcTuBW648atSE=
+Endpoint = edge.example.com:51820
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+```
+
+The private and preshared keys are secrets. On a fresh hub, open a root SSH session, create the age identity used by the systemd units, and record its public recipient:
+
+```bash
+ssh root@"$HUB_HOST"
+```
+
+At the remote root prompt, run:
+
+```bash
+apt-get update
+apt-get install -y age
+install -d -m 0700 /etc/vpn-hub/age /etc/vpn-hub/secrets
+test ! -e /etc/vpn-hub/age/keys.txt
+age-keygen -o /etc/vpn-hub/age/keys.txt
+chmod 0600 /etc/vpn-hub/age/keys.txt
+age-keygen -y /etc/vpn-hub/age/keys.txt > /etc/vpn-hub/age/recipient.txt
+chmod 0644 /etc/vpn-hub/age/recipient.txt
+```
+
+Still in that root session, create plaintext only on tmpfs, encrypt it explicitly as binary data, install the envelope at mode `0600`, and prove the exact runtime decrypt path:
+
+```bash
+umask 077
+plain=$(mktemp /run/edge-wg.XXXXXX)
+encrypted=$(mktemp /run/edge-wg-sops.XXXXXX)
+trap 'rm -f -- "$plain" "$encrypted"' EXIT
+${EDITOR:-vi} "$plain"
+recipient=$(cat /etc/vpn-hub/age/recipient.txt)
+sops encrypt --age "$recipient" --input-type binary --output-type binary "$plain" \
+  > "$encrypted"
+install -o root -g root -m 0600 "$encrypted" \
+  /etc/vpn-hub/secrets/edge-wg.conf.sops.binary
+rm -f -- "$plain" "$encrypted"
+trap - EXIT
+export SOPS_AGE_KEY_FILE=/etc/vpn-hub/age/keys.txt
+sops --decrypt /etc/vpn-hub/secrets/edge-wg.conf.sops.binary >/dev/null
+```
+
+Point `source.value` at `secrets/edge-wg.conf.sops.binary`. Then validate hub fields and exercise the same decrypt and provider parser used by reconcile without changing the live host:
+
+```bash
+hubctl --config /etc/vpn-hub/hub.yaml validate
+verify_state=$(mktemp -d /run/vpn-hub-verify.XXXXXX)
+trap 'rm -rf -- "$verify_state"' EXIT
+hubctl --config /etc/vpn-hub/hub.yaml deploy --state-dir "$verify_state"
+vpn-hub-agent reconcile --dry-run --state-dir "$verify_state" \
+  --config-dir /etc/vpn-hub --server-key /etc/vpn-hub/server.key
+rm -rf -- "$verify_state"
+trap - EXIT
+```
+
+**Expected result:** decryption exits zero and the dry run prints planned operations rather than a SOPS or WireGuard parser error. Back up the age identity separately from encrypted provider files; losing it makes those files unreadable. Rotate a disclosed identity by encrypting every provider file to a new recipient before removing the old key.
+
+The documentation-only endpoint and private key above cannot establish a tunnel.
+
+Next: [Tunnel fields](../tunnels/) and [Health probes](../health/).

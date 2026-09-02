@@ -1,0 +1,18 @@
+---
+type Props = {
+  heading: string;
+  text: string;
+  checks: string[];
+};
+
+const { heading, text, checks } = Astro.props as Props;
+---
+
+<section class="landing-section" id="safety">
+  <h2>{heading}</h2>
+  <p>{text}</p>
+  <ul class="safety-list">
+    {checks.map((check) => <li>{check}</li>)}
+  </ul>
+</section>
+

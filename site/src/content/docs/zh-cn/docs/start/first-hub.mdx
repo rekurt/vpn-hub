@@ -1,0 +1,73 @@
+---
+title: Create the first hub
+description: Generate the hub key, write a minimal configuration, validate it, and perform a dry run.
+---
+
+import VerifyBlock from '../../../../../components/VerifyBlock.astro';
+
+Start with direct egress and no devices. Add provider files only after the ingress and recovery path are known to work.
+
+## Prerequisites
+
+- VPN Hub binaries installed on the host.
+- `/etc/vpn-hub` owned by root with mode `0700`.
+- The public endpoint `vpn.example.com:51820` replaced with the operator's host.
+
+## Generate the hub key
+
+```bash
+sudo install -d -m 0700 /etc/vpn-hub /var/lib/vpn-hub
+sudo hubctl keygen --output /etc/vpn-hub/server.key
+```
+
+Copy the printed `server_public_key` into this configuration; the shown value is synthetic:
+
+```yaml
+hub:
+  endpoint: "vpn.example.com:51820"
+  server_public_key: "W/kKaUP1n48AgIzxs8po0HKV+UEk1vMcTuBW648atSE="
+  client_cidr: "10.80.0.0/24"
+  dns_address: "10.80.0.1"
+devices: []
+tunnels: []
+client_acls: []
+```
+
+Write it to `/etc/vpn-hub/hub.yaml` with mode `0600`, then run:
+
+```bash
+sudo touch /etc/vpn-hub/hub.yaml
+sudo chmod 0600 /etc/vpn-hub/hub.yaml
+sudoedit /etc/vpn-hub/hub.yaml
+sudo hubctl --config /etc/vpn-hub/hub.yaml validate
+sudo hubctl --config /etc/vpn-hub/hub.yaml deploy --dry-run
+```
+
+**Expected result:** `validate` prints `valid: revision=… tunnels=0 devices=0`; the dry run says that nothing was written.
+
+<VerifyBlock command="sudo stat -c '%a %n' /etc/vpn-hub/server.key /etc/vpn-hub/hub.yaml" expected="both files report mode 600" />
+
+## Apply and verify
+
+```bash
+sudo hubctl --config /etc/vpn-hub/hub.yaml deploy
+sudo systemctl restart vpn-hub-agent
+sudo vpn-hub-agent status
+```
+
+On the first deploy there is no previous revision, so a requested confirmation window cannot arm rollback. Preserve SSH access and check the agent journal.
+
+## Roll back
+
+Before a first active revision there is nothing to restore. If the unused setup must be abandoned:
+
+```bash
+sudo systemctl disable --now vpn-hub-agent
+sudo rm -f /var/lib/vpn-hub/desired-state.json
+```
+
+Once a previous revision exists, use `sudo hubctl rollback` instead of deleting state.
+
+## Next
+
+[Add the first device](../first-device/).

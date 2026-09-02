@@ -1,0 +1,19 @@
+---
+title: Application SOCKS endpoints
+description: Use the derived SOCKS5 endpoint for one application without changing a device egress.
+coverage: []
+---
+
+SOCKS endpoints are derived, not configured as YAML fields. Every enabled tunnel namespace receives a deterministic `microsocks` listener starting at port 11080. `hubctl routes` prints the current address, port, and owning tunnel; do not hard-code a value from another revision.
+
+```bash
+sudo hubctl --config /etc/vpn-hub routes
+```
+
+Only enrolled devices permitted by that tunnel's `allowed_devices` may reach the endpoint. The firewall matches the ingress interface, permitted source set, tunnel veth, and TCP port. There is no SOCKS authentication layer; the AmneziaWG client identity and host firewall are the access control.
+
+Configure an application with the printed `socks5://` endpoint. Prefer remote DNS through SOCKS when the application supports it, but remember that VPN Hub split-DNS policy is enforced by the hub resolver, not by arbitrary application DoH.
+
+If the tunnel fails, SOCKS traffic fails with it and does not move to `direct`.
+
+Next: [Tunnel access](../tunnels/) and [Routing](../../concepts/routing/).

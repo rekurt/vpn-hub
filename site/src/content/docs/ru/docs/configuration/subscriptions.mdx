@@ -1,0 +1,40 @@
+---
+title: Tunnel sources and subscriptions
+description: Configure a bounded VLESS subscription while protecting its credential-bearing URL.
+coverage:
+  - tunnels[].source
+  - tunnels[].source.kind
+  - tunnels[].source.value
+---
+
+import ConfigField from '../../../../../components/ConfigField.astro';
+
+<ConfigField path="tunnels[].source" type="object" required="Yes" defaultValue="None" validation="Its kind must be compatible with tunnel type and value must be non-empty." secret="Treat the whole object as sensitive until kind and value are inspected." sideEffects="Chooses where the agent or subscription refresher obtains provider input." example="source: { kind: config, value: secrets/edge.conf }" />
+
+<ConfigField path="tunnels[].source.kind" type="enum" required="Yes" defaultValue="None" validation="Constants are config, subscription, xray-uri, and xray-json. Non-Xray tunnels require config; Xray accepts config or subscription. Inline xray-uri and xray-json are rejected by validation." secret="No by itself." sideEffects="Selects protected-file loading or fetch/prove/promote subscription flow." example="config" />
+
+<ConfigField path="tunnels[].source.value" type="string" required="Yes" defaultValue="None" validation="Non-empty. For config, an absolute or config-directory-relative path; for subscription, an HTTPS fetch URL handled by the refresher." secret="Paths may reveal layout; subscription URLs and inline links are credentials." sideEffects="Reads a provider file or fetches a subscription; credential-bearing values are redacted from desired-state JSON." example="secrets/edge-wg.conf" />
+
+```yaml
+  - id: rotating-edge
+    type: xray
+    role: egress
+    source:
+      kind: subscription
+      value: https://subscriptions.example.net/vless?token=SYNTHETIC-REPLACE-BEFORE-USE
+```
+
+A refresh accepts at most 32 usable VLESS candidates and 8192 bytes per line, runs within a two-minute default deadline, rejects special-use/internal destinations, proves candidates in isolation, and promotes only a working one. The last-known-good link remains restorable.
+
+The hub configuration loader does not decrypt an inline `ENC[...]` value. Put the real URL directly in root-owned `/etc/vpn-hub/hub.yaml`, keep the file and its parent directory inaccessible to other users, and never commit or paste it into diagnostics:
+
+```bash
+sudo chown root:root /etc/vpn-hub/hub.yaml
+sudo chmod 0700 /etc/vpn-hub
+sudo chmod 0600 /etc/vpn-hub/hub.yaml
+sudo stat -c '%U:%G %a' /etc/vpn-hub /etc/vpn-hub/hub.yaml
+```
+
+**Expected result:** `root:root 700` for the directory and `root:root 600` for the file. Anyone who can read this file can use the subscription token. If it is disclosed, rotate the URL or token at the provider, update the file, run `hubctl validate`, deploy, verify a refresh, and only then revoke the old credential. SOPS protects provider files loaded by the agent; it is not a runtime secret source for fields in `hub.yaml`.
+
+Next: [Subscription lifecycle](../../concepts/subscriptions/) and [Xray/VLESS](../xray-vless/).

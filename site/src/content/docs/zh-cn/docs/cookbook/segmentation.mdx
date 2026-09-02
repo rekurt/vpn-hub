@@ -1,0 +1,17 @@
+---
+title: Segmentation
+description: Build explicit network isolation with no implicit device-to-device access.
+---
+
+## Objective
+
+Allow private access only where explicitly required.
+
+## Steps
+
+1. Assign devices to dedicated egress IDs.
+2. Add private routes to selected tunnels.
+3. Add explicit `client-acls` for management paths only.
+
+This keeps default posture closed and auditable.
+

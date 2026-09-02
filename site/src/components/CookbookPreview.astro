@@ -1,0 +1,28 @@
+---
+type CookbookLink = {
+  title: string;
+  description: string;
+  url: string;
+};
+
+type Props = {
+  intro: string;
+  links: CookbookLink[];
+};
+
+const { intro, links } = Astro.props as Props;
+---
+
+<section class="landing-section" id="cookbook">
+  <h2>Cookbook</h2>
+  <p>{intro}</p>
+  <div class="cookbook-grid">
+    {links.map((link) => (
+      <a class="cookbook-grid__card" href={link.url}>
+        <h3>{link.title}</h3>
+        <p>{link.description}</p>
+      </a>
+    ))}
+  </div>
+</section>
+

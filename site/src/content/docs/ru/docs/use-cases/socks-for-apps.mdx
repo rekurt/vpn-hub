@@ -1,0 +1,15 @@
+---
+title: SOCKS5 for application isolation
+description: Route one application's traffic without changing full-device routing.
+---
+
+## Scenario
+
+An operator wants one high-risk app to use a separate exit while preserving existing default.
+
+## Steps
+
+1. Verify SOCKS ports are enabled for selected egress.
+2. Route the app through the selected local proxy port.
+
+No host-wide policy change is required.
