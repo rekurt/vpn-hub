@@ -1,57 +1,65 @@
-const [displayPath] = process['argv']['slice'](2);
-let source = '';
-
-for await (const chunk of process['stdin']) source += chunk;
-
-const errors = [];
-let lock;
-try {
-  lock = JSON['parse'](source);
-} catch {
-  errors['push'](`${displayPath}: malformed JSON`);
-}
-
 function pointerSegment(value) {
   return value['replace'](/~/g, '~0')['replace'](/\//g, '~1');
 }
 
-function checkResolved(value, pointer) {
-  if (typeof value !== 'string') {
-    errors['push'](`${displayPath}:${pointer}: resolved must be a string`);
-    return;
-  }
-
-  let url;
+export function validatePackageLock(source, displayPath) {
+  const errors = [];
+  let lock;
   try {
-    url = new URL(value);
+    lock = JSON['parse'](source);
   } catch {
-    errors['push'](`${displayPath}:${pointer}: resolved URL is invalid`);
-    return;
+    errors['push'](`${displayPath}: malformed JSON`);
   }
 
-  if (url['protocol'] !== 'https:') errors['push'](`${displayPath}:${pointer}: resolved URL must use https`);
-  if (url['username'] || url['password']) errors['push'](`${displayPath}:${pointer}: resolved URL must not include userinfo`);
-  if (url['search'] || url['hash']) errors['push'](`${displayPath}:${pointer}: resolved URL must not include query or fragment`);
-  if (url['hostname'] !== 'registry.npmjs.org') {
-    errors['push'](`${displayPath}:${pointer}: unapproved resolved host ${url['hostname']}`);
-  }
-}
+  function checkResolved(value, pointer) {
+    if (typeof value !== 'string') {
+      errors['push'](`${displayPath}:${pointer}: resolved must be a string`);
+      return;
+    }
 
-function visit(value, pointer = '') {
-  if (Array['isArray'](value)) {
-    value['forEach']((item, index) => visit(item, `${pointer}/${index}`));
-  } else if (value && typeof value === 'object') {
-    for (const [key, item] of Object['entries'](value)) {
-      const nextPointer = `${pointer}/${pointerSegment(key)}`;
-      if (key === 'resolved') checkResolved(item, nextPointer);
-      visit(item, nextPointer);
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      errors['push'](`${displayPath}:${pointer}: resolved URL is invalid`);
+      return;
+    }
+
+    if (url['protocol'] !== 'https:') errors['push'](`${displayPath}:${pointer}: resolved URL must use https`);
+    if (url['username'] || url['password']) errors['push'](`${displayPath}:${pointer}: resolved URL must not include userinfo`);
+    if (url['search'] || url['hash']) errors['push'](`${displayPath}:${pointer}: resolved URL must not include query or fragment`);
+    if (url['origin'] !== 'https://registry.npmjs.org' || url['port'] !== '') {
+      errors['push'](`${displayPath}:${pointer}: resolved URL must use the exact registry origin`);
+    }
+
+  }
+
+  function visit(value, pointer = '') {
+    if (Array['isArray'](value)) {
+      value['forEach']((item, index) => visit(item, `${pointer}/${index}`));
+    } else if (value && typeof value === 'object') {
+      for (const [key, item] of Object['entries'](value)) {
+        const nextPointer = `${pointer}/${pointerSegment(key)}`;
+        if (key === 'resolved') checkResolved(item, nextPointer);
+        visit(item, nextPointer);
+      }
     }
   }
+
+  if (errors['length'] === 0) visit(lock);
+  return errors;
 }
 
-if (errors['length'] === 0) visit(lock);
+if (process['argv'][1] && process['argv'][1]['endsWith']('/validate-package-lock.mjs')) {
+  const [displayPath] = process['argv']['slice'](2);
+  let source = '';
 
-if (errors['length'] > 0) {
-  process['stderr']['write'](`package-lock validation failed:\n${errors['map']((error) => `- ${error}`)['join']('\n')}\n`);
-  process['exitCode'] = 1;
+  for await (const chunk of process['stdin']) source += chunk;
+
+  const errors = validatePackageLock(source, displayPath);
+
+  if (errors['length'] > 0) {
+    process['stderr']['write'](`package-lock validation failed:\n${errors['map']((error) => `- ${error}`)['join']('\n')}\n`);
+    process['exitCode'] = 1;
+  }
 }

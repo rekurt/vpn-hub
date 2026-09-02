@@ -346,3 +346,4 @@ registry.npmjs.org
 test-built-site.mjs
 test-verify-content.mjs
 validate-package-lock.mjs
+check-package-locks.mjs
