@@ -1,214 +1,65 @@
 # VPN Hub
 
-Личный multi-VPN hub для Ubuntu 24.04 LTS. Cobra CLI, Viper-конфигурация, гексагональная архитектура: доменная логика не зависит от Cobra, Viper, systemd, netlink и nftables.
+**Explicit multi-VPN routing for a self-hosted Linux hub.** VPN Hub connects devices through AmneziaWG and sends every packet through one deliberately selected path: direct uplink, WireGuard, AmneziaWG, Xray/VLESS, or OpenVPN. It is for operators who want repeatable policy instead of silent fallback.
 
-Изначально проект писался под Debian 12, но DigitalOcean его больше не предлагает, а на Debian 13 модуль AmneziaWG не собирается — пакеты Amnezia PPA собраны под Ubuntu. Поэтому база — Ubuntu 24.04 LTS.
+[Documentation](https://rekurt.github.io/vpn-hub/docs/) · [Cookbook](https://rekurt.github.io/vpn-hub/docs/cookbook/) · [Telegram bot](https://rekurt.github.io/vpn-hub/docs/telegram-bot/) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md)
 
-## Состояние проекта
+## What it does
 
-Хаб работает как VPN: устройство подключается по AmneziaWG, трафик выходит в интернет через хаб, при падении туннеля блокируется, IPv6 не течёт. Всё это настраивает агент из ревизии.
+- Routes each device through one chosen Internet egress and private destinations through their owning tunnel.
+- Isolates provider tunnels in network namespaces with independent policy routing and kill switches.
+- Applies declarative YAML as a hashed desired-state revision and detects runtime drift.
+- Supports split DNS, directional client ACLs, per-egress SOCKS5, health probes, and bounded VLESS subscriptions.
+- Provides an optional Telegram operator UI for devices, tunnels, deploy confirmation, status, logs, and subscriptions.
+- Uses a confirmation window for risky deployments; an unconfirmed revision automatically rolls back.
 
-Работает:
+## Supported environment
 
-- YAML-конфигурация через Viper со строгим разбором: неизвестный ключ отвергается, а не игнорируется;
-- валидация типов туннелей, ролей, egress ACL, уникальности адресов, пересечения CIDR, конфликтов DNS-зон, ключей и длины идентификаторов;
-- детерминированный desired state с revision в виде content hash; приватные ключи в него не попадают;
-- **AmneziaWG на входе**: агент поднимает интерфейс, ставит ключ, порт и параметры обфускации, синхронизирует пиров;
-- **nftables с kill switch**: трафик проходит только при явном совпадении с egress, fallback на `direct` невозможен по построению;
-- **выход `direct`** с NAT через аплинк хоста;
-- **egress всех четырёх типов** — WireGuard, AmneziaWG, Xray (через sing-box) и OpenVPN: каждый апстрим в отдельном network namespace со своей меткой, таблицей маршрутизации и вторым kill switch;
-- **одно подключение ко всему**: интернет через выбранного провайдера и приватные сети одновременно, решение принимает хаб по адресу назначения, а не клиент;
-- **split-DNS**: приватные зоны резолвятся через свои туннели, выученные адреса dnsmasq сам кладёт в nft-сет; DoT отвергается, чтобы клиент не унёс приватные имена мимо;
-- **подписки с канареечным применением**: кандидат поднимается в отдельном namespace и становится активным только если через него пошёл трафик;
-- **SOCKS5 на каждый egress**: одно приложение можно отправить в выбранный провайдер, не переключая подключение целиком;
-- **observe и коррекция drift**: отпечаток плана хранится в самой nft-таблице, сошедшийся хост молчит, разошедшийся объясняет расхождение;
-- **health по свежести handshake**, пробы выполняются **внутри** namespace туннеля;
-- **SOPS**: upstream-конфиги расшифровываются прозрачно, определение по содержимому файла;
-- **отзыв устройства**: `device revoke` + `deploy` убирает пира, связь рвётся;
-- `hubctl keygen` и `device add` — ключи и профили без ручного редактирования YAML;
-- **конфигурация каталогом**: `hub.yaml`, `devices.yaml`, `tunnels/*.yaml` — файл на туннель;
-- **операционные команды**, правящие YAML с сохранением комментариев: `tunnel list/enable/disable/routes/zones`, `device list/set-egress`, `routes`;
-- **подтверждение с таймером**: `deploy --confirm-within 5m`, и агент сам возвращает предыдущую ревизию, если не подтвердить;
-- генерация клиентских AmneziaWG-профилей;
-- атомарное сохранение состояния с fsync и блокировкой директории.
+The supported host is Ubuntu 24.04 LTS. VPN Hub requires systemd, nftables, iproute2, conntrack, dnsmasq, and client tools for the tunnel types you enable. See [requirements](https://rekurt.github.io/vpn-hub/docs/start/requirements/) before provisioning.
 
-## Границы и известные ограничения
+It is a single-hub, IPv4-oriented deployment. High availability, multi-tenancy, overlapping-CIDR translation, and automatic fallback between egresses are intentionally out of scope.
 
-- **DNS-over-HTTPS не блокируется и заблокирован быть не может** — он неотличим от остального трафика на 443. DoT отвергается явно, но split-DNS в конечном счёте опирается на то, что на клиенте не включён принудительный DoH. Это реальное ограничение, а не решённая задача.
-- **Запасные входы на 443 не проверены на настоящем хабе.** Серверная половина прогоняется целиком на живом ядре с настоящим systemd: агент поднимает transient-юнит, клиент собирается из выданной ссылки, через него идут TCP и UDP, соединения устройства несут fwmark его туннеля, а выключение fallback гасит порт и стирает конфиг с ключом. Не проверено то, что за пределами хоста: импорт ссылки в мобильное приложение и реальная сеть с зарезанным UDP. Это отличие клиента и сети, а не кода хаба, но оно не проверено — и до прогона на стенде так и считать.
-- **Через запасной вход по TCP/443 приватные сети недоступны — намеренно.** Этот путь не проходит через цепочку forward, поэтому ни одно клиентское правило пакетного фильтра к нему не применяется: хаб не может понять, кто именно спрашивает, и `allowed_devices` здесь не работает. Поэтому приватные и loopback-адреса на этом пути запрещены целиком. Приватные сети — по обычному AmneziaWG-профилю.
-- **Ручная правка отдельного правила в ruleset не откатывается.** Агент перекладывает таблицу только при расхождении отпечатка: пересборка стирает адреса, которые dnsmasq выучил из ответов, а это молча уводило приватный трафик в интернет-провайдера. Отпечаток ловит добавление и удаление правил, но не правку на месте.
-- **Один хаб.** Ни HA, ни multi-tenancy, ни автоматического разрешения пересечений CIDR, ни трансляции пересекающихся сетей.
-- **Автоматического fallback между egress нет намеренно.** Молчаливое переключение на `direct` при падении туннеля хуже оборванного соединения.
+## Quick evaluation
 
-## Запасные входы (сети, где обычный вход не проходит)
+Use a disposable Linux host or the documented lab first. Do not redirect production traffic before you have independent recovery access.
 
-Оба выключены по умолчанию и включаются в `hub.fallback`: каждый открывает порт на хабе, а слушатель, которого никто не просил, — это поверхность атаки, а не фича.
-
-```yaml
-hub:
-  fallback:
-    udp443: true            # DNAT UDP/443 → порт ingress, для сетей, режущих 51820 по номеру
-    reality:
-      enabled: true
-      server_name: "www.example.com"   # реальный TLS 1.3-сайт, который имитирует рукопожатие
+```sh
+git clone https://github.com/rekurt/vpn-hub.git
+cd vpn-hub
+make test
+cp configs/example.yaml configs/hub.yaml
+go run ./cmd/hubctl validate --config configs/hub.yaml
+go run ./cmd/vpn-hub-agent reconcile --config configs/hub.yaml --state-dir ./state --dry-run
 ```
 
-- **UDP/443** — тот же AmneziaWG, другой порт. Редирект навешен на аплинк-интерфейс, а не на все: иначе клиентский QUIC/HTTP-3 на чужой `:443` тоже переписывался бы по порту и молча ломался.
-- **TCP/443 (REALITY)** — отдельный протокол входа для сетей, где UDP не проходит вовсе. Клиенты — прокси-приложения (v2rayNG, Hiddify, sing-box), а не AmneziaWG-пиры. Нужен ключ: `hubctl keygen --reality` пишет `/etc/vpn-hub/reality.key`; его ротация обесценивает все выданные ссылки. Учётные данные устройств выводятся из этого ключа, поэтому отдельного хранилища нет, а отзыв работает через ревизию: устройство, убранное из ревизии, исчезает из списка пользователей слушателя на том же проходе.
+The example is for local validation. Continue with [First hub](https://rekurt.github.io/vpn-hub/docs/start/first-hub/), [First device](https://rekurt.github.io/vpn-hub/docs/start/first-device/), and [Verify](https://rekurt.github.io/vpn-hub/docs/start/verify/) before changing live traffic.
 
-Персональный egress работает и здесь: каждое устройство аутентифицируется собой, его соединения помечаются fwmark его туннеля (номера берутся из того же firewall-плана). Цепочка проверена по звеньям, а не на слово: марки в спеке берутся из firewall-плана, рендер даёт по одному outbound на марку, sing-box действительно ставит марку на сокет (интеграционный тест считает помеченные пакеты счётчиком в output-хуке), а `ip rule fwmark N lookup N` выбирает таблицу туннеля. Kill switch на этом пути — явные drop-правила в цепочке output: меченый пакет, уходящий не в свой интерфейс, отбрасывается. Это не формальность — `ip rule fwmark N lookup N` при пустой таблице проваливается в main, то есть без этих правил трафик устройства с лежащим туннелем ушёл бы через голый аплинк хаба. Слушатель поднимает сам агент как transient-юнит: конфиг с ключом лежит в tmpfs, переживает перезагрузку и останавливается, когда fallback выключают.
+## Pick a workflow
 
-Учётные данные устройства выводятся из ключа хаба **и публичного ключа самого устройства**, поэтому перевыпуск профиля меняет и ссылку — утёкшая ссылка перестаёт работать вместе со старым ключом.
+| Need | Start here |
+| --- | --- |
+| Install one hub | [Install](https://rekurt.github.io/vpn-hub/docs/start/install/) |
+| Route one application | [SOCKS5 app steering](https://rekurt.github.io/vpn-hub/docs/use-cases/socks-for-apps/) |
+| Handle private networks and DNS | [Segmentation cookbook](https://rekurt.github.io/vpn-hub/docs/cookbook/segmentation/) |
+| Test a provider subscription | [Subscription canary](https://rekurt.github.io/vpn-hub/docs/cookbook/subscription-canary/) |
+| Apply a risky change | [Rolling deploy](https://rekurt.github.io/vpn-hub/docs/cookbook/rolling-deploy/) |
+| Recover from a bad revision or drift | [Rollback runbook](https://rekurt.github.io/vpn-hub/docs/cookbook/rollback-runbook/) |
+| Operate through Telegram | [Bot guide](https://rekurt.github.io/vpn-hub/docs/telegram-bot/) |
 
-Профили бот выдаёт вместе с обычным: `.conf` на 443 и `vless://`-ссылку с QR — момент, когда запасной вход нужен, это плохое время для ручной правки порта в телефоне.
+## Safety model
 
-## SOCKS5
+VPN Hub fails closed. A selected egress that is down does not become direct Internet access. Private DNS answers remain attached to the owning tunnel, and client-to-client traffic is denied until an explicit ACL permits it.
 
-Каждый туннель ревизии получает SOCKS5-порт на своём конце veth — `11080` плюс порядковый номер; список печатает `hubctl routes`. Порт открыт только тем устройствам, которым туннель разрешён (`allowed_devices`), поэтому эндпоинт не может стать обходом того самого выбора, ради которого существует.
+Read the [threat model](https://rekurt.github.io/vpn-hub/docs/security/threat-model/) and [limitations](https://rekurt.github.io/vpn-hub/docs/security/limitations/) before production use. DNS-over-HTTPS cannot be reliably intercepted, and TCP/443 fallback deliberately cannot reach private networks.
 
-## Быстрый старт
+## Development and release
 
 ```sh
 make test
-cp configs/example.yaml configs/hub.yaml   # configs/hub.yaml не коммитится
-go run ./cmd/hubctl validate
+make site-check
+make publication-check
 ```
 
-Полный цикл на примере конфигурации:
+Never commit hub configuration, generated profiles, runtime state, provider links, or Telegram tokens. Tags beginning with `v` create Linux amd64 release artifacts. Hub deployment remains a manual GitHub Actions workflow with environment approval and a pinned host key.
 
-```sh
-go run ./cmd/hubctl validate --config configs/example.yaml
-go run ./cmd/hubctl deploy --config configs/example.yaml --state-dir ./state
-go run ./cmd/vpn-hub-agent reconcile --state-dir ./state --dry-run
-```
-
-Заведение устройства:
-
-```sh
-hubctl keygen --output /etc/vpn-hub/server.key   # один раз на хаб
-hubctl keygen --reality                          # только если включаете вход по TCP/443
-hubctl device add laptop --egress provider-nl --address 10.80.0.2/32 --output laptop.conf
-# вставить напечатанный блок в devices; laptop.conf отдать устройству
-```
-
-Приватный ключ существует ровно один раз — при генерации, сразу попадая в профиль клиента. Хаб хранит только публичную половину, поэтому переиздать потерянный профиль можно лишь с новым ключом; это и правильный ответ.
-
-## Эксплуатация
-
-```sh
-hubctl tunnel list                              что есть и что включено
-hubctl tunnel disable corp-a                    выключить, не удаляя конфиг
-hubctl tunnel routes corp-a --add 10.30.0.0/16
-hubctl device set-egress laptop provider-de     сменить провайдера, клиент не трогаем
-hubctl client-acl add phone laptop tcp/22        разрешить phone доступ к SSH laptop
-hubctl client-acl remove phone laptop tcp/22     убрать это разрешение
-hubctl device unrevoke laptop                   снять ошибочный отзыв
-hubctl subscription restore xray-main           вернуть last-known-good upstream
-hubctl routes                                   какой адрес куда поедет
-hubctl deploy --confirm-within 5m               с автооткатом
-hubctl confirm
-```
-
-`device unrevoke` и `subscription restore` — аварийные операции для SSH, когда телеграм-бот недоступен: первая отменяет поспешный `device revoke`, вторая возвращает предыдущий работавший upstream подписки.
-
-Команды правят YAML и сохраняют комментарии: для сетевой конфигурации пояснение «почему этот маршрут» часто ценнее самого маршрута.
-
-Выключить туннель, которым пользуется устройство, нельзя — команда откажет и назовёт устройства. Молчаливый откат на `direct` противоречил бы kill switch.
-
-`--confirm-within` существует потому, что хаб удалённый: ошибка в ruleset рвёт ту самую SSH-сессию, из которой её чинить. Не подтвердили — агент возвращает предыдущую ревизию сам.
-
-`configs/example.yaml` намеренно не содержит приватных ключей: хабу нужна только публичная половина, а пример приватного ключа рано или поздно копируют в реальную установку.
-
-## Телеграм-бот
-
-`vpn-hub-bot` — место оператора в чате: всё, что умеет hubctl, плюс то, чего CLI дать не может — бот сам следит за журналом агента, файлами состояния и здоровьем туннелей и пишет, когда что-то происходит. Работает только через long polling (входящих портов на хабе нет) и отвечает ровно одному человеку: апдейты не от `admin_id` молча отбрасываются до разбора.
-
-Что умеет:
-
-- **Статус**: ревизия, ожидание подтверждения, дрейф хоста, здоровье туннелей, состояние агента, онлайн-счётчик устройств.
-- **Устройства**: смена egress, добавление с доставкой профиля файлом и QR-кодом (с подсказкой свободного адреса), перевыпуск профиля (снимает отзыв), отзыв; присутствие («онлайн» по свежему handshake) и счётчики трафика с живого интерфейса.
-- **Туннели**: вкл/выкл (с той же проверкой «не оставить устройство без выхода»), проба здоровья и «проверить все», правка маршрутов и DNS-зон, health-пробы (tcp/https/dns) с превалидацией доменными правилами, доступ по устройствам (`allowed_devices`).
-- **Деплой**: превью изменений → применить со страховкой на выбор (1/5/15/30 минут; сообщение-таймер с «Подтвердить»/«Откатить»; не подтвердили — агент откатывает сам) или без.
-- **Подписки**: ручное обновление с живым прогрессом по кандидатам; список кандидатов с ручным выбором (кандидат сперва доказывает работоспособность в canary); возврат на last-known-good; плановое обновление — бот сам планировщик (см. ниже). Обновление применяется агентом само, деплой не нужен.
-- **Хаб**: правка endpoint/DNS/клиентской сети и AmneziaWG-параметров (с напоминанием о перевыпуске профилей), ротация серверного ключа с массовым перевыпуском всех профилей, выгрузка YAML-конфигурации в чат.
-- **Доступ между устройствами**: точечные client-to-client ACL вида `source → target tcp/22`; общий client-to-client остаётся закрыт.
-- **Маршруты, логи юнитов, хост-метрики, настройки уведомлений** (переживают рестарт бота).
-- **Проактивные уведомления**: автооткат и потеря сходимости агента, дрейф хоста, деградация здоровья туннелей, изменения состояния мимо бота (hubctl по SSH), итоги плановых обновлений подписок. У алертов об агенте/дрейфе — кнопка «🔁 Рестарт агента» прямо в сообщении. Категории переключаются в настройках.
-
-Все опасные действия — в два нажатия. Все мутации сериализуются через один внутренний gate: canary-namespace один на всех, и одновременные «обновить подписку» и «деплой» не должны толкаться. Планировщик обновлений подписок — сам бот, через тот же gate; отдельного systemd-таймера нет. Если бот лежит, аварийный путь — `hubctl subscription refresh <id>` по SSH.
-
-Настройка — через секреты деплой-пайплайна (основной путь):
-
-1. Создать бота у @BotFather, узнать свой id у @userinfobot.
-2. В GitHub-окружении `hub` добавить секреты **`TELEGRAM_BOT_TOKEN`** и **`TELEGRAM_ADMIN_ID`** (опционально `TELEGRAM_NOTIFICATIONS` — YAML-блок интервалов, например `health_interval: 5m`, по строке на ключ).
-3. Запустить workflow **deploy**: он запишет `/etc/vpn-hub/telegram.yaml` (0600, токен уходит через stdin и не попадает ни в argv, ни в логи), включит юнит и провалит деплой, если токен не подтверждается Bot API (`vpn-hub-bot check` на хосте).
-
-Пока секреты заданы, файл на хосте принадлежит пайплайну и переписывается каждым деплоем; ручные правки в нём не переживут выкат. Токен намеренно ставится деплоем, а не вшивается при сборке: артефакты release публичны, и бинарник с токеном внутри — это токен в открытом доступе.
-
-Без секретов файл можно завести руками — тогда деплой его не трогает:
-
-```sh
-cat > /etc/vpn-hub/telegram.yaml <<'EOF'
-token: "1234567:AA..."
-admin_id: 123456789
-EOF
-chmod 0600 /etc/vpn-hub/telegram.yaml   # можно зашифровать SOPS/age — бот расшифрует сам
-vpn-hub-bot check                        # проверит токен и покажет, кому бот подчиняется
-systemctl enable --now vpn-hub-bot
-```
-
-`make deploy-lab` и workflow deploy включают бота только там, где `/etc/vpn-hub/telegram.yaml` существует.
-
-Компрометация Telegram-аккаунта админа равна компрометации хаба — включите 2FA в Telegram. Бот не открывает портов; токен лежит с правами 0600 и в журналы не попадает.
-
-## Стенд
-
-Хост описан в `deploy/terraform/` (OpenTofu + cloud-init) и поднимается одноразово на DigitalOcean — ≈$6/мес, удаляется одной командой.
-
-```sh
-brew install opentofu doctl
-doctl auth init          # интерактивно, один раз; токен читается из его конфига
-make stand-init          # tofu init, один раз
-make stand-up            # создаёт хост и ждёт завершения cloud-init
-make deploy-lab          # собирает под linux/amd64 и ставит юнит
-make logs
-make stand-down          # удаляет хост
-```
-
-Terraform создаёт дроплет Ubuntu 24.04 без IPv6, SSH-ключ и cloud firewall (открыты только 22/tcp и 51820/udp). cloud-init готовит ОС: `ip_forward`, выключение IPv6, `/run/netns`, SSH без паролей, AmneziaWG через DKMS из Amnezia PPA. Отдельно отключаются `ufw` и `nftables.service` — ruleset принадлежит агенту, и они бы с ним конфликтовали.
-
-**Хаб предполагает, что владеет форвардингом на своей машине.** Netfilter прогоняет все цепочки, зарегистрированные на хуке, поэтому чужой `DROP` в цепочке forward убивает пакет независимо от того, что разрешает таблица `inet vpn_hub`. Практически это значит: не ставьте на хаб Docker (он выставляет `iptables -P FORWARD DROP`) и не включайте `ufw`. Держите хаб выделенным.
-
-Параметры переопределяются через `deploy/terraform/terraform.tfvars` (см. `terraform.tfvars.example`) — регион, размер, дополнительные SSH-ключи, сужение доступа к SSH.
-
-cloud-init выполняется только при первой загрузке, поэтому правка `cloud-init.yaml` пересоздаёт хост — `make stand-plan` покажет это до применения.
-
-State OpenTofu лежит локально и не коммитится: он содержит токен. Потеря `terraform.tfstate` означает, что дроплет придётся удалять руками через `doctl`.
-
-## Разработка
-
-```sh
-make lint                  # gofmt + go vet
-make test                  # go test -race ./...
-make ci                    # всё, что делает CI, кроме интеграционного джоба
-make test-integration      # реальные интерфейсы и трафик; Linux, нужен root
-make test-integration-box  # тот же набор в одноразовом контейнере; работает не на Linux
-make build-linux
-```
-
-`make test-integration` поднимает клиента в отдельном network namespace, применяет настоящий ruleset и проверяет, что трафик идёт, а kill switch блокирует. На стенде перед запуском остановите агента: он реконсилит по таймеру и вернёт свой ruleset поверх тестового.
-
-`make test-integration-box` — то же самое для рабочей машины, которая не является тем самым Linux-хостом: контейнер с systemd первым процессом, тем же sing-box той же пиновой версии и теми же пакетами, что ставит раннер. Внутри набор делает то же, что и на хосте, включая снос default route, поэтому контейнер каждый раз новый. Подмножество — `make test-integration-box ARGS='-run Reality'`; тесты, которым нужен интернет, пропускаются после того, как более ранний сценарий убрал маршрут, так что смотреть их надо именно так.
-
-## CI/CD
-
-- **ci** — на каждый push и PR: gofmt, vet (включая `-tags=integration`), `test -race`, golangci-lint, кросс-сборка, `tofu fmt`/`validate` и интеграционные тесты на живом ядре раннера.
-- **release** — на зелёный master собирает бинарники и публикует артефакт; на тег `v*` создаёт GitHub Release с контрольными суммами.
-- **deploy** — **только вручную** (`workflow_dispatch`), в окружении `hub`. Секреты: `HUB_SSH_KEY`, `HUB_HOST`, `HUB_HOST_KEY`, и для бота — `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_ID` (опционально `TELEGRAM_NOTIFICATIONS`); без последних деплой не трогает `telegram.yaml` на хосте.
-
-Деплой намеренно не автоматический. Хаб — шлюз собственного трафика, поэтому push в master не должен его перенастраивать: автодеплой означал бы, что компрометация токена равна компрометации сетевого пути. Требуемые секреты окружения `hub`: `HUB_SSH_KEY` (отдельный ключ только для деплоя, чтобы его можно было отозвать независимо) и `HUB_HOST`.
-
-Интеграционные тесты в CI используют обычный WireGuard: модуль AmneziaWG собирается через DKMS, чего эфемерный раннер сделать не может. Кроме параметров обфускации протокол тот же, а проверяется механика хаба — ruleset, NAT, синхронизация пиров, kill switch — которая от обфускации не зависит.
-
-`configs/example.yaml` содержит демонстрационные значения. Реальные upstream-конфиги и клиентские private keys храните только в SOPS + age, а не в Git в открытом виде.
+See the [deployment reference](https://rekurt.github.io/vpn-hub/docs/reference/deployment/) and [incident response guide](https://rekurt.github.io/vpn-hub/docs/operations/incident-response/).
