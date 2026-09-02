@@ -1,0 +1,39 @@
+---
+title: Tunnel lifecycle
+description: Inspect, test, route through, disable, and recover a tunnel safely.
+---
+
+## Probe first
+
+```sh
+hubctl tunnel list
+hubctl test tunnel corp-private
+```
+
+A successful preflight probe is evidence for the tunnel, not a bypass for deployment review.
+
+## Manage private destinations
+
+Routes are IP subnets and zones are private DNS suffixes. Both are desired-state changes: validate and deploy them.
+
+```sh
+hubctl tunnel routes corp-private --add 10.20.0.0/16
+hubctl tunnel zones corp-private --add corp.example
+hubctl validate
+hubctl deploy --confirm-within 5m
+hubctl confirm
+```
+
+Withdraw the exact route or zone with `--remove`, then deploy the revised plan.
+
+## Maintenance and recovery
+
+Disable a tunnel only after confirming that affected devices have an intentional alternative.
+
+```sh
+hubctl tunnel disable corp-private
+hubctl deploy --confirm-within 5m
+hubctl confirm
+```
+
+After repair, enable it, run the probe again, and deploy. Run `hubctl rollback` immediately if the new revision harms connectivity.
