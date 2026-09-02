@@ -21,6 +21,8 @@ type FirewallPlan struct {
 
 	ClientCIDR string `json:"client_cidr"`
 	DNSAddress string `json:"dns_address"`
+	// DNSDestinations map assigned client addresses to the resolver for their egress.
+	DNSDestinations []DNSDestination `json:"dns_destinations,omitempty"`
 
 	// LinkBase is the range the veth links to tunnel namespaces are carved from.
 	// Traffic a proxy originates arrives from it and has to be translated on the way
@@ -53,6 +55,11 @@ type FirewallPlan struct {
 	// Egresses is ordered deterministically so an unchanged configuration renders
 	// byte-identically.
 	Egresses []EgressGroup `json:"egresses"`
+}
+
+type DNSDestination struct {
+	ClientAddresses []string `json:"client_addresses"`
+	ResolverAddress string   `json:"resolver_address"`
 }
 
 type ClientPortACL struct {

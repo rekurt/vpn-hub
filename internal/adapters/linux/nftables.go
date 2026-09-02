@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"vpn-hub/internal/domain"
@@ -28,6 +29,63 @@ func internalSetName(tunnelID string) string {
 // allowedSetName names the set of client addresses permitted to use one tunnel.
 func allowedSetName(tunnelID string) string {
 	return "allowed_" + strings.ReplaceAll(tunnelID, "-", "_")
+}
+
+func dnsClientSetName(egressID string) string {
+	return "dns_clients_" + strings.ReplaceAll(egressID, "-", "_")
+}
+
+func dnsDestinationFor(group domain.EgressGroup, destinations []domain.DNSDestination) (domain.DNSDestination, bool) {
+	for _, destination := range destinations {
+		if len(destination.ClientAddresses) != len(group.Addresses) {
+			continue
+		}
+		matched := true
+		for index := range group.Addresses {
+			if group.Addresses[index] != destination.ClientAddresses[index] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return destination, true
+		}
+	}
+	return domain.DNSDestination{}, false
+}
+
+func dnsResolverAddresses(plan domain.FirewallPlan) []string {
+	seen := map[string]bool{}
+	addresses := make([]string, 0, len(plan.DNSDestinations)+1)
+	add := func(address string) {
+		if address == "" || seen[address] {
+			return
+		}
+		seen[address] = true
+		addresses = append(addresses, address)
+	}
+	add(plan.DNSAddress)
+	for _, destination := range plan.DNSDestinations {
+		add(destination.ResolverAddress)
+	}
+	sort.Strings(addresses)
+	return addresses
+}
+
+func admittedDNSClients(plan domain.FirewallPlan) []string {
+	seen := map[string]bool{}
+	var clients []string
+	for _, group := range plan.Egresses {
+		for _, address := range group.Addresses {
+			if seen[address] {
+				continue
+			}
+			seen[address] = true
+			clients = append(clients, address)
+		}
+	}
+	sort.Strings(clients)
+	return clients
 }
 
 // allowedSets collects the tunnels that need such a set, in a stable order.
@@ -126,6 +184,25 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 		if len(group.Addresses) > 0 {
 			line("\t\telements = { %s }", strings.Join(group.Addresses, ", "))
 		}
+		line("\t}")
+		line("")
+	}
+	if clients := admittedDNSClients(plan); len(plan.DNSDestinations) > 0 && len(clients) > 0 {
+		line("\tset dns_clients_admitted {")
+		line("\t\ttype ipv4_addr")
+		line("\t\telements = { %s }", strings.Join(clients, ", "))
+		line("\t}")
+		line("")
+	}
+
+	for _, group := range plan.Egresses {
+		destination, found := dnsDestinationFor(group, plan.DNSDestinations)
+		if !found {
+			continue
+		}
+		line("\tset %s {", dnsClientSetName(group.ID))
+		line("\t\ttype ipv4_addr")
+		line("\t\telements = { %s }", strings.Join(destination.ClientAddresses, ", "))
 		line("\t}")
 		line("")
 	}
@@ -302,8 +379,15 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	if plan.RealityPort != 0 {
 		line("\t\ttcp dport %d accept", plan.RealityPort)
 	}
-	line("\t\tiifname %q ip daddr %s udp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
-	line("\t\tiifname %q ip daddr %s tcp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
+	if len(plan.DNSDestinations) == 0 {
+		line("\t\tiifname %q ip daddr %s udp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
+		line("\t\tiifname %q ip daddr %s tcp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
+	} else if len(admittedDNSClients(plan)) > 0 {
+		for _, address := range dnsResolverAddresses(plan) {
+			line("\t\tiifname %q ip saddr @dns_clients_admitted ip daddr %s udp dport 53 accept", plan.IngressInterface, address)
+			line("\t\tiifname %q ip saddr @dns_clients_admitted ip daddr %s tcp dport 53 accept", plan.IngressInterface, address)
+		}
+	}
 	line("\t}")
 	line("")
 
@@ -371,8 +455,23 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	line("\t\ttype nat hook prerouting priority dstnat; policy accept;")
 	// `dnat ip` rather than plain `dnat`: an inet table serves both families and
 	// will not guess which one a rule means.
-	line("\t\tiifname %q udp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
-	line("\t\tiifname %q tcp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
+	for _, group := range plan.Egresses {
+		destination, found := dnsDestinationFor(group, plan.DNSDestinations)
+		if !found {
+			continue
+		}
+		line("\t\tiifname %q ip saddr @%s udp dport 53 dnat ip to %s:53",
+			plan.IngressInterface, dnsClientSetName(group.ID), destination.ResolverAddress)
+		line("\t\tiifname %q ip saddr @%s tcp dport 53 dnat ip to %s:53",
+			plan.IngressInterface, dnsClientSetName(group.ID), destination.ResolverAddress)
+	}
+	if len(plan.DNSDestinations) == 0 {
+		line("\t\tiifname %q udp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
+		line("\t\tiifname %q tcp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
+	} else if len(admittedDNSClients(plan)) > 0 {
+		line("\t\tiifname %q ip saddr @dns_clients_admitted udp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
+		line("\t\tiifname %q ip saddr @dns_clients_admitted tcp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
+	}
 	// The UDP fallback, for networks that block UDP/51820 by port rather than
 	// discarding UDP as such. Scoped to the uplink: an unscoped rule also matches
 	// client traffic arriving on the ingress interface, so a forwarded QUIC or

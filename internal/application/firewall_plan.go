@@ -131,8 +131,50 @@ func BuildFirewallPlan(state domain.DesiredState, uplink string) (domain.Firewal
 	// and an egress can never be confused for one another.
 	nextMark := directEgressMark + 1 + uint32(len(tunnelEgresses))
 	plan.Internals = internalNetworks(state.Tunnels, nextMark, permitted, proxied)
+	plan.DNSDestinations, err = dnsDestinations(plan.Egresses, state.Hub.DNSAddress)
+	if err != nil {
+		return domain.FirewallPlan{}, err
+	}
 
 	return plan, nil
+}
+
+func dnsDestinations(groups []domain.EgressGroup, directAddress string) ([]domain.DNSDestination, error) {
+	base, err := netip.ParsePrefix(egressLinkBase)
+	if err != nil {
+		return nil, fmt.Errorf("invalid egress link base: %w", err)
+	}
+	type entry struct {
+		id          string
+		destination domain.DNSDestination
+	}
+	entries := make([]entry, 0, len(groups))
+	tunnelIndex := 0
+	for _, group := range groups {
+		resolverAddress := directAddress
+		if group.ID != domain.EgressDirect {
+			hostAddress, _, err := linkAddresses(base, tunnelIndex)
+			if err != nil {
+				return nil, fmt.Errorf("egress %q DNS resolver: %w", group.ID, err)
+			}
+			resolverAddress = hostOf(hostAddress)
+			tunnelIndex++
+		}
+		if len(group.Addresses) == 0 {
+			continue
+		}
+		clients := append([]string(nil), group.Addresses...)
+		sort.Strings(clients)
+		entries = append(entries, entry{id: group.ID, destination: domain.DNSDestination{
+			ClientAddresses: clients, ResolverAddress: resolverAddress,
+		}})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].id < entries[j].id })
+	result := make([]domain.DNSDestination, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, entry.destination)
+	}
+	return result, nil
 }
 
 func clientPortACLs(rules []domain.ClientACL, addresses map[string]string) []domain.ClientPortACL {

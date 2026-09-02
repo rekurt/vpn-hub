@@ -1,7 +1,7 @@
 package application
 
 import (
-	"strings"
+	"reflect"
 	"testing"
 
 	"vpn-hub/internal/domain"
@@ -62,45 +62,64 @@ func TestPrivateZonesResolveThroughTheirOwnTunnel(t *testing.T) {
 	}
 }
 
-// A resolver in the main namespace would query upstream as the host, so the provider
-// would carry the traffic while public DNS still came from the hub's address.
-func TestPublicQueriesLeaveThroughTheDefaultEgress(t *testing.T) {
+// Every device must resolve public names through the same egress as its traffic.
+// Sharing one busiest-egress resolver leaks the other devices' DNS to that provider.
+func TestPublicQueriesFollowEachDevicesEgress(t *testing.T) {
 	t.Parallel()
-	state, plan, specs := dnsFixture(t)
+	state := domain.DesiredState{Hub: domain.Hub{
+		ClientCIDR: "10.80.0.0/24", DNSAddress: "10.80.0.1",
+	}, Devices: []domain.DeployedDevice{
+		{ID: "direct-device", Address: "10.80.0.2/32", Egress: domain.EgressDirect},
+		{ID: "wg-device", Address: "10.80.0.3/32", Egress: "wg-nl"},
+		{ID: "xray-device", Address: "10.80.0.4/32", Egress: "xray-de"},
+	}}
+	plan := domain.FirewallPlan{Egresses: []domain.EgressGroup{
+		{ID: "xray-de", Addresses: []string{"10.80.0.4"}},
+		{ID: domain.EgressDirect, Addresses: []string{"10.80.0.2"}},
+		{ID: "wg-nl", Addresses: []string{"10.80.0.3"}},
+	}}
+	specs := []domain.EgressSpec{
+		{TunnelID: "xray-de", Namespace: "vpn-hub-xray-de", HostAddress: "10.90.0.5/30", PeerAddress: "10.90.0.6/30"},
+		{TunnelID: "wg-nl", Namespace: "vpn-hub-wg-nl", HostAddress: "10.90.0.1/30", PeerAddress: "10.90.0.2/30"},
+	}
 
 	dns, err := BuildDNSPlan(state, plan, specs)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("BuildDNSPlan: %v", err)
 	}
-	if dns.UpstreamNamespace == "" {
-		t.Fatal("public queries must be forwarded into an egress namespace")
+	want := []domain.DNSEgressResolver{
+		{
+			EgressID: domain.EgressDirect, ClientAddresses: []string{"10.80.0.2"},
+			HubAddress: "10.80.0.1", PublicResolvers: []string{"1.1.1.1", "9.9.9.9"},
+		},
+		{
+			EgressID: "wg-nl", ClientAddresses: []string{"10.80.0.3"},
+			HubAddress: "10.90.0.1", Namespace: "vpn-hub-wg-nl", NamespaceAddress: "10.90.0.2",
+			PublicResolvers: []string{"1.1.1.1", "9.9.9.9"},
+		},
+		{
+			EgressID: "xray-de", ClientAddresses: []string{"10.80.0.4"},
+			HubAddress: "10.90.0.5", Namespace: "vpn-hub-xray-de", NamespaceAddress: "10.90.0.6",
+			PublicResolvers: []string{"1.1.1.1", "9.9.9.9"},
+		},
 	}
-	if dns.UpstreamAddress == "" {
-		t.Fatal("the upstream resolver needs an address to listen on")
-	}
-	if strings.Contains(dns.UpstreamNamespace, "corp-a") {
-		t.Error("public queries must not go through a private network")
+	if !reflect.DeepEqual(dns.EgressResolvers, want) {
+		t.Fatalf("EgressResolvers = %#v, want %#v", dns.EgressResolvers, want)
 	}
 }
 
-// With everyone on direct there is no namespace to hide in, and pretending otherwise
-// would be worse than saying so.
-func TestDirectOnlyHubResolvesForItself(t *testing.T) {
+func TestAssignedTunnelWithoutAnEgressSpecIsRejected(t *testing.T) {
 	t.Parallel()
 	state, plan, specs := dnsFixture(t)
-	for index := range state.Devices {
-		state.Devices[index].Egress = domain.EgressDirect
+	remaining := specs[:0]
+	for _, spec := range specs {
+		if spec.TunnelID != "corp-wg" {
+			remaining = append(remaining, spec)
+		}
 	}
 
-	dns, err := BuildDNSPlan(state, plan, specs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dns.UpstreamNamespace != "" {
-		t.Errorf("expected no upstream namespace, got %q", dns.UpstreamNamespace)
-	}
-	if len(dns.PublicResolvers) == 0 {
-		t.Error("the hub still needs somewhere to send public queries")
+	if _, err := BuildDNSPlan(state, plan, remaining); err == nil {
+		t.Fatal("an assigned tunnel without a spec must fail closed")
 	}
 }
 

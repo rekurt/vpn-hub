@@ -25,30 +25,26 @@ type DNSPrivateResolver struct {
 	Resolvers []string `json:"resolvers"`
 }
 
+// DNSEgressResolver is the resolver pair serving clients assigned to one egress.
+type DNSEgressResolver struct {
+	EgressID         string   `json:"egress_id"`
+	ClientAddresses  []string `json:"client_addresses"`
+	HubAddress       string   `json:"hub_address"`
+	Namespace        string   `json:"namespace,omitempty"`
+	NamespaceAddress string   `json:"namespace_address,omitempty"`
+	PublicResolvers  []string `json:"public_resolvers,omitempty"`
+}
+
 // DNSPlan is the hub's resolver policy.
 //
-// Two resolvers, not one. The hub-facing instance answers clients and sends private
-// zones into their tunnels. Everything else is forwarded to a second instance running
-// inside the default egress namespace, because a resolver in the main namespace would
-// query upstream as the host: the provider would carry the traffic while public DNS
-// still came from the hub's own address. That leak is invisible -- everything appears
-// to work -- which is why it is handled here rather than left for later.
+// Every assigned egress has a main-namespace resolver. A tunneled egress also has a
+// namespace resolver, so public DNS follows the device's traffic path.
 type DNSPlan struct {
-	// ListenAddress is the hub's address on the client subnet.
-	ListenAddress string `json:"listen_address"`
-	ClientCIDR    string `json:"client_cidr"`
+	ClientCIDR string `json:"client_cidr"`
 
 	Zones []DNSZoneRoute `json:"zones,omitempty"`
 	// PrivateResolvers are per-private-network forwarders for Zones.
 	PrivateResolvers []DNSPrivateResolver `json:"private_resolvers,omitempty"`
 
-	// UpstreamNamespace runs the resolver that public queries are forwarded to. Empty
-	// when every device leaves through the host uplink, where there is nothing to
-	// hide behind.
-	UpstreamNamespace string `json:"upstream_namespace,omitempty"`
-	// UpstreamAddress is where that resolver listens, on the namespace end of its
-	// veth link.
-	UpstreamAddress string `json:"upstream_address,omitempty"`
-	// PublicResolvers are the servers the upstream instance forwards to.
-	PublicResolvers []string `json:"public_resolvers,omitempty"`
+	EgressResolvers []DNSEgressResolver `json:"egress_resolvers"`
 }

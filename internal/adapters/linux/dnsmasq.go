@@ -12,25 +12,13 @@ import (
 )
 
 const (
-	hubResolverUnit = "vpn-hub-dns"
-	// resolverUnitPrefix carries every resolver that runs inside a namespace.
-	//
-	// "resolver" rather than "dns" because the older build derived its unit names as
-	// "vpn-hub-dns-" + tunnel id, for any id the identifier rules allow -- which is
-	// nearly all of them, only "direct" being reserved. That build therefore claimed
-	// the whole of the vpn-hub-dns-* space, and no name inside it can be reasoned
-	// about on a host upgraded from it: whatever suffix were chosen, some tunnel
-	// could have been called it. Leaving the space is what makes the sweep's
-	// exemptions sound, and it is why picking a better suffix would not have been
-	// enough -- the first attempt moved the collision from "upstream" to "public"
-	// rather than removing it.
-	resolverUnitPrefix = "vpn-hub-resolver-"
-	// upstreamResolverUnit carries the public forwarder. Its configuration file keeps
-	// the name the domain uses for it; only the unit had to move.
-	upstreamResolverUnit = resolverUnitPrefix + "public"
-	// privateResolverPrefix names the per-network forwarders. The "net-" segment
-	// keeps them clear of upstreamResolverUnit: a tunnel called "public" would
-	// otherwise claim it, which is the same collision one level down.
+	// Kept only so upgrades can stop the singular units before binding the new
+	// per-egress addresses.
+	hubResolverUnit       = "vpn-hub-dns"
+	resolverUnitPrefix    = "vpn-hub-resolver-"
+	upstreamResolverUnit  = resolverUnitPrefix + "public"
+	clientResolverPrefix  = resolverUnitPrefix + "client-"
+	publicResolverPrefix  = resolverUnitPrefix + "public-"
 	privateResolverPrefix = resolverUnitPrefix + "net-"
 	// legacyResolverPrefix is the space the older build generated into. Everything
 	// under it is stale by construction -- the current build puts nothing there -- so
@@ -39,6 +27,22 @@ const (
 	// unit has no trailing dash and so is never matched by it.
 	legacyResolverPrefix = "vpn-hub-dns-"
 )
+
+func clientResolverUnit(egressID string) string {
+	return clientResolverPrefix + safeUnitSuffix(egressID)
+}
+
+func clientResolverConfig(egressID string) string {
+	return "dnsmasq-client-" + safeUnitSuffix(egressID) + ".conf"
+}
+
+func publicResolverUnit(egressID string) string {
+	return publicResolverPrefix + safeUnitSuffix(egressID)
+}
+
+func publicResolverConfig(egressID string) string {
+	return "dnsmasq-public-" + safeUnitSuffix(egressID) + ".conf"
+}
 
 // privateResolverUnit and privateResolverConfig name a network's forwarder.
 //
@@ -53,14 +57,14 @@ func privateResolverConfig(tunnelID string) string {
 	return "dnsmasq-private-" + safeUnitSuffix(tunnelID) + ".conf"
 }
 
-// RenderHubResolver builds the dnsmasq configuration that answers clients.
+// RenderClientResolver builds the main-namespace configuration for one egress.
 //
 // Private zones go to the resolvers inside their own network, and every address
 // dnsmasq learns for such a zone is added to that network's nftables set. That is
 // what makes a name work: without the set entry the reply would resolve correctly and
 // then route out of the internet path. dnsmasq 2.87 and later do this natively with
 // --nftset, which is why no DNS proxy of our own is needed and no TTL bookkeeping.
-func RenderHubResolver(plan domain.DNSPlan) string {
+func RenderClientResolver(plan domain.DNSPlan, resolver domain.DNSEgressResolver) string {
 	var out strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&out, format+"\n", args...) }
 
@@ -68,7 +72,7 @@ func RenderHubResolver(plan domain.DNSPlan) string {
 	line("no-resolv")
 	line("no-hosts")
 	line("bind-interfaces")
-	line("listen-address=%s", plan.ListenAddress)
+	line("listen-address=%s", resolver.HubAddress)
 	// Only clients may ask; the resolver is not a service for the internet.
 	line("local-service")
 
@@ -85,21 +89,18 @@ func RenderHubResolver(plan domain.DNSPlan) string {
 		line("nftset=/%s/inet#vpn_hub#%s", zone.Zone, zone.Set)
 	}
 
-	if plan.UpstreamNamespace != "" {
-		// Everything else goes to the resolver inside the egress namespace, so public
-		// queries leave through the provider rather than from the hub's own address.
-		line("server=%s", plan.UpstreamAddress)
+	if resolver.Namespace != "" {
+		line("server=%s", resolver.NamespaceAddress)
 	} else {
-		for _, resolver := range plan.PublicResolvers {
-			line("server=%s", resolver)
+		for _, upstream := range resolver.PublicResolvers {
+			line("server=%s", upstream)
 		}
 	}
 	return out.String()
 }
 
-// RenderUpstreamResolver builds the configuration for the instance inside the egress
-// namespace, which does nothing but forward to public servers from there.
-func RenderUpstreamResolver(plan domain.DNSPlan) string {
+// RenderPublicResolver builds the public forwarder inside an egress namespace.
+func RenderPublicResolver(resolver domain.DNSEgressResolver) string {
 	var out strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&out, format+"\n", args...) }
 
@@ -107,9 +108,9 @@ func RenderUpstreamResolver(plan domain.DNSPlan) string {
 	line("no-resolv")
 	line("no-hosts")
 	line("bind-interfaces")
-	line("listen-address=%s", plan.UpstreamAddress)
-	for _, resolver := range plan.PublicResolvers {
-		line("server=%s", resolver)
+	line("listen-address=%s", resolver.NamespaceAddress)
+	for _, upstream := range resolver.PublicResolvers {
+		line("server=%s", upstream)
 	}
 	return out.String()
 }
@@ -153,15 +154,6 @@ func (d Dnsmasq) configDir() string {
 }
 
 func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan, repopulate bool) error {
-	hubConfig := filepath.Join(d.configDir(), "dnsmasq-hub.conf")
-	hubChanged, err := d.write(hubConfig, RenderHubResolver(plan))
-	if err != nil {
-		return err
-	}
-	// The packet filter was rebuilt, so the sets this resolver fills are empty and
-	// its cache would answer from memory without refilling them. Starting over is
-	// what makes the next lookup route correctly.
-	hubChanged = hubChanged || repopulate
 	// Reaping comes before starting, not after: a forwarder this revision dropped
 	// still holds its namespace's address, and one it renamed holds the address its
 	// replacement is about to ask for. Started first, the replacement would fail to
@@ -172,6 +164,10 @@ func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan, repopulate bool
 	// because one bookkeeping command failed. The error still surfaces, once the
 	// resolvers are serving.
 	stale := d.forgetStaleResolvers(ctx, plan)
+	// These fixed-name units belonged to the singular resolver model. They are not in
+	// either generated prefix and must release their addresses before replacements bind.
+	_, _ = d.run(ctx, "systemctl", "stop", hubResolverUnit+".service")
+	_, _ = d.run(ctx, "systemctl", "stop", upstreamResolverUnit+".service")
 
 	// Private-zone resolvers must start before the hub resolver, because the hub
 	// forwards matching zones to them.
@@ -187,22 +183,32 @@ func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan, repopulate bool
 		}
 	}
 
-	if plan.UpstreamNamespace != "" {
-		upstreamConfig := filepath.Join(d.configDir(), "dnsmasq-upstream.conf")
-		changed, err := d.write(upstreamConfig, RenderUpstreamResolver(plan))
+	// Namespace forwarders start before the main resolvers that depend on them.
+	for _, resolver := range plan.EgressResolvers {
+		if resolver.Namespace == "" {
+			continue
+		}
+		config := filepath.Join(d.configDir(), publicResolverConfig(resolver.EgressID))
+		changed, err := d.write(config, RenderPublicResolver(resolver))
 		if err != nil {
 			return err
 		}
-		if err := d.ensureRunning(ctx, upstreamResolverUnit, plan.UpstreamNamespace, upstreamConfig, changed || repopulate); err != nil {
+		if err := d.ensureRunning(ctx, publicResolverUnit(resolver.EgressID), resolver.Namespace, config, changed || repopulate); err != nil {
 			return err
 		}
-	} else {
-		_, _ = d.run(ctx, "systemctl", "stop", upstreamResolverUnit+".service")
 	}
 
-	// The hub resolver starts last so it never forwards to an upstream that is not
-	// listening yet.
-	return errors.Join(stale, d.ensureRunning(ctx, hubResolverUnit, "", hubConfig, hubChanged))
+	for _, resolver := range plan.EgressResolvers {
+		config := filepath.Join(d.configDir(), clientResolverConfig(resolver.EgressID))
+		changed, err := d.write(config, RenderClientResolver(plan, resolver))
+		if err != nil {
+			return err
+		}
+		if err := d.ensureRunning(ctx, clientResolverUnit(resolver.EgressID), "", config, changed || repopulate); err != nil {
+			return err
+		}
+	}
+	return stale
 }
 
 // forgetStaleResolvers stops the namespace resolvers this revision no longer names.
@@ -219,46 +225,45 @@ func (d Dnsmasq) Apply(ctx context.Context, plan domain.DNSPlan, repopulate bool
 // is still running, and one started before the directory was reconfigured has no file
 // to be found by at all.
 func (d Dnsmasq) forgetStaleResolvers(ctx context.Context, plan domain.DNSPlan) error {
-	wanted := make(map[string]struct{}, len(plan.PrivateResolvers)+1)
+	wanted := make(map[string]struct{}, len(plan.PrivateResolvers)+len(plan.EgressResolvers)*2)
 	for _, resolver := range plan.PrivateResolvers {
 		wanted[privateResolverUnit(resolver.TunnelID)] = struct{}{}
 	}
-	// The public forwarder is spared because it has an owner already: Apply starts it
-	// or stops it by name, according to whether a namespace carries the internet. Two
-	// owners for one unit is how it ends up stopped in the pass that started it. The
-	// exemption is sound only because no other build could have generated this name,
-	// which is what moving out of legacyResolverPrefix bought.
-	wanted[upstreamResolverUnit] = struct{}{}
+	for _, resolver := range plan.EgressResolvers {
+		wanted[clientResolverUnit(resolver.EgressID)] = struct{}{}
+		if resolver.Namespace != "" {
+			wanted[publicResolverUnit(resolver.EgressID)] = struct{}{}
+		}
+	}
 
-	// Two spaces, swept by different rules. Nothing current lives under the older
-	// prefix, so everything found there goes without consulting the plan -- that is
-	// the only way to be rid of a forwarder the older build named after a tunnel,
-	// since the name alone cannot say which resolver it belongs to. Listed
-	// separately, and their failures gathered, so that losing one enumeration still
-	// reaps what the other found.
 	legacy, legacyErr := d.listResolverUnits(ctx, legacyResolverPrefix)
-	current, currentErr := d.listResolverUnits(ctx, resolverUnitPrefix)
-
 	for _, unit := range legacy {
-		// No configuration is removed with it. A legacy name shares its file with the
-		// forwarder that replaced it -- dnsmasq-private-<id>.conf for a tunnel this
-		// revision still names, or the public resolver's own -- so deleting by that
-		// name would pull the configuration out from under a running, wanted process.
 		_, _ = d.run(ctx, "systemctl", "stop", unit+".service")
 	}
-	for _, unit := range current {
-		if _, keep := wanted[unit]; keep {
-			continue
-		}
-		_, _ = d.run(ctx, "systemctl", "stop", unit+".service")
-		if tunnelID, private := strings.CutPrefix(unit, privateResolverPrefix); private {
-			// The configuration goes with the process it described. Left behind, it
-			// would accumulate in the runtime directory across every revision that
-			// ever named the network, and read as a resolver still meant to exist.
-			_ = os.Remove(filepath.Join(d.configDir(), privateResolverConfig(tunnelID)))
+
+	type generatedSpace struct {
+		prefix string
+		config func(string) string
+	}
+	spaces := []generatedSpace{
+		{privateResolverPrefix, privateResolverConfig},
+		{publicResolverPrefix, publicResolverConfig},
+		{clientResolverPrefix, clientResolverConfig},
+	}
+	errs := []error{legacyErr}
+	for _, space := range spaces {
+		units, err := d.listResolverUnits(ctx, space.prefix)
+		errs = append(errs, err)
+		for _, unit := range units {
+			if _, keep := wanted[unit]; keep {
+				continue
+			}
+			_, _ = d.run(ctx, "systemctl", "stop", unit+".service")
+			suffix, _ := strings.CutPrefix(unit, space.prefix)
+			_ = os.Remove(filepath.Join(d.configDir(), space.config(suffix)))
 		}
 	}
-	return errors.Join(legacyErr, currentErr)
+	return errors.Join(errs...)
 }
 
 // listResolverUnits asks systemd which resolver units exist under a prefix.
