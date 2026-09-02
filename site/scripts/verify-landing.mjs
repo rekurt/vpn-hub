@@ -2,9 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const localeRoutes = [
-  { locale: 'en', path: 'index.html', docsPath: '/vpn-hub/docs/' },
-  { locale: 'ru', path: 'ru/index.html', docsPath: '/vpn-hub/ru/docs/' },
-  { locale: 'zh-cn', path: 'zh-cn/index.html', docsPath: '/vpn-hub/zh-cn/docs/' },
+  { locale: 'en', path: 'index.html', docsPath: '/vpn-hub/docs/', canonical: 'https://rekurt.github.io/vpn-hub/' },
+  { locale: 'ru', path: 'ru/index.html', docsPath: '/vpn-hub/ru/docs/', canonical: 'https://rekurt.github.io/vpn-hub/ru/' },
+  { locale: 'zh-cn', path: 'zh-cn/index.html', docsPath: '/vpn-hub/zh-cn/docs/', canonical: 'https://rekurt.github.io/vpn-hub/zh-cn/' },
 ];
 
 const requiredSections = [
@@ -35,12 +35,20 @@ function countH1(source) {
   return (source.match(/<h1[^>]*>/gi) ?? []).length;
 }
 
-async function checkRoute({ locale, path: route, docsPath }) {
+async function checkRoute({ locale, path: route, docsPath, canonical }) {
   const html = await readFile(join('dist', route), 'utf8');
   assert(countH1(html) === 1, `${locale}: exactly one h1`);
   assert(/<nav[^>]*>[\s\S]*?<\/nav>/i.test(html), `${locale}: navigation landmark`);
   assert(/class=\"skip-link\"/i.test(html), `${locale}: skip link`);
   assert(new RegExp(`<a[^>]+href=\"${docsPath}\"`).test(html), `${locale}: docs CTA`);
+  assert(new RegExp(`<link rel=\"canonical\" href=\"${canonical}\"`).test(html), `${locale}: canonical URL`);
+  assert(/<meta property=\"og:title\" content=\"VPN Hub\"/.test(html), `${locale}: Open Graph title`);
+  assert(/<meta name=\"twitter:card\" content=\"summary\"/.test(html), `${locale}: Twitter card`);
+  assert(/<script type=\"application\/ld\+json\">\{"@context":"https:\/\/schema\.org"/.test(html), `${locale}: structured data`);
+
+  for (const language of requiredLangSwitches) {
+    assert(new RegExp(`<link rel=\"alternate\" hreflang=\"(?:en|ru|zh-CN)\" href=\"https:\/\/rekurt\\.github\\.io${language}\"`).test(html), `${locale}: alternate language ${language}`);
+  }
 
   const langMatches = requiredLangSwitches.filter((href) => new RegExp(`href=\"${href.replace('/', '\\/')}(?:index\\.html)?\"`).test(html));
   assert(langMatches.length >= 2, `${locale}: at least two locale links`);
@@ -73,4 +81,3 @@ if (failures > 0) {
 } else {
   console.log('Landing verification passed for en, ru, zh-cn landing pages.');
 }
-
