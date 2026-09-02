@@ -112,7 +112,7 @@ func newBed(t *testing.T) bed {
 	if os.Geteuid() != 0 {
 		t.Skip("integration tests configure real interfaces and need root")
 	}
-	for _, binary := range []string{"ip", "nft", "wg", "jq", "curl"} {
+	for _, binary := range []string{"ip", "nft", "wg", "jq", "curl", "conntrack"} {
 		if _, err := exec.LookPath(binary); err != nil {
 			t.Skipf("%s is not installed", binary)
 		}
@@ -233,7 +233,7 @@ func TestDNSFollowsEachDevicesEgress(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("DNS integration configures real namespaces and needs root")
 	}
-	for _, binary := range []string{"ip", "nft", "dnsmasq", "dig", "systemctl", "systemd-run"} {
+	for _, binary := range []string{"ip", "nft", "dnsmasq", "dig", "systemctl", "systemd-run", "conntrack"} {
 		if _, err := exec.LookPath(binary); err != nil {
 			t.Skipf("%s is not installed", binary)
 		}
@@ -383,7 +383,8 @@ func TestDNSFollowsEachDevicesEgress(t *testing.T) {
 			Clients: []string{clientA, clientB},
 		}},
 	}
-	if _, err := (linux.NFTables{RuntimeDir: t.TempDir()}).Apply(context.Background(), firewallPlan); err != nil {
+	firewall := linux.NFTables{RuntimeDir: t.TempDir()}
+	if _, err := firewall.Apply(context.Background(), firewallPlan); err != nil {
 		t.Fatalf("apply DNS firewall: %v", err)
 	}
 
@@ -409,11 +410,14 @@ func TestDNSFollowsEachDevicesEgress(t *testing.T) {
 		t.Fatalf("apply DNS resolvers: %v", err)
 	}
 
-	query := func(source, name, queryType string, tcp bool) string {
+	query := func(source, name, queryType string, tcp bool, sourcePort ...int) string {
 		t.Helper()
 		args := []string{"netns", "exec", clientNamespace, "dig", "+short", "+time=1", "+tries=1"}
 		if tcp {
 			args = append(args, "+tcp")
+		}
+		if len(sourcePort) > 0 {
+			source += fmt.Sprintf("#%d", sourcePort[0])
 		}
 		args = append(args, "-b", source, "@203.0.113.53", name, queryType)
 		output, _ := exec.Command("ip", args...).Output()
@@ -439,6 +443,24 @@ func TestDNSFollowsEachDevicesEgress(t *testing.T) {
 		if address := query(egress.clientAddress, privateName, "A", false); address != privateMarker {
 			t.Errorf("%s private DNS returned %q, want %s", egress.id, address, privateMarker)
 		}
+	}
+
+	const fixedSourcePort = 53053
+	if address := query(clientA, publicName, "A", false, fixedSourcePort); address != egresses[0].markerAddress {
+		t.Fatalf("initial fixed-tuple DNS returned %q, want %s", address, egresses[0].markerAddress)
+	}
+	reassigned := firewallPlan
+	reassigned.Egresses = append([]domain.EgressGroup(nil), firewallPlan.Egresses...)
+	reassigned.Egresses[0].Addresses = nil
+	reassigned.Egresses[1].Addresses = []string{clientA, clientB}
+	reassigned.DNSDestinations = []domain.DNSDestination{{
+		ClientAddresses: []string{clientA, clientB}, ResolverAddress: egresses[1].hostAddress,
+	}}
+	if _, err := firewall.Apply(context.Background(), reassigned); err != nil {
+		t.Fatalf("reassign DNS egress: %v", err)
+	}
+	if address := query(clientA, publicName, "A", false, fixedSourcePort); address != egresses[1].markerAddress {
+		t.Fatalf("reassigned fixed-tuple DNS returned %q, want %s", address, egresses[1].markerAddress)
 	}
 }
 

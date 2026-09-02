@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -54,24 +55,6 @@ func dnsDestinationFor(group domain.EgressGroup, destinations []domain.DNSDestin
 	return domain.DNSDestination{}, false
 }
 
-func dnsResolverAddresses(plan domain.FirewallPlan) []string {
-	seen := map[string]bool{}
-	addresses := make([]string, 0, len(plan.DNSDestinations)+1)
-	add := func(address string) {
-		if address == "" || seen[address] {
-			return
-		}
-		seen[address] = true
-		addresses = append(addresses, address)
-	}
-	add(plan.DNSAddress)
-	for _, destination := range plan.DNSDestinations {
-		add(destination.ResolverAddress)
-	}
-	sort.Strings(addresses)
-	return addresses
-}
-
 func admittedDNSClients(plan domain.FirewallPlan) []string {
 	seen := map[string]bool{}
 	var clients []string
@@ -86,6 +69,71 @@ func admittedDNSClients(plan domain.FirewallPlan) []string {
 	}
 	sort.Strings(clients)
 	return clients
+}
+
+type dnsConntrackMapping struct {
+	ClientAddress   string `json:"client_address"`
+	ResolverAddress string `json:"resolver_address"`
+}
+
+type dnsConntrackState struct {
+	ClientCIDR       string                `json:"client_cidr"`
+	IngressInterface string                `json:"ingress_interface"`
+	Mappings         []dnsConntrackMapping `json:"mappings"`
+}
+
+func dnsConntrackStateFor(plan domain.FirewallPlan) dnsConntrackState {
+	resolvers := make(map[string]string)
+	for _, group := range plan.Egresses {
+		resolver := plan.DNSAddress
+		if destination, found := dnsDestinationFor(group, plan.DNSDestinations); found {
+			resolver = destination.ResolverAddress
+		}
+		for _, address := range group.Addresses {
+			resolvers[address] = resolver
+		}
+	}
+
+	addresses := make([]string, 0, len(resolvers))
+	for address := range resolvers {
+		addresses = append(addresses, address)
+	}
+	sort.Strings(addresses)
+
+	state := dnsConntrackState{ClientCIDR: plan.ClientCIDR, IngressInterface: plan.IngressInterface}
+	for _, address := range addresses {
+		state.Mappings = append(state.Mappings, dnsConntrackMapping{
+			ClientAddress: address, ResolverAddress: resolvers[address],
+		})
+	}
+	return state
+}
+
+func dnsConntrackCleanupScopes(previous *dnsConntrackState, current dnsConntrackState) []string {
+	if previous == nil {
+		if current.ClientCIDR == "" {
+			return nil
+		}
+		return []string{current.ClientCIDR}
+	}
+
+	currentResolvers := make(map[string]string, len(current.Mappings))
+	for _, mapping := range current.Mappings {
+		currentResolvers[mapping.ClientAddress] = mapping.ResolverAddress
+	}
+	affected := make(map[string]bool)
+	for _, mapping := range previous.Mappings {
+		resolver, admitted := currentResolvers[mapping.ClientAddress]
+		if previous.IngressInterface != current.IngressInterface || !admitted || resolver != mapping.ResolverAddress {
+			affected[mapping.ClientAddress] = true
+		}
+	}
+	scopes := make([]string, 0, len(affected))
+	for address := range affected {
+		scopes = append(scopes, address)
+	}
+	sort.Strings(scopes)
+	return scopes
 }
 
 // allowedSets collects the tunnels that need such a set, in a stable order.
@@ -135,7 +183,8 @@ func allowedSets(plan domain.FirewallPlan) []struct {
 //	4: traffic addressed to the client CIDR returns after the private networks and
 //	   before the default-egress mark, so client ACLs are reachable at all without
 //	   shadowing a private route that lies inside the client subnet.
-const rulesetFormatVersion = 4
+//	5: DNS accept and DNAT rules are always limited to admitted client addresses.
+const rulesetFormatVersion = 5
 
 // Fingerprint identifies a firewall plan by its content and rendering format.
 func Fingerprint(plan domain.FirewallPlan) string {
@@ -157,6 +206,7 @@ func Fingerprint(plan domain.FirewallPlan) string {
 // host, which is also what makes the golden tests possible on any platform.
 func RenderRuleset(plan domain.FirewallPlan) string {
 	var out strings.Builder
+	admittedClients := admittedDNSClients(plan)
 	line := func(format string, args ...any) {
 		fmt.Fprintf(&out, format+"\n", args...)
 	}
@@ -187,17 +237,17 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 		line("\t}")
 		line("")
 	}
-	if clients := admittedDNSClients(plan); len(plan.DNSDestinations) > 0 && len(clients) > 0 {
+	if len(admittedClients) > 0 {
 		line("\tset dns_clients_admitted {")
 		line("\t\ttype ipv4_addr")
-		line("\t\telements = { %s }", strings.Join(clients, ", "))
+		line("\t\telements = { %s }", strings.Join(admittedClients, ", "))
 		line("\t}")
 		line("")
 	}
 
 	for _, group := range plan.Egresses {
 		destination, found := dnsDestinationFor(group, plan.DNSDestinations)
-		if !found {
+		if !found || len(destination.ClientAddresses) == 0 {
 			continue
 		}
 		line("\tset %s {", dnsClientSetName(group.ID))
@@ -348,6 +398,24 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 
 	line("\tchain input {")
 	line("\t\ttype filter hook input priority filter; policy drop;")
+	for _, group := range plan.Egresses {
+		destination, found := dnsDestinationFor(group, plan.DNSDestinations)
+		if !found || len(destination.ClientAddresses) == 0 {
+			continue
+		}
+		line("\t\tiifname %q ip saddr @%s ip daddr %s udp dport 53 accept",
+			plan.IngressInterface, dnsClientSetName(group.ID), destination.ResolverAddress)
+		line("\t\tiifname %q ip saddr @%s ip daddr %s tcp dport 53 accept",
+			plan.IngressInterface, dnsClientSetName(group.ID), destination.ResolverAddress)
+		line("\t\tiifname %q ip saddr @%s udp dport 53 drop", plan.IngressInterface, dnsClientSetName(group.ID))
+		line("\t\tiifname %q ip saddr @%s tcp dport 53 drop", plan.IngressInterface, dnsClientSetName(group.ID))
+	}
+	if len(admittedClients) > 0 && plan.DNSAddress != "" {
+		line("\t\tiifname %q ip saddr @dns_clients_admitted ip daddr %s udp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
+		line("\t\tiifname %q ip saddr @dns_clients_admitted ip daddr %s tcp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
+	}
+	line("\t\tiifname %q udp dport 53 drop", plan.IngressInterface)
+	line("\t\tiifname %q tcp dport 53 drop", plan.IngressInterface)
 	line("\t\tct state established,related accept")
 	// The hub's own services are not a destination the fallback path may reach.
 	//
@@ -365,8 +433,10 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	//
 	// The resolver is the exception, and the only one: the listener has to look
 	// names up somewhere, and that somewhere is the hub's own dnsmasq.
-	line("\t\tiif lo meta mark != 0x00000000 ip daddr %s udp dport 53 accept", plan.DNSAddress)
-	line("\t\tiif lo meta mark != 0x00000000 ip daddr %s tcp dport 53 accept", plan.DNSAddress)
+	if len(admittedClients) > 0 && plan.DNSAddress != "" {
+		line("\t\tiif lo meta mark != 0x00000000 ip daddr %s udp dport 53 accept", plan.DNSAddress)
+		line("\t\tiif lo meta mark != 0x00000000 ip daddr %s tcp dport 53 accept", plan.DNSAddress)
+	}
 	line("\t\tiif lo meta mark != 0x00000000 drop")
 	line("\t\tiif lo accept")
 	line("\t\tip protocol icmp accept")
@@ -378,15 +448,6 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	// accepted with nothing listening behind it is attack surface offered for free.
 	if plan.RealityPort != 0 {
 		line("\t\ttcp dport %d accept", plan.RealityPort)
-	}
-	if len(plan.DNSDestinations) == 0 {
-		line("\t\tiifname %q ip daddr %s udp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
-		line("\t\tiifname %q ip daddr %s tcp dport 53 accept", plan.IngressInterface, plan.DNSAddress)
-	} else if len(admittedDNSClients(plan)) > 0 {
-		for _, address := range dnsResolverAddresses(plan) {
-			line("\t\tiifname %q ip saddr @dns_clients_admitted ip daddr %s udp dport 53 accept", plan.IngressInterface, address)
-			line("\t\tiifname %q ip saddr @dns_clients_admitted ip daddr %s tcp dport 53 accept", plan.IngressInterface, address)
-		}
 	}
 	line("\t}")
 	line("")
@@ -457,7 +518,7 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 	// will not guess which one a rule means.
 	for _, group := range plan.Egresses {
 		destination, found := dnsDestinationFor(group, plan.DNSDestinations)
-		if !found {
+		if !found || len(destination.ClientAddresses) == 0 {
 			continue
 		}
 		line("\t\tiifname %q ip saddr @%s udp dport 53 dnat ip to %s:53",
@@ -465,10 +526,7 @@ func RenderRuleset(plan domain.FirewallPlan) string {
 		line("\t\tiifname %q ip saddr @%s tcp dport 53 dnat ip to %s:53",
 			plan.IngressInterface, dnsClientSetName(group.ID), destination.ResolverAddress)
 	}
-	if len(plan.DNSDestinations) == 0 {
-		line("\t\tiifname %q udp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
-		line("\t\tiifname %q tcp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
-	} else if len(admittedDNSClients(plan)) > 0 {
+	if len(admittedClients) > 0 && plan.DNSAddress != "" {
 		line("\t\tiifname %q ip saddr @dns_clients_admitted udp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
 		line("\t\tiifname %q ip saddr @dns_clients_admitted tcp dport 53 dnat ip to %s:53", plan.IngressInterface, plan.DNSAddress)
 	}
@@ -554,6 +612,8 @@ type NFTables struct {
 	RuntimeDir string
 }
 
+const dnsConntrackStateFile = "dns-conntrack-state"
+
 func (n NFTables) runtimeDir() string {
 	if n.RuntimeDir != "" {
 		return n.RuntimeDir
@@ -566,6 +626,49 @@ func (n NFTables) binary() string {
 		return n.Binary
 	}
 	return "nft"
+}
+
+func (n NFTables) readDNSConntrackState() (*dnsConntrackState, error) {
+	path := filepath.Join(n.runtimeDir(), dnsConntrackStateFile)
+	payload, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read DNS conntrack state: %w", err)
+	}
+	var state dnsConntrackState
+	if err := json.Unmarshal(payload, &state); err != nil {
+		return nil, fmt.Errorf("decode DNS conntrack state: %w", err)
+	}
+	return &state, nil
+}
+
+func (n NFTables) writeDNSConntrackState(state dnsConntrackState) error {
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("encode DNS conntrack state: %w", err)
+	}
+	path := filepath.Join(n.runtimeDir(), dnsConntrackStateFile)
+	if _, err := writeIfChanged(path, string(payload)+"\n", 0o600); err != nil {
+		return fmt.Errorf("write DNS conntrack state: %w", err)
+	}
+	return nil
+}
+
+func (n NFTables) clearDNSConntrack(ctx context.Context, scopes []string) error {
+	run := n.Run
+	if run == nil {
+		run = execRunner
+	}
+	for _, scope := range scopes {
+		for _, protocol := range []string{"udp", "tcp"} {
+			if _, err := run(ctx, "conntrack", "-D", "-p", protocol, "-s", scope, "--dport", "53"); err != nil {
+				return fmt.Errorf("clear %s DNS conntrack for %s: %w", protocol, scope, err)
+			}
+		}
+	}
+	return nil
 }
 
 // Observe reports the fingerprint carried by the live table, or an empty string when
@@ -642,22 +745,35 @@ func (n NFTables) Fingerprint(plan domain.FirewallPlan) string { return Fingerpr
 // already root on the hub, whereas the addresses were being lost continuously and
 // by design.
 func (n NFTables) Apply(ctx context.Context, plan domain.FirewallPlan) (bool, error) {
-	loaded, err := n.Observe(ctx)
-	if err == nil && loaded == Fingerprint(plan) {
-		return false, nil
+	loaded, observeErr := n.Observe(ctx)
+	previous, err := n.readDNSConntrackState()
+	if err != nil {
+		return false, err
+	}
+	current := dnsConntrackStateFor(plan)
+	cleanupScopes := dnsConntrackCleanupScopes(previous, current)
+	rebuilt := observeErr != nil || loaded != Fingerprint(plan)
+
+	if rebuilt {
+		path := filepath.Join(n.runtimeDir(), "ruleset.nft")
+		if _, err := writeIfChanged(path, RenderRuleset(plan), 0o600); err != nil {
+			return false, fmt.Errorf("write nftables ruleset: %w", err)
+		}
+
+		run := n.Run
+		if run == nil {
+			run = execRunner
+		}
+		if _, err := run(ctx, n.binary(), "-f", path); err != nil {
+			return false, fmt.Errorf("apply nftables ruleset: %w", err)
+		}
 	}
 
-	path := filepath.Join(n.runtimeDir(), "ruleset.nft")
-	if _, err := writeIfChanged(path, RenderRuleset(plan), 0o600); err != nil {
-		return false, fmt.Errorf("write nftables ruleset: %w", err)
+	if err := n.clearDNSConntrack(ctx, cleanupScopes); err != nil {
+		return false, err
 	}
-
-	run := n.Run
-	if run == nil {
-		run = execRunner
+	if err := n.writeDNSConntrackState(current); err != nil {
+		return false, err
 	}
-	if _, err := run(ctx, n.binary(), "-f", path); err != nil {
-		return false, fmt.Errorf("apply nftables ruleset: %w", err)
-	}
-	return true, nil
+	return rebuilt, nil
 }

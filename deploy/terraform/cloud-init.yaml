@@ -9,6 +9,7 @@ package_upgrade: true
 
 packages:
   - nftables
+  - conntrack
   - wireguard-tools
   - iproute2
   - dkms
