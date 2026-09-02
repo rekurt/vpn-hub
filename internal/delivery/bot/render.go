@@ -14,9 +14,63 @@ import (
 	"vpn-hub/internal/domain"
 )
 
-// Everything user-visible is rendered here and nowhere else, in Russian, as
-// Telegram HTML. The functions are pure -- data in, text and keyboard out -- so the
-// golden tests can hold every screen still.
+// Renderers are pure: localized data in, Telegram HTML and keyboard out.
+
+const (
+	msgButtonTunnels            MessageID = "button/tunnels"
+	msgButtonSubscriptions      MessageID = "button/subscriptions"
+	msgButtonDeploy             MessageID = "button/deploy"
+	msgButtonRoutes             MessageID = "button/routes"
+	msgButtonClientACLs         MessageID = "button/client_acls"
+	msgButtonLogs               MessageID = "button/logs"
+	msgButtonHost               MessageID = "button/host"
+	msgButtonHub                MessageID = "button/hub"
+	msgButtonSettings           MessageID = "button/settings"
+	msgButtonMenu               MessageID = "button/menu"
+	msgButtonRefresh            MessageID = "button/refresh"
+	msgButtonConfirm            MessageID = "button/confirm"
+	msgButtonRollback           MessageID = "button/rollback"
+	msgButtonBack               MessageID = "button/back"
+	msgButtonCancel             MessageID = "button/cancel"
+	msgFormatDurationDay        MessageID = "format/duration/day"
+	msgFormatDurationDayHour    MessageID = "format/duration/day_hour"
+	msgFormatDurationHour       MessageID = "format/duration/hour"
+	msgFormatDurationHourMinute MessageID = "format/duration/hour_minute"
+	msgFormatDurationMinute     MessageID = "format/duration/minute"
+	msgFormatDurationMinuteSec  MessageID = "format/duration/minute_second"
+	msgFormatDurationSecond     MessageID = "format/duration/second"
+	msgFormatAgeNever           MessageID = "format/age/never"
+	msgFormatAgeJustNow         MessageID = "format/age/just_now"
+	msgFormatAgeAgo             MessageID = "format/age/ago"
+	msgFormatBytesGiB           MessageID = "format/bytes/gib"
+	msgFormatBytesMiB           MessageID = "format/bytes/mib"
+	msgFormatBytesKiB           MessageID = "format/bytes/kib"
+	msgFormatBytesB             MessageID = "format/bytes/b"
+	msgFormatOn                 MessageID = "format/on"
+	msgFormatOff                MessageID = "format/off"
+	msgPluralDiscrepancyOne     MessageID = "plural/discrepancy/one"
+	msgPluralDiscrepancyFew     MessageID = "plural/discrepancy/few"
+	msgPluralDiscrepancyMany    MessageID = "plural/discrepancy/many"
+	msgPluralCandidateOne       MessageID = "plural/candidate/one"
+	msgPluralCandidateFew       MessageID = "plural/candidate/few"
+	msgPluralCandidateMany      MessageID = "plural/candidate/many"
+	msgPluralTunnelOne          MessageID = "plural/tunnel/one"
+	msgPluralTunnelFew          MessageID = "plural/tunnel/few"
+	msgPluralTunnelMany         MessageID = "plural/tunnel/many"
+	msgPluralDeviceOne          MessageID = "plural/device/one"
+	msgPluralDeviceFew          MessageID = "plural/device/few"
+	msgPluralDeviceMany         MessageID = "plural/device/many"
+)
+
+// task2EnglishLocalizer is the temporary compilation seam until Bot owns the
+// configured localizer in Task 3.
+var task2EnglishLocalizer = func() Localizer {
+	l, err := NewLocalizer(LocaleEnglish)
+	if err != nil {
+		panic(err)
+	}
+	return l
+}()
 
 func esc(value string) string { return html.EscapeString(value) }
 
@@ -28,9 +82,7 @@ func keyboard(rows ...[]tg.InlineKeyboardButton) *tg.InlineKeyboardMarkup {
 	return &tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-// ruDuration says how long compactly: "2ч 5м", "3м 20с", "45с". Zero components
-// are dropped -- "5м", not "5м 0с".
-func ruDuration(d time.Duration) string {
+func formatDuration(l Localizer, d time.Duration) string {
 	if d < 0 {
 		d = 0
 	}
@@ -40,65 +92,69 @@ func ruDuration(d time.Duration) string {
 	seconds := int(d.Seconds()) % 60
 	switch {
 	case hours >= 48 && hours%24 == 0:
-		return fmt.Sprintf("%dд", hours/24)
+		return l.Text(msgFormatDurationDay, hours/24)
 	case hours >= 48:
-		return fmt.Sprintf("%dд %dч", hours/24, hours%24)
+		return l.Text(msgFormatDurationDayHour, hours/24, hours%24)
 	case hours > 0 && minutes == 0:
-		return fmt.Sprintf("%dч", hours)
+		return l.Text(msgFormatDurationHour, hours)
 	case hours > 0:
-		return fmt.Sprintf("%dч %dм", hours, minutes)
+		return l.Text(msgFormatDurationHourMinute, hours, minutes)
 	case minutes > 0 && seconds == 0:
-		return fmt.Sprintf("%dм", minutes)
+		return l.Text(msgFormatDurationMinute, minutes)
 	case minutes > 0:
-		return fmt.Sprintf("%dм %dс", minutes, seconds)
+		return l.Text(msgFormatDurationMinuteSec, minutes, seconds)
 	default:
-		return fmt.Sprintf("%dс", seconds)
+		return l.Text(msgFormatDurationSecond, seconds)
 	}
 }
 
-// ruPlural picks the Russian plural form: one, few (2-4), many.
-func ruPlural(count int, one, few, many string) string {
+func plural(l Localizer, count int, one, few, many MessageID) string {
+	if l.Locale() == LocaleEnglish {
+		if count == 1 {
+			return l.Text(one)
+		}
+		return l.Text(many)
+	}
 	tail, hundred := count%10, count%100
 	switch {
 	case hundred >= 11 && hundred <= 14:
-		return many
+		return l.Text(many)
 	case tail == 1:
-		return one
+		return l.Text(one)
 	case tail >= 2 && tail <= 4:
-		return few
+		return l.Text(few)
 	default:
-		return many
+		return l.Text(many)
 	}
 }
 
-// ruAge says how long ago something happened.
-func ruAge(now, then time.Time) string {
+func formatAge(l Localizer, now, then time.Time) string {
 	if then.IsZero() {
-		return "никогда"
+		return l.Text(msgFormatAgeNever)
 	}
 	age := now.Sub(then)
 	if age < time.Minute {
-		return "только что"
+		return l.Text(msgFormatAgeJustNow)
 	}
-	return ruDuration(age) + " назад"
+	return l.Text(msgFormatAgeAgo, formatDuration(l, age))
 }
 
-func gib(bytes uint64) string {
-	return fmt.Sprintf("%.1f ГиБ", float64(bytes)/(1<<30))
+func formatGiB(l Localizer, bytes uint64) string {
+	return l.Text(msgFormatBytesGiB, float64(bytes)/(1<<30))
 }
 
 // formatBytes picks a readable unit: traffic counters range from kilobytes on a
 // fresh peer to hundreds of gigabytes, and one fixed unit misreads both ends.
-func formatBytes(bytes uint64) string {
+func formatBytes(l Localizer, bytes uint64) string {
 	switch {
 	case bytes >= 1<<30:
-		return fmt.Sprintf("%.1f ГиБ", float64(bytes)/(1<<30))
+		return formatGiB(l, bytes)
 	case bytes >= 1<<20:
-		return fmt.Sprintf("%.1f МиБ", float64(bytes)/(1<<20))
+		return l.Text(msgFormatBytesMiB, float64(bytes)/(1<<20))
 	case bytes >= 1<<10:
-		return fmt.Sprintf("%.0f КиБ", float64(bytes)/(1<<10))
+		return l.Text(msgFormatBytesKiB, float64(bytes)/(1<<10))
 	default:
-		return fmt.Sprintf("%d Б", bytes)
+		return l.Text(msgFormatBytesB, bytes)
 	}
 }
 
@@ -113,28 +169,30 @@ func healthIcon(status domain.HealthStatus) string {
 	}
 }
 
-func onOff(enabled bool) string {
+func onOff(l Localizer, enabled bool) string {
 	if enabled {
-		return "вкл"
+		return l.Text(msgFormatOn)
 	}
-	return "выкл"
+	return l.Text(msgFormatOff)
 }
 
 // --- Main menu -------------------------------------------------------------
 
-func renderMain() (string, *tg.InlineKeyboardMarkup) {
-	text := "🏠 <b>vpn-hub</b>\nУправление хабом. Выберите раздел:"
+func renderMain(l Localizer) (string, *tg.InlineKeyboardMarkup) {
+	text := l.Text(MsgMainTitle) + "\n" + l.Text(MsgMainIntro)
 	return text, keyboard(
-		[]tg.InlineKeyboardButton{btn("📊 Статус", "st"), btn("📱 Устройства", "dev")},
-		[]tg.InlineKeyboardButton{btn("🚇 Туннели", "tun"), btn("📡 Подписки", "sub")},
-		[]tg.InlineKeyboardButton{btn("🚀 Деплой", "dep"), btn("🗺 Маршруты", "rt")},
-		[]tg.InlineKeyboardButton{btn("🔐 Между устройствами", "acl")},
-		[]tg.InlineKeyboardButton{btn("📜 Логи", "log"), btn("🖥 Хост", "host")},
-		[]tg.InlineKeyboardButton{btn("⚙️ Хаб", "hub"), btn("🔔 Настройки", "set")},
+		[]tg.InlineKeyboardButton{btn("📊 "+l.Text(MsgButtonStatus), "st"), btn("📱 "+l.Text(MsgButtonDevices), "dev")},
+		[]tg.InlineKeyboardButton{btn("🚇 "+l.Text(msgButtonTunnels), "tun"), btn("📡 "+l.Text(msgButtonSubscriptions), "sub")},
+		[]tg.InlineKeyboardButton{btn("🚀 "+l.Text(msgButtonDeploy), "dep"), btn("🗺 "+l.Text(msgButtonRoutes), "rt")},
+		[]tg.InlineKeyboardButton{btn("🔐 "+l.Text(msgButtonClientACLs), "acl")},
+		[]tg.InlineKeyboardButton{btn("📜 "+l.Text(msgButtonLogs), "log"), btn("🖥 "+l.Text(msgButtonHost), "host")},
+		[]tg.InlineKeyboardButton{btn("⚙️ "+l.Text(msgButtonHub), "hub"), btn("🔔 "+l.Text(msgButtonSettings), "set")},
 	)
 }
 
-var backRow = []tg.InlineKeyboardButton{btn("🏠 Меню", "m")}
+func backRow(l Localizer) []tg.InlineKeyboardButton {
+	return []tg.InlineKeyboardButton{btn("🏠 "+l.Text(msgButtonMenu), "m")}
+}
 
 // --- Status ----------------------------------------------------------------
 
@@ -162,70 +220,94 @@ type statusView struct {
 	DevicesTotal  int
 }
 
-func renderStatus(view statusView) (string, *tg.InlineKeyboardMarkup) {
+const (
+	msgStatusTitle          MessageID = "status/title"
+	msgStatusRevisionError  MessageID = "status/revision_error"
+	msgStatusRevisionNone   MessageID = "status/revision_none"
+	msgStatusRevision       MessageID = "status/revision"
+	msgStatusResourceCounts MessageID = "status/resource_counts"
+	msgStatusOnline         MessageID = "status/online"
+	msgStatusPending        MessageID = "status/pending"
+	msgStatusExpired        MessageID = "status/expired"
+	msgStatusAgentError     MessageID = "status/agent_error"
+	msgStatusAgent          MessageID = "status/agent"
+	msgStatusDriftError     MessageID = "status/drift_error"
+	msgStatusDriftConverged MessageID = "status/drift_converged"
+	msgStatusDriftCount     MessageID = "status/drift_count"
+	msgStatusMore           MessageID = "status/more"
+	msgStatusOperation      MessageID = "status/operation"
+	msgStatusHealthTitle    MessageID = "status/health_title"
+	msgStatusHealthEntry    MessageID = "status/health_entry"
+)
+
+func renderStatus(l Localizer, view statusView) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString("📊 <b>Статус</b>\n\n")
+	b.WriteString(l.Text(msgStatusTitle))
 
 	switch {
 	case view.StateErr != "":
-		fmt.Fprintf(&b, "Ревизия: ⚠️ %s\n", esc(view.StateErr))
+		b.WriteString(l.Text(msgStatusRevisionError, esc(view.StateErr)))
 	case view.State == nil:
-		b.WriteString("Ревизия: ещё не развёрнута\n")
+		b.WriteString(l.Text(msgStatusRevisionNone))
 	default:
-		fmt.Fprintf(&b, "Ревизия: <code>%s</code> (создана %s)\n", esc(view.State.Revision), ruAge(view.Now, view.State.GeneratedAt))
-		fmt.Fprintf(&b, "Туннелей: %d, устройств: %d\n", len(view.State.Tunnels), len(view.State.Devices))
+		b.WriteString(l.Text(msgStatusRevision, esc(view.State.Revision), formatAge(l, view.Now, view.State.GeneratedAt)))
+		tunnels := len(view.State.Tunnels)
+		devices := len(view.State.Devices)
+		b.WriteString(l.Text(msgStatusResourceCounts,
+			tunnels, plural(l, tunnels, msgPluralTunnelOne, msgPluralTunnelFew, msgPluralTunnelMany),
+			devices, plural(l, devices, msgPluralDeviceOne, msgPluralDeviceFew, msgPluralDeviceMany)))
 	}
 	if view.DevicesOnline >= 0 && view.DevicesTotal > 0 {
-		fmt.Fprintf(&b, "Онлайн: %d из %d устройств\n", view.DevicesOnline, view.DevicesTotal)
+		b.WriteString(l.Text(msgStatusOnline, view.DevicesOnline, view.DevicesTotal))
 	}
 
 	if view.Pending != nil {
 		left := view.Pending.Deadline.Sub(view.Now)
 		if left > 0 {
-			fmt.Fprintf(&b, "\n⏳ <b>Ждёт подтверждения</b>: ревизия <code>%s</code>, осталось %s\n", esc(view.Pending.Revision), ruDuration(left))
+			b.WriteString(l.Text(msgStatusPending, esc(view.Pending.Revision), formatDuration(l, left)))
 		} else {
-			fmt.Fprintf(&b, "\n⛔ Ревизия <code>%s</code> просрочена: агент откатит её на ближайшем проходе\n", esc(view.Pending.Revision))
+			b.WriteString(l.Text(msgStatusExpired, esc(view.Pending.Revision)))
 		}
 	}
 
 	b.WriteString("\n")
 	switch {
 	case view.AgentErr != "":
-		fmt.Fprintf(&b, "Агент: ⚠️ %s\n", esc(view.AgentErr))
+		b.WriteString(l.Text(msgStatusAgentError, esc(view.AgentErr)))
 	case view.Agent != nil:
 		icon := "🔴"
 		if view.Agent.Active == "active" {
 			icon = "🟢"
 		}
-		fmt.Fprintf(&b, "Агент: %s %s (%s), рестартов: %d\n", icon, esc(view.Agent.Active), esc(view.Agent.Sub), view.Agent.Restarts)
+		b.WriteString(l.Text(msgStatusAgent, icon, esc(view.Agent.Active), esc(view.Agent.Sub), view.Agent.Restarts))
 	}
 
 	switch {
 	case view.DriftErr != "":
-		fmt.Fprintf(&b, "Дрейф: ⚠️ %s\n", esc(view.DriftErr))
+		b.WriteString(l.Text(msgStatusDriftError, esc(view.DriftErr)))
 	case len(view.Drift) == 0:
-		b.WriteString("Дрейф: ✅ хост сошёлся с ревизией\n")
+		b.WriteString(l.Text(msgStatusDriftConverged))
 	default:
-		fmt.Fprintf(&b, "Дрейф: ⚠️ %d %s:\n", len(view.Drift), ruPlural(len(view.Drift), "расхождение", "расхождения", "расхождений"))
+		b.WriteString(l.Text(msgStatusDriftCount, len(view.Drift), plural(l, len(view.Drift), msgPluralDiscrepancyOne, msgPluralDiscrepancyFew, msgPluralDiscrepancyMany)))
 		for index, operation := range view.Drift {
 			if index == 8 {
-				fmt.Fprintf(&b, " • … и ещё %d\n", len(view.Drift)-index)
+				b.WriteString(l.Text(msgStatusMore, len(view.Drift)-index))
 				break
 			}
-			fmt.Fprintf(&b, " • <code>%s</code>\n", esc(operation.String()))
+			b.WriteString(l.Text(msgStatusOperation, esc(operation.String())))
 		}
 	}
 
 	if len(view.Health) > 0 {
-		fmt.Fprintf(&b, "\n<b>Здоровье туннелей</b> (проба раз в %s):\n", ruDuration(view.HealthEvery))
+		b.WriteString(l.Text(msgStatusHealthTitle, formatDuration(l, view.HealthEvery)))
 		for _, entry := range view.Health {
-			fmt.Fprintf(&b, "%s <code>%s</code> — %s (%s)\n", healthIcon(entry.Status), esc(entry.ID), esc(entry.Reason), ruAge(view.Now, entry.CheckedAt))
+			b.WriteString(l.Text(msgStatusHealthEntry, healthIcon(entry.Status), esc(entry.ID), esc(entry.Reason), formatAge(l, view.Now, entry.CheckedAt)))
 		}
 	}
 
-	rows := [][]tg.InlineKeyboardButton{{btn("🔄 Обновить", "st"), btn("🏠 Меню", "m")}}
+	rows := [][]tg.InlineKeyboardButton{{btn("🔄 "+l.Text(msgButtonRefresh), "st"), btn("🏠 "+l.Text(msgButtonMenu), "m")}}
 	if view.Pending != nil {
-		rows = append([][]tg.InlineKeyboardButton{{btn("✅ Подтвердить", "dep:ok"), btn("↩️ Откатить", "dep:rb!")}}, rows...)
+		rows = append([][]tg.InlineKeyboardButton{{btn("✅ "+l.Text(msgButtonConfirm), "dep:ok"), btn("↩️ "+l.Text(msgButtonRollback), "dep:rb!")}}, rows...)
 	}
 	return b.String(), keyboard(rows...)
 }
@@ -250,14 +332,34 @@ func (d deviceEntry) online() bool {
 		d.Now.Sub(d.Peer.LatestHandshake) <= linux.HandshakeGrace
 }
 
-func (d deviceEntry) presence() string {
+const (
+	msgDevicePresenceNever  MessageID = "device/presence/never"
+	msgDevicePresenceOnline MessageID = "device/presence/online"
+	msgDevicePresenceAgo    MessageID = "device/presence/ago"
+	msgDevicesTitle         MessageID = "devices/title"
+	msgDevicesEmpty         MessageID = "devices/empty"
+	msgDevicesRevokedMark   MessageID = "devices/revoked_mark"
+	msgButtonAddDevice      MessageID = "button/add_device"
+	msgDeviceAddress        MessageID = "device/address"
+	msgDeviceEgress         MessageID = "device/egress"
+	msgDeviceKey            MessageID = "device/key"
+	msgDeviceTraffic        MessageID = "device/traffic"
+	msgDeviceRevoked        MessageID = "device/revoked"
+	msgButtonChangeEgress   MessageID = "button/change_egress"
+	msgButtonSendProfile    MessageID = "button/send_profile"
+	msgButtonReissueProfile MessageID = "button/reissue_profile"
+	msgButtonRevoke         MessageID = "button/revoke"
+	msgEgressChoice         MessageID = "egress/choice"
+)
+
+func (d deviceEntry) presence(l Localizer) string {
 	switch {
 	case d.Peer == nil || d.Peer.LatestHandshake.IsZero():
-		return "не подключалось"
+		return l.Text(msgDevicePresenceNever)
 	case d.online():
-		return "онлайн"
+		return l.Text(msgDevicePresenceOnline)
 	default:
-		return "было " + ruAge(d.Now, d.Peer.LatestHandshake)
+		return l.Text(msgDevicePresenceAgo, formatAge(l, d.Now, d.Peer.LatestHandshake))
 	}
 }
 
@@ -272,19 +374,19 @@ func (d deviceEntry) presenceIcon() string {
 	}
 }
 
-func renderDevices(devices []deviceEntry) (string, *tg.InlineKeyboardMarkup) {
+func renderDevices(l Localizer, devices []deviceEntry) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString("📱 <b>Устройства</b>\n\n")
+	b.WriteString(l.Text(msgDevicesTitle))
 	if len(devices) == 0 {
-		b.WriteString("Пока ни одного устройства.\n")
+		b.WriteString(l.Text(msgDevicesEmpty))
 	}
 	for _, device := range devices {
 		mark := ""
 		if device.Revoked {
-			mark = ", отозвано"
+			mark = l.Text(msgDevicesRevokedMark)
 		}
 		fmt.Fprintf(&b, "%s <code>%s</code> → %s — %s%s\n",
-			device.presenceIcon(), esc(device.ID), esc(device.Egress), device.presence(), mark)
+			device.presenceIcon(), esc(device.ID), esc(device.Egress), device.presence(l), mark)
 	}
 
 	var rows [][]tg.InlineKeyboardButton
@@ -295,34 +397,34 @@ func renderDevices(devices []deviceEntry) (string, *tg.InlineKeyboardMarkup) {
 		}
 		rows = append(rows, row)
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("➕ Добавить устройство", "dev:add")}, backRow)
+	rows = append(rows, []tg.InlineKeyboardButton{btn("➕ "+l.Text(msgButtonAddDevice), "dev:add")}, backRow(l))
 	return b.String(), keyboard(rows...)
 }
 
-func renderDeviceCard(device deviceEntry) (string, *tg.InlineKeyboardMarkup) {
+func renderDeviceCard(l Localizer, device deviceEntry) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "📱 <b>%s</b>\n\n", esc(device.ID))
-	fmt.Fprintf(&b, "Адрес: <code>%s</code>\n", esc(device.Address))
-	fmt.Fprintf(&b, "Egress: <code>%s</code>\n", esc(device.Egress))
-	fmt.Fprintf(&b, "Ключ: <code>%s…</code>\n", esc(shorten(device.PublicKey, 12)))
-	fmt.Fprintf(&b, "\n%s %s\n", device.presenceIcon(), device.presence())
+	b.WriteString(l.Text(msgDeviceAddress, esc(device.Address)))
+	b.WriteString(l.Text(msgDeviceEgress, esc(device.Egress)))
+	b.WriteString(l.Text(msgDeviceKey, esc(shorten(device.PublicKey, 12))))
+	fmt.Fprintf(&b, "\n%s %s\n", device.presenceIcon(), device.presence(l))
 	if device.Peer != nil && (device.Peer.RxBytes > 0 || device.Peer.TxBytes > 0) {
-		fmt.Fprintf(&b, "Трафик: ⭱ %s от устройства, ⭳ %s к нему\n", formatBytes(device.Peer.RxBytes), formatBytes(device.Peer.TxBytes))
+		b.WriteString(l.Text(msgDeviceTraffic, formatBytes(l, device.Peer.RxBytes), formatBytes(l, device.Peer.TxBytes)))
 	}
 	if device.Revoked {
-		b.WriteString("\n🚫 <b>Отозвано</b>: устройство исключается из ревизии при деплое.\nПеревыпуск профиля снимет отзыв.\n")
+		b.WriteString(l.Text(msgDeviceRevoked))
 	}
 	rows := [][]tg.InlineKeyboardButton{
-		{btn("🔀 Сменить egress", "dev:eg:"+device.ID)},
+		{btn("🔀 "+l.Text(msgButtonChangeEgress), "dev:eg:"+device.ID)},
 	}
 	if !device.Revoked {
-		rows = append(rows, []tg.InlineKeyboardButton{btn("📄 Прислать текущий профиль", "dev:pr:"+device.ID)})
-		rows = append(rows, []tg.InlineKeyboardButton{btn("📤 Перевыпустить профиль", "dev:re:"+device.ID)})
-		rows = append(rows, []tg.InlineKeyboardButton{btn("🚫 Отозвать", "dev:rv:"+device.ID)})
+		rows = append(rows, []tg.InlineKeyboardButton{btn("📄 "+l.Text(msgButtonSendProfile), "dev:pr:"+device.ID)})
+		rows = append(rows, []tg.InlineKeyboardButton{btn("📤 "+l.Text(msgButtonReissueProfile), "dev:re:"+device.ID)})
+		rows = append(rows, []tg.InlineKeyboardButton{btn("🚫 "+l.Text(msgButtonRevoke), "dev:rv:"+device.ID)})
 	} else {
-		rows = append(rows, []tg.InlineKeyboardButton{btn("📤 Перевыпустить профиль", "dev:re:"+device.ID)})
+		rows = append(rows, []tg.InlineKeyboardButton{btn("📤 "+l.Text(msgButtonReissueProfile), "dev:re:"+device.ID)})
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ Устройства", "dev"), btn("🏠 Меню", "m")})
+	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ "+l.Text(MsgButtonDevices), "dev"), btn("🏠 "+l.Text(msgButtonMenu), "m")})
 	return b.String(), keyboard(rows...)
 }
 
@@ -337,8 +439,8 @@ func shorten(value string, length int) string {
 	return string(runes[:length])
 }
 
-func renderEgressChoice(deviceID, current string, egresses []string) (string, *tg.InlineKeyboardMarkup) {
-	text := fmt.Sprintf("🔀 Через что выпускать <b>%s</b> в интернет?\nСейчас: <code>%s</code>", esc(deviceID), esc(current))
+func renderEgressChoice(l Localizer, deviceID, current string, egresses []string) (string, *tg.InlineKeyboardMarkup) {
+	text := l.Text(msgEgressChoice, esc(deviceID), esc(current))
 	var rows [][]tg.InlineKeyboardButton
 	for _, egress := range egresses {
 		label := egress
@@ -347,14 +449,14 @@ func renderEgressChoice(deviceID, current string, egresses []string) (string, *t
 		}
 		rows = append(rows, []tg.InlineKeyboardButton{btn(label, "dev:eg:"+deviceID+":"+egress)})
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ Назад", "dev:c:"+deviceID)})
+	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ "+l.Text(msgButtonBack), "dev:c:"+deviceID)})
 	return text, keyboard(rows...)
 }
 
 // renderConfirm is the second tap every dangerous action requires.
-func renderConfirm(question, yesData, noData string) (string, *tg.InlineKeyboardMarkup) {
+func renderConfirm(l Localizer, question, yesData, noData string) (string, *tg.InlineKeyboardMarkup) {
 	return "❓ " + question, keyboard(
-		[]tg.InlineKeyboardButton{btn("Да", yesData), btn("Нет", noData)},
+		[]tg.InlineKeyboardButton{btn(l.Text(MsgConfirmYes), yesData), btn(l.Text(MsgConfirmNo), noData)},
 	)
 }
 
@@ -365,9 +467,37 @@ type tunnelEntry struct {
 	Health *healthEntry
 }
 
-func renderTunnels(tunnels []tunnelEntry) (string, *tg.InlineKeyboardMarkup) {
+const (
+	msgTunnelsTitle      MessageID = "tunnels/title"
+	msgButtonTestAll     MessageID = "button/test_all"
+	msgAccessTitle       MessageID = "access/title"
+	msgAccessEmpty       MessageID = "access/empty"
+	msgAccessRestricted  MessageID = "access/restricted"
+	msgButtonToTunnel    MessageID = "button/to_tunnel"
+	msgTunnelRole        MessageID = "tunnel/role"
+	msgTunnelType        MessageID = "tunnel/type"
+	msgTunnelState       MessageID = "tunnel/state"
+	msgTunnelSource      MessageID = "tunnel/source"
+	msgTunnelRoutes      MessageID = "tunnel/routes"
+	msgTunnelDNSZones    MessageID = "tunnel/dns_zones"
+	msgTunnelOnlyFor     MessageID = "tunnel/only_for"
+	msgTunnelAllDevices  MessageID = "tunnel/all_devices"
+	msgTunnelHealth      MessageID = "tunnel/health"
+	msgSourceHidden      MessageID = "source/hidden"
+	msgButtonDisable     MessageID = "button/disable"
+	msgButtonEnable      MessageID = "button/enable"
+	msgButtonTest        MessageID = "button/test"
+	msgButtonProbes      MessageID = "button/probes"
+	msgButtonAccess      MessageID = "button/access"
+	msgButtonRemoveRoute MessageID = "button/remove_route"
+	msgButtonAddRoute    MessageID = "button/add_route"
+	msgButtonAddDNSZone  MessageID = "button/add_dns_zone"
+	msgButtonRemoveZone  MessageID = "button/remove_zone"
+)
+
+func renderTunnels(l Localizer, tunnels []tunnelEntry) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString("🚇 <b>Туннели</b>\n\n")
+	b.WriteString(l.Text(msgTunnelsTitle))
 	var rows [][]tg.InlineKeyboardButton
 	enabled := 0
 	for _, entry := range tunnels {
@@ -381,28 +511,28 @@ func renderTunnels(tunnels []tunnelEntry) (string, *tg.InlineKeyboardMarkup) {
 		} else {
 			enabled++
 		}
-		fmt.Fprintf(&b, "%s <code>%s</code> — %s, %s, %s\n", icon, esc(tunnel.ID), esc(string(tunnel.Role)), esc(string(tunnel.Type)), onOff(tunnel.IsEnabled()))
+		fmt.Fprintf(&b, "%s <code>%s</code> — %s, %s, %s\n", icon, esc(tunnel.ID), esc(string(tunnel.Role)), esc(string(tunnel.Type)), onOff(l, tunnel.IsEnabled()))
 		rows = append(rows, []tg.InlineKeyboardButton{btn(tunnel.ID, "tun:c:"+tunnel.ID)})
 	}
 	if enabled > 0 {
-		rows = append(rows, []tg.InlineKeyboardButton{btn("🩺 Проверить все", "tun:ta")})
+		rows = append(rows, []tg.InlineKeyboardButton{btn("🩺 "+l.Text(msgButtonTestAll), "tun:ta")})
 	}
-	rows = append(rows, backRow)
+	rows = append(rows, backRow(l))
 	return b.String(), keyboard(rows...)
 }
 
 // renderAccess is the allowed_devices editor: which devices may use this egress.
-func renderAccess(tunnelID string, devices []string, allowed []string) (string, *tg.InlineKeyboardMarkup) {
+func renderAccess(l Localizer, tunnelID string, devices []string, allowed []string) (string, *tg.InlineKeyboardMarkup) {
 	allowedSet := map[string]bool{}
 	for _, id := range allowed {
 		allowedSet[id] = true
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "👥 <b>Доступ к %s</b>\n\n", esc(tunnelID))
+	b.WriteString(l.Text(msgAccessTitle, esc(tunnelID)))
 	if len(allowed) == 0 {
-		b.WriteString("Список пуст — egress разрешён <b>всем</b> устройствам.\nОтметьте устройство, чтобы ограничить доступ только отмеченными.\n")
+		b.WriteString(l.Text(msgAccessEmpty))
 	} else {
-		b.WriteString("Egress разрешён только отмеченным устройствам.\nСнимите все отметки, чтобы снова разрешить всем.\n")
+		b.WriteString(l.Text(msgAccessRestricted))
 	}
 	var rows [][]tg.InlineKeyboardButton
 	for _, id := range devices {
@@ -414,64 +544,66 @@ func renderAccess(tunnelID string, devices []string, allowed []string) (string, 
 			rows = append(rows, []tg.InlineKeyboardButton{btn(mark+" "+id, data)})
 		}
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID), btn("🏠 Меню", "m")})
+	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ "+l.Text(msgButtonToTunnel), "tun:c:"+tunnelID), btn("🏠 "+l.Text(msgButtonMenu), "m")})
 	return b.String(), keyboard(rows...)
 }
 
-func renderTunnelCard(entry tunnelEntry, now time.Time) (string, *tg.InlineKeyboardMarkup) {
+func renderTunnelCard(l Localizer, entry tunnelEntry, now time.Time) (string, *tg.InlineKeyboardMarkup) {
 	tunnel := entry.Tunnel
 	var b strings.Builder
 	fmt.Fprintf(&b, "🚇 <b>%s</b>\n\n", esc(tunnel.ID))
-	fmt.Fprintf(&b, "Роль: %s\nТип: %s\nСостояние: %s\n", esc(string(tunnel.Role)), esc(string(tunnel.Type)), onOff(tunnel.IsEnabled()))
-	fmt.Fprintf(&b, "Источник: %s <code>%s</code>\n", esc(string(tunnel.Source.Kind)), esc(sourceForDisplay(tunnel.Source)))
+	b.WriteString(l.Text(msgTunnelRole, esc(string(tunnel.Role))))
+	b.WriteString(l.Text(msgTunnelType, esc(string(tunnel.Type))))
+	b.WriteString(l.Text(msgTunnelState, onOff(l, tunnel.IsEnabled())))
+	b.WriteString(l.Text(msgTunnelSource, esc(string(tunnel.Source.Kind)), esc(sourceForDisplay(l, tunnel.Source))))
 	if len(tunnel.Routes) > 0 {
-		fmt.Fprintf(&b, "Маршруты: <code>%s</code>\n", esc(strings.Join(tunnel.Routes, ", ")))
+		b.WriteString(l.Text(msgTunnelRoutes, esc(strings.Join(tunnel.Routes, ", "))))
 	}
 	if len(tunnel.DNSZones) > 0 {
-		fmt.Fprintf(&b, "DNS-зоны: <code>%s</code>\n", esc(strings.Join(tunnel.DNSZones, ", ")))
+		b.WriteString(l.Text(msgTunnelDNSZones, esc(strings.Join(tunnel.DNSZones, ", "))))
 	}
 	if len(tunnel.AllowedDevices) > 0 {
-		fmt.Fprintf(&b, "Только для: <code>%s</code>\n", esc(strings.Join(tunnel.AllowedDevices, ", ")))
+		b.WriteString(l.Text(msgTunnelOnlyFor, esc(strings.Join(tunnel.AllowedDevices, ", "))))
 	} else if tunnel.Role == domain.RoleEgress {
-		b.WriteString("Доступ: все устройства\n")
+		b.WriteString(l.Text(msgTunnelAllDevices))
 	}
 	if entry.Health != nil {
-		fmt.Fprintf(&b, "\n%s %s (%s)\n", healthIcon(entry.Health.Status), esc(entry.Health.Reason), ruAge(now, entry.Health.CheckedAt))
+		b.WriteString(l.Text(msgTunnelHealth, healthIcon(entry.Health.Status), esc(entry.Health.Reason), formatAge(l, now, entry.Health.CheckedAt)))
 	}
 
 	var rows [][]tg.InlineKeyboardButton
 	if tunnel.IsEnabled() {
-		rows = append(rows, []tg.InlineKeyboardButton{btn("⏸ Выключить", "tun:off:"+tunnel.ID), btn("🩺 Проверить", "tun:t:"+tunnel.ID)})
+		rows = append(rows, []tg.InlineKeyboardButton{btn("⏸ "+l.Text(msgButtonDisable), "tun:off:"+tunnel.ID), btn("🩺 "+l.Text(msgButtonTest), "tun:t:"+tunnel.ID)})
 	} else {
-		rows = append(rows, []tg.InlineKeyboardButton{btn("▶️ Включить", "tun:on:"+tunnel.ID), btn("🩺 Проверить", "tun:t:"+tunnel.ID)})
+		rows = append(rows, []tg.InlineKeyboardButton{btn("▶️ "+l.Text(msgButtonEnable), "tun:on:"+tunnel.ID), btn("🩺 "+l.Text(msgButtonTest), "tun:t:"+tunnel.ID)})
 	}
-	probesRow := []tg.InlineKeyboardButton{btn("🩺 Пробы (tcp/https/dns)", "tun:pr:"+tunnel.ID)}
+	probesRow := []tg.InlineKeyboardButton{btn("🩺 "+l.Text(msgButtonProbes), "tun:pr:"+tunnel.ID)}
 	if tunnel.Role == domain.RoleEgress {
-		probesRow = append(probesRow, btn("👥 Доступ", "tun:ac:"+tunnel.ID))
+		probesRow = append(probesRow, btn("👥 "+l.Text(msgButtonAccess), "tun:ac:"+tunnel.ID))
 	}
 	rows = append(rows, probesRow)
 	for _, route := range tunnel.Routes {
 		data := "tun:rd:" + tunnel.ID + ":" + route
 		if len(data) <= 64 {
-			rows = append(rows, []tg.InlineKeyboardButton{btn("➖ маршрут "+route, data)})
+			rows = append(rows, []tg.InlineKeyboardButton{btn("➖ "+l.Text(msgButtonRemoveRoute, route), data)})
 		}
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("➕ Маршрут", "tun:ra:"+tunnel.ID), btn("➕ DNS-зона", "tun:za:"+tunnel.ID)})
+	rows = append(rows, []tg.InlineKeyboardButton{btn("➕ "+l.Text(msgButtonAddRoute), "tun:ra:"+tunnel.ID), btn("➕ "+l.Text(msgButtonAddDNSZone), "tun:za:"+tunnel.ID)})
 	for _, zone := range tunnel.DNSZones {
 		data := "tun:zd:" + tunnel.ID + ":" + zone
 		if len(data) <= 64 {
-			rows = append(rows, []tg.InlineKeyboardButton{btn("➖ зона "+zone, data)})
+			rows = append(rows, []tg.InlineKeyboardButton{btn("➖ "+l.Text(msgButtonRemoveZone, zone), data)})
 		}
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ Туннели", "tun"), btn("🏠 Меню", "m")})
+	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ "+l.Text(msgButtonTunnels), "tun"), btn("🏠 "+l.Text(msgButtonMenu), "m")})
 	return b.String(), keyboard(rows...)
 }
 
 // sourceForDisplay keeps credentials out of the chat: a subscription URL carries a
 // token, exactly like it is kept out of revisions.
-func sourceForDisplay(source domain.TunnelSource) string {
+func sourceForDisplay(l Localizer, source domain.TunnelSource) string {
 	if source.Kind == domain.SourceSubscription || source.Kind == domain.SourceXrayURI {
-		return "[скрыто]"
+		return l.Text(msgSourceHidden)
 	}
 	return source.Value
 }
@@ -483,12 +615,50 @@ type clientACLEntry struct {
 	Ordinal int
 }
 
-func renderClientACLs(entries []clientACLEntry) (string, *tg.InlineKeyboardMarkup) {
+const (
+	msgACLTitle                   MessageID = "acl/title"
+	msgACLIntro                   MessageID = "acl/intro"
+	msgACLEmpty                   MessageID = "acl/empty"
+	msgButtonAdd                  MessageID = "button/add"
+	msgACLAnyDevice               MessageID = "acl/any_device"
+	msgACLNewRule                 MessageID = "acl/new_rule"
+	msgACLSourceStep              MessageID = "acl/source_step"
+	msgACLTargetStep              MessageID = "acl/target_step"
+	msgDeployTitle                MessageID = "deploy/title"
+	msgDeployNoCurrent            MessageID = "deploy/no_current"
+	msgDeployCurrent              MessageID = "deploy/current"
+	msgDeployNext                 MessageID = "deploy/next"
+	msgDeployRevoked              MessageID = "deploy/revoked"
+	msgDeployNoChanges            MessageID = "deploy/no_changes"
+	msgDeployChanges              MessageID = "deploy/changes"
+	msgDeployChange               MessageID = "deploy/change"
+	msgDeployInsuranceExplanation MessageID = "deploy/insurance_explanation"
+	msgButtonInsuredDeploy        MessageID = "button/insured_deploy"
+	msgButtonImmediateDeploy      MessageID = "button/immediate_deploy"
+	msgButtonPreviousRevision     MessageID = "button/previous_revision"
+	msgDiffAddTunnel              MessageID = "diff/add_tunnel"
+	msgDiffEditTunnel             MessageID = "diff/edit_tunnel"
+	msgDiffRemoveTunnel           MessageID = "diff/remove_tunnel"
+	msgDiffAddDevice              MessageID = "diff/add_device"
+	msgDiffChangeEgress           MessageID = "diff/change_egress"
+	msgDiffEditDevice             MessageID = "diff/edit_device"
+	msgDiffRemoveDevice           MessageID = "diff/remove_device"
+	msgDiffAddACL                 MessageID = "diff/add_acl"
+	msgDiffRemoveACL              MessageID = "diff/remove_acl"
+	msgDiffHub                    MessageID = "diff/hub"
+	msgConfirmWithin              MessageID = "deploy/confirm_within"
+	msgCountdown                  MessageID = "deploy/countdown"
+	msgCountdownOverdue           MessageID = "deploy/countdown_overdue"
+	msgButtonConfirmAnyway        MessageID = "button/confirm_anyway"
+	msgButtonRollbackNow          MessageID = "button/rollback_now"
+)
+
+func renderClientACLs(l Localizer, entries []clientACLEntry) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString("🔐 <b>Доступ между устройствами</b>\n\n")
-	b.WriteString("По умолчанию VPN-клиенты не ходят друг к другу. Здесь — только точечные разрешения.\n\n")
+	b.WriteString(l.Text(msgACLTitle))
+	b.WriteString(l.Text(msgACLIntro))
 	if len(entries) == 0 {
-		b.WriteString("Правил пока нет.\n")
+		b.WriteString(l.Text(msgACLEmpty))
 	}
 	var rows [][]tg.InlineKeyboardButton
 	for _, entry := range entries {
@@ -500,21 +670,21 @@ func renderClientACLs(entries []clientACLEntry) (string, *tg.InlineKeyboardMarku
 			fmt.Sprintf("acl:rm:%d", entry.Ordinal),
 		)})
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("➕ Добавить", "acl:add")}, backRow)
+	rows = append(rows, []tg.InlineKeyboardButton{btn("➕ "+l.Text(msgButtonAdd), "acl:add")}, backRow(l))
 	return b.String(), keyboard(rows...)
 }
 
-func renderClientACLSource(devices []string) (string, *tg.InlineKeyboardMarkup) {
+func renderClientACLSource(l Localizer, devices []string) (string, *tg.InlineKeyboardMarkup) {
 	var rows [][]tg.InlineKeyboardButton
-	rows = append(rows, []tg.InlineKeyboardButton{btn("any — любое устройство", "acl:src:any")})
+	rows = append(rows, []tg.InlineKeyboardButton{btn(l.Text(msgACLAnyDevice), "acl:src:any")})
 	for _, id := range devices {
 		rows = append(rows, []tg.InlineKeyboardButton{btn(id, "acl:src:"+id)})
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("✖️ Отмена", "acl:x")})
-	return "➕ <b>Новое правило</b>\n\nШаг 1 из 3. Кто получает доступ?", keyboard(rows...)
+	rows = append(rows, []tg.InlineKeyboardButton{btn("✖️ "+l.Text(msgButtonCancel), "acl:x")})
+	return l.Text(msgACLNewRule) + l.Text(msgACLSourceStep), keyboard(rows...)
 }
 
-func renderClientACLTarget(source string, devices []string) (string, *tg.InlineKeyboardMarkup) {
+func renderClientACLTarget(l Localizer, source string, devices []string) (string, *tg.InlineKeyboardMarkup) {
 	var rows [][]tg.InlineKeyboardButton
 	for _, id := range devices {
 		if id == source {
@@ -524,8 +694,8 @@ func renderClientACLTarget(source string, devices []string) (string, *tg.InlineK
 			rows = append(rows, []tg.InlineKeyboardButton{btn(id, data)})
 		}
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("✖️ Отмена", "acl:x")})
-	return fmt.Sprintf("Шаг 2 из 3. К какому устройству открыть доступ для <code>%s</code>?", esc(source)), keyboard(rows...)
+	rows = append(rows, []tg.InlineKeyboardButton{btn("✖️ "+l.Text(msgButtonCancel), "acl:x")})
+	return l.Text(msgACLTargetStep, esc(source)), keyboard(rows...)
 }
 
 // --- Deploy ----------------------------------------------------------------
@@ -537,42 +707,46 @@ type deployView struct {
 	Changes []string
 }
 
-func renderDeployPreview(view deployView) (string, *tg.InlineKeyboardMarkup) {
+func renderDeployPreview(l Localizer, view deployView) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString("🚀 <b>Деплой</b>\n\n")
+	b.WriteString(l.Text(msgDeployTitle))
 	if view.Current == nil {
-		b.WriteString("Активной ревизии нет: это первый деплой, откатывать будет некуда.\n")
+		b.WriteString(l.Text(msgDeployNoCurrent))
 	} else {
-		fmt.Fprintf(&b, "Активная ревизия: <code>%s</code>\n", esc(view.Current.Revision))
+		b.WriteString(l.Text(msgDeployCurrent, esc(view.Current.Revision)))
 	}
-	fmt.Fprintf(&b, "Новая ревизия: <code>%s</code> (%d туннелей, %d устройств)\n", esc(view.Next.Revision), len(view.Next.Tunnels), len(view.Next.Devices))
+	tunnels := len(view.Next.Tunnels)
+	devices := len(view.Next.Devices)
+	b.WriteString(l.Text(msgDeployNext, esc(view.Next.Revision),
+		tunnels, plural(l, tunnels, msgPluralTunnelOne, msgPluralTunnelFew, msgPluralTunnelMany),
+		devices, plural(l, devices, msgPluralDeviceOne, msgPluralDeviceFew, msgPluralDeviceMany)))
 	if len(view.Revoked) > 0 {
-		fmt.Fprintf(&b, "Исключены отозванные: <code>%s</code>\n", esc(strings.Join(view.Revoked, ", ")))
+		b.WriteString(l.Text(msgDeployRevoked, esc(strings.Join(view.Revoked, ", "))))
 	}
 	if view.Current != nil && view.Current.Revision == view.Next.Revision {
-		b.WriteString("\n✅ Конфигурация не отличается от активной ревизии; деплой ничего не изменит.\n")
+		b.WriteString(l.Text(msgDeployNoChanges))
 	} else if len(view.Changes) > 0 {
-		b.WriteString("\n<b>Изменения:</b>\n")
+		b.WriteString(l.Text(msgDeployChanges))
 		for _, change := range view.Changes {
-			fmt.Fprintf(&b, " • %s\n", esc(change))
+			b.WriteString(l.Text(msgDeployChange, esc(change)))
 		}
 	}
-	b.WriteString("\nСо страховкой агент вернёт предыдущую ревизию сам, если не подтвердить за выбранное время — даже если новая ревизия отрежет доступ.")
+	b.WriteString(l.Text(msgDeployInsuranceExplanation))
 
 	revision := view.Next.Revision
 	rows := [][]tg.InlineKeyboardButton{
-		{btn("✅ Со страховкой…", "dep:arm:"+revision)},
-		{btn("⚡ Применить без страховки", "dep:now:"+revision)},
+		{btn("✅ "+l.Text(msgButtonInsuredDeploy), "dep:arm:"+revision)},
+		{btn("⚡ "+l.Text(msgButtonImmediateDeploy), "dep:now:"+revision)},
 	}
 	if view.Current != nil {
-		rows = append(rows, []tg.InlineKeyboardButton{btn("↩️ Вернуть предыдущую ревизию", "dep:rb")})
+		rows = append(rows, []tg.InlineKeyboardButton{btn("↩️ "+l.Text(msgButtonPreviousRevision), "dep:rb")})
 	}
-	rows = append(rows, backRow)
+	rows = append(rows, backRow(l))
 	return b.String(), keyboard(rows...)
 }
 
 // diffStates names what a deploy would change, in operator terms.
-func diffStates(current *domain.DesiredState, next domain.DesiredState) []string {
+func diffStates(l Localizer, current *domain.DesiredState, next domain.DesiredState) []string {
 	if current == nil {
 		return nil
 	}
@@ -588,14 +762,14 @@ func diffStates(current *domain.DesiredState, next domain.DesiredState) []string
 		previous, existed := oldTunnels[tunnel.ID]
 		switch {
 		case !existed:
-			changes = append(changes, "➕ туннель "+tunnel.ID)
+			changes = append(changes, l.Text(msgDiffAddTunnel, tunnel.ID))
 		case !sameJSON(previous, tunnel):
-			changes = append(changes, "✏️ туннель "+tunnel.ID)
+			changes = append(changes, l.Text(msgDiffEditTunnel, tunnel.ID))
 		}
 	}
 	for _, tunnel := range current.Tunnels {
 		if _, exists := newTunnels[tunnel.ID]; !exists {
-			changes = append(changes, "➖ туннель "+tunnel.ID)
+			changes = append(changes, l.Text(msgDiffRemoveTunnel, tunnel.ID))
 		}
 	}
 
@@ -609,16 +783,16 @@ func diffStates(current *domain.DesiredState, next domain.DesiredState) []string
 		previous, existed := oldDevices[device.ID]
 		switch {
 		case !existed:
-			changes = append(changes, "➕ устройство "+device.ID+" → "+device.Egress)
+			changes = append(changes, l.Text(msgDiffAddDevice, device.ID, device.Egress))
 		case previous.Egress != device.Egress:
-			changes = append(changes, "🔀 "+device.ID+": "+previous.Egress+" → "+device.Egress)
+			changes = append(changes, l.Text(msgDiffChangeEgress, device.ID, previous.Egress, device.Egress))
 		case previous != device:
-			changes = append(changes, "✏️ устройство "+device.ID)
+			changes = append(changes, l.Text(msgDiffEditDevice, device.ID))
 		}
 	}
 	for _, device := range current.Devices {
 		if _, exists := newDevices[device.ID]; !exists {
-			changes = append(changes, "➖ устройство "+device.ID)
+			changes = append(changes, l.Text(msgDiffRemoveDevice, device.ID))
 		}
 	}
 
@@ -631,17 +805,17 @@ func diffStates(current *domain.DesiredState, next domain.DesiredState) []string
 		key := clientACLKey(rule)
 		newACLs[key] = rule
 		if _, existed := oldACLs[key]; !existed {
-			changes = append(changes, "➕ доступ "+clientACLLabel(rule))
+			changes = append(changes, l.Text(msgDiffAddACL, clientACLLabel(rule)))
 		}
 	}
 	for _, rule := range current.ClientACLs {
 		if _, exists := newACLs[clientACLKey(rule)]; !exists {
-			changes = append(changes, "➖ доступ "+clientACLLabel(rule))
+			changes = append(changes, l.Text(msgDiffRemoveACL, clientACLLabel(rule)))
 		}
 	}
 
 	if !sameJSON(current.Hub, next.Hub) {
-		changes = append(changes, "✏️ параметры хаба")
+		changes = append(changes, l.Text(msgDiffHub))
 	}
 	return changes
 }
@@ -665,29 +839,29 @@ func sameJSON(a, b any) bool {
 // renderConfirmWithinChoice offers the rollback deadline. The right length depends
 // on what is being deployed: a routine egress switch needs a minute, a firewall
 // experiment on a remote hub deserves half an hour of grace.
-func renderConfirmWithinChoice(revision string) (string, *tg.InlineKeyboardMarkup) {
-	text := "⏱ За какое время успеете подтвердить? Не подтвердите — агент вернёт предыдущую ревизию сам."
+func renderConfirmWithinChoice(l Localizer, revision string) (string, *tg.InlineKeyboardMarkup) {
+	text := l.Text(msgConfirmWithin)
 	return text, keyboard(
 		[]tg.InlineKeyboardButton{
-			btn("1 мин", "dep:go:60:"+revision),
-			btn("5 мин", "dep:go:300:"+revision),
+			btn(formatDuration(l, time.Minute), "dep:go:60:"+revision),
+			btn(formatDuration(l, 5*time.Minute), "dep:go:300:"+revision),
 		},
 		[]tg.InlineKeyboardButton{
-			btn("15 мин", "dep:go:900:"+revision),
-			btn("30 мин", "dep:go:1800:"+revision),
+			btn(formatDuration(l, 15*time.Minute), "dep:go:900:"+revision),
+			btn(formatDuration(l, 30*time.Minute), "dep:go:1800:"+revision),
 		},
-		[]tg.InlineKeyboardButton{btn("✖️ Назад", "dep")},
+		[]tg.InlineKeyboardButton{btn("✖️ "+l.Text(msgButtonBack), "dep")},
 	)
 }
 
-func renderCountdown(revision string, left time.Duration) (string, *tg.InlineKeyboardMarkup) {
-	text := fmt.Sprintf("⏳ Ревизия <code>%s</code> применена и ждёт подтверждения.\nОсталось: <b>%s</b>\n\nБез подтверждения агент вернёт предыдущую ревизию.", esc(revision), ruDuration(left))
-	return text, keyboard([]tg.InlineKeyboardButton{btn("✅ Подтвердить", "dep:ok"), btn("↩️ Откатить", "dep:rb!")})
+func renderCountdown(l Localizer, revision string, left time.Duration) (string, *tg.InlineKeyboardMarkup) {
+	text := l.Text(msgCountdown, esc(revision), formatDuration(l, left))
+	return text, keyboard([]tg.InlineKeyboardButton{btn("✅ "+l.Text(msgButtonConfirm), "dep:ok"), btn("↩️ "+l.Text(msgButtonRollback), "dep:rb!")})
 }
 
-func renderCountdownOverdue(revision string) (string, *tg.InlineKeyboardMarkup) {
-	text := fmt.Sprintf("⛔ Ревизию <code>%s</code> не подтвердили вовремя.\nАгент вернёт предыдущую на ближайшем проходе; если он не работает, откат не случится — проверьте /host.", esc(revision))
-	return text, keyboard([]tg.InlineKeyboardButton{btn("✅ Всё же подтвердить", "dep:ok"), btn("↩️ Откатить сейчас", "dep:rb!")})
+func renderCountdownOverdue(l Localizer, revision string) (string, *tg.InlineKeyboardMarkup) {
+	text := l.Text(msgCountdownOverdue, esc(revision))
+	return text, keyboard([]tg.InlineKeyboardButton{btn("✅ "+l.Text(msgButtonConfirmAnyway), "dep:ok"), btn("↩️ "+l.Text(msgButtonRollbackNow), "dep:rb!")})
 }
 
 // --- Subscriptions ---------------------------------------------------------
@@ -700,17 +874,53 @@ type subEntry struct {
 	Health   *healthEntry
 }
 
-func renderSubs(entries []subEntry, every time.Duration) (string, *tg.InlineKeyboardMarkup) {
+const (
+	msgSubsTitle               MessageID = "subscriptions/title"
+	msgSubsEmpty               MessageID = "subscriptions/empty"
+	msgSubsUpstreamEmpty       MessageID = "subscriptions/upstream_empty"
+	msgSubsRefreshSchedule     MessageID = "subscriptions/refresh_schedule"
+	msgSubCardUpstreamEmpty    MessageID = "subscription/upstream_empty"
+	msgSubCardUpstream         MessageID = "subscription/upstream"
+	msgSubCardLastGood         MessageID = "subscription/last_good"
+	msgSubCardHealth           MessageID = "subscription/health"
+	msgButtonAutoRefresh       MessageID = "button/auto_refresh"
+	msgButtonCandidates        MessageID = "button/candidates"
+	msgButtonRestoreLastGood   MessageID = "button/restore_last_good"
+	msgCandidatesTitle         MessageID = "candidates/title"
+	msgCandidatesIntro         MessageID = "candidates/intro"
+	msgCandidatesCurrent       MessageID = "candidates/current"
+	msgCandidatesPage          MessageID = "candidates/page"
+	msgButtonToSubscription    MessageID = "button/to_subscription"
+	msgRefreshResultTitle      MessageID = "refresh/result_title"
+	msgRefreshResultChosen     MessageID = "refresh/result_chosen"
+	msgRefreshResultApply      MessageID = "refresh/result_apply"
+	msgRefreshFailureTitle     MessageID = "refresh/failure_title"
+	msgRefreshFailureUnchanged MessageID = "refresh/failure_unchanged"
+	msgRefreshRejectedTitle    MessageID = "refresh/rejected_title"
+	msgRefreshRejectedMore     MessageID = "refresh/rejected_more"
+	msgRefreshRejectedReason   MessageID = "refresh/rejected_reason"
+	msgRoutesTitle             MessageID = "routes/title"
+	msgRoutesLine              MessageID = "routes/line"
+	msgRoutesEmpty             MessageID = "routes/empty"
+	msgLogsTitle               MessageID = "logs/title"
+	msgLogsUnit                MessageID = "logs/unit"
+	msgLogsEmpty               MessageID = "logs/empty"
+	msgButtonAgent             MessageID = "button/agent"
+	msgButtonBot               MessageID = "button/bot"
+	msgButtonSendFile          MessageID = "button/send_file"
+)
+
+func renderSubs(l Localizer, entries []subEntry, every time.Duration) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString("📡 <b>Подписки</b>\n\n")
+	b.WriteString(l.Text(msgSubsTitle))
 	if len(entries) == 0 {
-		b.WriteString("Туннелей с подпиской нет.\n")
+		b.WriteString(l.Text(msgSubsEmpty))
 	}
 	var rows [][]tg.InlineKeyboardButton
 	for _, entry := range entries {
 		upstream := entry.Upstream
 		if upstream == "" {
-			upstream = "upstream ещё не выбран"
+			upstream = l.Text(msgSubsUpstreamEmpty)
 		}
 		icon := "⚪️"
 		if entry.Health != nil {
@@ -722,33 +932,33 @@ func renderSubs(entries []subEntry, every time.Duration) (string, *tg.InlineKeyb
 		fmt.Fprintf(&b, "%s <code>%s</code> — %s\n", icon, esc(entry.ID), esc(upstream))
 		rows = append(rows, []tg.InlineKeyboardButton{btn(entry.ID, "sub:c:"+entry.ID)})
 	}
-	fmt.Fprintf(&b, "\nАвтообновление: раз в %s, кандидат сперва доказывает работоспособность в изолированном namespace.", ruDuration(every))
-	rows = append(rows, backRow)
+	b.WriteString(l.Text(msgSubsRefreshSchedule, formatDuration(l, every)))
+	rows = append(rows, backRow(l))
 	return b.String(), keyboard(rows...)
 }
 
-func renderSubCard(entry subEntry) (string, *tg.InlineKeyboardMarkup) {
+func renderSubCard(l Localizer, entry subEntry) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "📡 <b>%s</b> (%s)\n\n", esc(entry.ID), onOff(entry.Enabled))
+	fmt.Fprintf(&b, "📡 <b>%s</b> (%s)\n\n", esc(entry.ID), onOff(l, entry.Enabled))
 	if entry.Upstream == "" {
-		b.WriteString("Upstream ещё не выбран: запустите обновление.\n")
+		b.WriteString(l.Text(msgSubCardUpstreamEmpty))
 	} else {
-		fmt.Fprintf(&b, "Upstream: <code>%s</code>\n", esc(entry.Upstream))
+		b.WriteString(l.Text(msgSubCardUpstream, esc(entry.Upstream)))
 	}
 	if entry.LastGood {
-		b.WriteString("Есть last-known-good — предыдущий работавший upstream.\n")
+		b.WriteString(l.Text(msgSubCardLastGood))
 	}
 	if entry.Health != nil {
-		fmt.Fprintf(&b, "\n%s %s\n", healthIcon(entry.Health.Status), esc(entry.Health.Reason))
+		b.WriteString(l.Text(msgSubCardHealth, healthIcon(entry.Health.Status), esc(entry.Health.Reason)))
 	}
 
 	rows := [][]tg.InlineKeyboardButton{
-		{btn("🔄 Обновить (авто)", "sub:r:"+entry.ID), btn("📋 Кандидаты", "sub:cand:"+entry.ID)},
+		{btn("🔄 "+l.Text(msgButtonAutoRefresh), "sub:r:"+entry.ID), btn("📋 "+l.Text(msgButtonCandidates), "sub:cand:"+entry.ID)},
 	}
 	if entry.LastGood {
-		rows = append(rows, []tg.InlineKeyboardButton{btn("↩️ Вернуть last-known-good", "sub:lkg:"+entry.ID)})
+		rows = append(rows, []tg.InlineKeyboardButton{btn("↩️ "+l.Text(msgButtonRestoreLastGood), "sub:lkg:"+entry.ID)})
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ Подписки", "sub"), btn("🏠 Меню", "m")})
+	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ "+l.Text(msgButtonSubscriptions), "sub"), btn("🏠 "+l.Text(msgButtonMenu), "m")})
 	return b.String(), keyboard(rows...)
 }
 
@@ -756,11 +966,11 @@ const candidatesPerPage = 8
 
 // renderCandidates lists what the provider currently offers. Picking one proves it
 // in the canary first, so a dead entry costs a wait, never the working upstream.
-func renderCandidates(tunnelID string, candidates []domain.ProxyTunnel, page int, current string) (string, *tg.InlineKeyboardMarkup) {
+func renderCandidates(l Localizer, tunnelID string, candidates []domain.ProxyTunnel, page int, current string) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "📋 <b>%s</b>: %d %s в подписке\n\n", esc(tunnelID), len(candidates),
-		ruPlural(len(candidates), "кандидат", "кандидата", "кандидатов"))
-	b.WriteString("Выбранный кандидат сперва проверяется в изолированном namespace; действующий upstream меняется только на доказанно рабочий.\n")
+	b.WriteString(l.Text(msgCandidatesTitle, esc(tunnelID), len(candidates),
+		plural(l, len(candidates), msgPluralCandidateOne, msgPluralCandidateFew, msgPluralCandidateMany)))
+	b.WriteString(l.Text(msgCandidatesIntro))
 
 	start := page * candidatesPerPage
 	end := min(start+candidatesPerPage, len(candidates))
@@ -769,7 +979,7 @@ func renderCandidates(tunnelID string, candidates []domain.ProxyTunnel, page int
 		candidate := candidates[index]
 		label := fmt.Sprintf("%s:%d", candidate.Server, candidate.Port)
 		if label == current {
-			label = "• " + label + " (текущий)"
+			label = l.Text(msgCandidatesCurrent, label)
 		}
 		rows = append(rows, []tg.InlineKeyboardButton{
 			btn(label, fmt.Sprintf("sub:pick:%s:%d", tunnelID, index)),
@@ -783,48 +993,48 @@ func renderCandidates(tunnelID string, candidates []domain.ProxyTunnel, page int
 		pager = append(pager, btn("➡️", fmt.Sprintf("sub:cand:%s:%d", tunnelID, page+1)))
 	}
 	if len(pager) > 0 {
-		fmt.Fprintf(&b, "\nСтраница %d из %d\n", page+1, (len(candidates)+candidatesPerPage-1)/candidatesPerPage)
+		b.WriteString(l.Text(msgCandidatesPage, page+1, (len(candidates)+candidatesPerPage-1)/candidatesPerPage))
 		rows = append(rows, pager)
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ К подписке", "sub:c:"+tunnelID)})
+	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ "+l.Text(msgButtonToSubscription), "sub:c:"+tunnelID)})
 	return b.String(), keyboard(rows...)
 }
 
-func renderRefreshResult(tunnelID string, chosen domain.ProxyTunnel, rejected []string, agentWarning string) (string, *tg.InlineKeyboardMarkup) {
+func renderRefreshResult(l Localizer, tunnelID string, chosen domain.ProxyTunnel, rejected []string, agentWarning string) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "📡 <b>%s</b>: выбран новый upstream\n\n", esc(tunnelID))
-	fmt.Fprintf(&b, "✅ <code>%s:%d</code> — доказал работоспособность\n", esc(chosen.Server), chosen.Port)
-	appendRejections(&b, rejected)
+	b.WriteString(l.Text(msgRefreshResultTitle, esc(tunnelID)))
+	b.WriteString(l.Text(msgRefreshResultChosen, esc(chosen.Server), chosen.Port))
+	appendRejections(l, &b, rejected)
 	// No deploy involved: the revision names the link file, not its contents, so
 	// the agent re-reads it and restarts the proxy on its next pass by itself.
-	b.WriteString("\nАгент подхватит новый upstream на ближайшем проходе (обычно в течение минуты).")
+	b.WriteString(l.Text(msgRefreshResultApply))
 	if agentWarning != "" {
 		b.WriteString("\n" + agentWarning)
 	}
 	return b.String(), keyboard(
-		[]tg.InlineKeyboardButton{btn("📊 Статус", "st"), btn("📡 Подписки", "sub")},
+		[]tg.InlineKeyboardButton{btn("📊 "+l.Text(MsgButtonStatus), "st"), btn("📡 "+l.Text(msgButtonSubscriptions), "sub")},
 	)
 }
 
-func renderRefreshFailure(tunnelID string, rejected []string, message string) (string, *tg.InlineKeyboardMarkup) {
+func renderRefreshFailure(l Localizer, tunnelID string, rejected []string, message string) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "📡 <b>%s</b>: обновление не удалось\n\n⚠️ %s\n", esc(tunnelID), esc(message))
-	appendRejections(&b, rejected)
-	b.WriteString("\nДействующий upstream не тронут.")
-	return b.String(), keyboard([]tg.InlineKeyboardButton{btn("📡 Подписки", "sub"), btn("🏠 Меню", "m")})
+	b.WriteString(l.Text(msgRefreshFailureTitle, esc(tunnelID), esc(message)))
+	appendRejections(l, &b, rejected)
+	b.WriteString(l.Text(msgRefreshFailureUnchanged))
+	return b.String(), keyboard([]tg.InlineKeyboardButton{btn("📡 "+l.Text(msgButtonSubscriptions), "sub"), btn("🏠 "+l.Text(msgButtonMenu), "m")})
 }
 
-func appendRejections(b *strings.Builder, rejected []string) {
+func appendRejections(l Localizer, b *strings.Builder, rejected []string) {
 	if len(rejected) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "\nОтклонены (%d):\n", len(rejected))
+	b.WriteString(l.Text(msgRefreshRejectedTitle, len(rejected)))
 	for index, reason := range rejected {
 		if index == 10 {
-			fmt.Fprintf(b, " • … и ещё %d\n", len(rejected)-index)
+			b.WriteString(l.Text(msgRefreshRejectedMore, len(rejected)-index))
 			break
 		}
-		fmt.Fprintf(b, " • <code>%s</code>\n", esc(shorten(reason, 120)))
+		b.WriteString(l.Text(msgRefreshRejectedReason, esc(shorten(reason, 120))))
 	}
 }
 
@@ -834,28 +1044,28 @@ type routeLine struct {
 	Destination, Via, Why string
 }
 
-func renderRoutes(lines []routeLine) (string, *tg.InlineKeyboardMarkup) {
+func renderRoutes(l Localizer, lines []routeLine) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString("🗺 <b>Маршруты</b>: куда → через что\n\n")
+	b.WriteString(l.Text(msgRoutesTitle))
 	for _, line := range lines {
-		fmt.Fprintf(&b, "• <code>%s</code> → <code>%s</code> — %s\n", esc(line.Destination), esc(line.Via), esc(line.Why))
+		b.WriteString(l.Text(msgRoutesLine, esc(line.Destination), esc(line.Via), esc(line.Why)))
 	}
 	if len(lines) == 0 {
-		b.WriteString("Ревизия пуста.\n")
+		b.WriteString(l.Text(msgRoutesEmpty))
 	}
-	return b.String(), keyboard(backRow)
+	return b.String(), keyboard(backRow(l))
 }
 
 // --- Logs ------------------------------------------------------------------
 
-func renderLogsMenu(units []linux.UnitStatus) (string, *tg.InlineKeyboardMarkup) {
+func renderLogsMenu(l Localizer, units []linux.UnitStatus) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString("📜 <b>Логи</b>\n\nЮниты vpn-hub на хосте:\n")
+	b.WriteString(l.Text(msgLogsTitle))
 	rows := [][]tg.InlineKeyboardButton{
-		{btn("Агент", "log:u:vpn-hub-agent.service"), btn("Бот", "log:u:vpn-hub-bot.service")},
+		{btn(l.Text(msgButtonAgent), "log:u:vpn-hub-agent.service"), btn(l.Text(msgButtonBot), "log:u:vpn-hub-bot.service")},
 	}
 	for _, unit := range units {
-		fmt.Fprintf(&b, "• <code>%s</code> — %s (%s)\n", esc(unit.Unit), esc(unit.Active), esc(unit.Sub))
+		b.WriteString(l.Text(msgLogsUnit, esc(unit.Unit), esc(unit.Active), esc(unit.Sub)))
 		if unit.Unit == "vpn-hub-agent.service" || unit.Unit == "vpn-hub-bot.service" {
 			continue
 		}
@@ -863,24 +1073,24 @@ func renderLogsMenu(units []linux.UnitStatus) (string, *tg.InlineKeyboardMarkup)
 			rows = append(rows, []tg.InlineKeyboardButton{btn(unit.Unit, data)})
 		}
 	}
-	rows = append(rows, backRow)
+	rows = append(rows, backRow(l))
 	return b.String(), keyboard(rows...)
 }
 
-func renderLogTail(unit, tail string) (string, *tg.InlineKeyboardMarkup) {
+func renderLogTail(l Localizer, unit, tail string) (string, *tg.InlineKeyboardMarkup) {
 	// The budget is measured on the escaped content, not the raw journal: esc()
 	// turns one `<` into `&lt;`, so trimming the raw text to 3500 could still blow
 	// past Telegram's 4096-char cap and lose the whole screen -- exactly when the
 	// operator most needs the log.
 	content := esc(strings.TrimSpace(tail))
 	if content == "" {
-		content = "(журнал пуст)"
+		content = l.Text(msgLogsEmpty)
 	}
 	content = tailWithinBudget(content, 3800)
 	text := fmt.Sprintf("📜 <b>%s</b>\n<pre>%s</pre>", esc(unit), content)
 	return text, keyboard(
-		[]tg.InlineKeyboardButton{btn("🔄 Обновить", "log:u:"+unit), btn("📄 Файлом (500)", "log:f:"+unit)},
-		[]tg.InlineKeyboardButton{btn("⬅️ Логи", "log"), btn("🏠 Меню", "m")},
+		[]tg.InlineKeyboardButton{btn("🔄 "+l.Text(msgButtonRefresh), "log:u:"+unit), btn("📄 "+l.Text(msgButtonSendFile), "log:f:"+unit)},
+		[]tg.InlineKeyboardButton{btn("⬅️ "+l.Text(msgButtonLogs), "log"), btn("🏠 "+l.Text(msgButtonMenu), "m")},
 	)
 }
 
@@ -913,47 +1123,87 @@ type hostView struct {
 	Units    []linux.UnitStatus
 }
 
-func renderHost(view hostView) (string, *tg.InlineKeyboardMarkup) {
+const (
+	msgHostTitle            MessageID = "host/title"
+	msgHostError            MessageID = "host/error"
+	msgHostUptime           MessageID = "host/uptime"
+	msgHostLoad             MessageID = "host/load"
+	msgHostDisk             MessageID = "host/disk"
+	msgHostUnits            MessageID = "host/units"
+	msgHostUnit             MessageID = "host/unit"
+	msgHostRestarts         MessageID = "host/restarts"
+	msgButtonRestartAgent   MessageID = "button/restart_agent"
+	msgButtonEndpoint       MessageID = "button/endpoint"
+	msgButtonDNS            MessageID = "button/dns"
+	msgHubTitle             MessageID = "hub/title"
+	msgHubEndpoint          MessageID = "hub/endpoint"
+	msgHubClientNetwork     MessageID = "hub/client_network"
+	msgHubDNS               MessageID = "hub/dns"
+	msgHubPublicKey         MessageID = "hub/public_key"
+	msgHubAWGParameters     MessageID = "hub/awg_parameters"
+	msgHubAWGParameter      MessageID = "hub/awg_parameter"
+	msgHubWarning           MessageID = "hub/warning"
+	msgButtonClientNetwork  MessageID = "button/client_network"
+	msgButtonAWGParameter   MessageID = "button/awg_parameter"
+	msgButtonRotateHubKey   MessageID = "button/rotate_hub_key"
+	msgButtonExportConfig   MessageID = "button/export_config"
+	msgProbesTitle          MessageID = "probes/title"
+	msgProbesIntro          MessageID = "probes/intro"
+	msgProbesUnset          MessageID = "probes/unset"
+	msgProbesValue          MessageID = "probes/value"
+	msgSettingsTitle        MessageID = "settings/title"
+	msgSettingsIntervals    MessageID = "settings/intervals"
+	msgSettingsExplanation  MessageID = "settings/explanation"
+	msgCategoryRollback     MessageID = "settings/category/rollback"
+	msgCategoryAgentError   MessageID = "settings/category/agent_error"
+	msgCategoryConverge     MessageID = "settings/category/converge"
+	msgCategoryHealth       MessageID = "settings/category/health"
+	msgCategoryDrift        MessageID = "settings/category/drift"
+	msgCategorySubscription MessageID = "settings/category/subscription"
+	msgCategoryOutOfBand    MessageID = "settings/category/out_of_band"
+)
+
+func renderHost(l Localizer, view hostView) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString("🖥 <b>Хост</b>\n\n")
+	b.WriteString(l.Text(msgHostTitle))
 	if view.Err != "" {
-		fmt.Fprintf(&b, "⚠️ %s\n", esc(view.Err))
+		b.WriteString(l.Text(msgHostError, esc(view.Err)))
 	} else {
-		fmt.Fprintf(&b, "Аптайм: %s\n", ruDuration(view.Snapshot.Uptime))
-		fmt.Fprintf(&b, "Загрузка: %s %s %s\n", esc(view.Snapshot.Load1), esc(view.Snapshot.Load5), esc(view.Snapshot.Load15))
-		fmt.Fprintf(&b, "Диск /: свободно %s из %s\n", gib(view.Snapshot.DiskFree), gib(view.Snapshot.DiskTotal))
+		b.WriteString(l.Text(msgHostUptime, formatDuration(l, view.Snapshot.Uptime)))
+		b.WriteString(l.Text(msgHostLoad, esc(view.Snapshot.Load1), esc(view.Snapshot.Load5), esc(view.Snapshot.Load15)))
+		b.WriteString(l.Text(msgHostDisk, formatGiB(l, view.Snapshot.DiskFree), formatGiB(l, view.Snapshot.DiskTotal)))
 	}
 	if len(view.Units) > 0 {
-		b.WriteString("\n<b>Юниты:</b>\n")
+		b.WriteString(l.Text(msgHostUnits))
 		for _, unit := range view.Units {
 			icon := "🔴"
 			if unit.Active == "active" {
 				icon = "🟢"
 			}
-			fmt.Fprintf(&b, "%s <code>%s</code> — %s (%s)", icon, esc(unit.Unit), esc(unit.Active), esc(unit.Sub))
+			b.WriteString(l.Text(msgHostUnit, icon, esc(unit.Unit), esc(unit.Active), esc(unit.Sub)))
 			if unit.Restarts > 0 {
-				fmt.Fprintf(&b, ", рестартов: %d", unit.Restarts)
+				b.WriteString(l.Text(msgHostRestarts, unit.Restarts))
 			}
 			b.WriteString("\n")
 		}
 	}
 	return b.String(), keyboard(
-		[]tg.InlineKeyboardButton{btn("🔄 Обновить", "host"), btn("🔁 Перезапустить агента", "host:ra")},
-		backRow,
+		[]tg.InlineKeyboardButton{btn("🔄 "+l.Text(msgButtonRefresh), "host"), btn("🔁 "+l.Text(msgButtonRestartAgent), "host:ra")},
+		backRow(l),
 	)
 }
 
 // --- Hub -------------------------------------------------------------------
 
-func renderHub(hub domain.Hub) (string, *tg.InlineKeyboardMarkup) {
+func renderHub(l Localizer, hub domain.Hub) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString("⚙️ <b>Хаб</b>\n\n")
-	fmt.Fprintf(&b, "Endpoint: <code>%s</code>\n", esc(hub.Endpoint))
-	fmt.Fprintf(&b, "Клиентская сеть: <code>%s</code>\n", esc(hub.ClientCIDR))
-	fmt.Fprintf(&b, "DNS: <code>%s</code>\n", esc(hub.DNSAddress))
-	fmt.Fprintf(&b, "Публичный ключ: <code>%s…</code>\n", esc(shorten(hub.ServerPublicKey, 12)))
+	b.WriteString(l.Text(msgHubTitle))
+	b.WriteString(l.Text(msgHubEndpoint, esc(hub.Endpoint)))
+	b.WriteString(l.Text(msgHubClientNetwork, esc(hub.ClientCIDR)))
+	b.WriteString(l.Text(msgHubDNS, esc(hub.DNSAddress)))
+	b.WriteString(l.Text(msgHubPublicKey, esc(shorten(hub.ServerPublicKey, 12))))
 	if len(hub.AWGInterface) > 0 {
-		b.WriteString("\n<b>AmneziaWG-параметры:</b>\n")
+		b.WriteString(l.Text(msgHubAWGParameters))
 		keys := make([]string, 0, len(hub.AWGInterface))
 		for key := range hub.AWGInterface {
 			keys = append(keys, key)
@@ -961,14 +1211,14 @@ func renderHub(hub domain.Hub) (string, *tg.InlineKeyboardMarkup) {
 		sort.Strings(keys)
 		for _, key := range keys {
 			name, _ := domain.CanonicalAWGParameter(key)
-			fmt.Fprintf(&b, " • <code>%s = %s</code>\n", esc(name), esc(hub.AWGInterface[key]))
+			b.WriteString(l.Text(msgHubAWGParameter, esc(name), esc(hub.AWGInterface[key])))
 		}
 	}
-	b.WriteString("\n⚠️ Смена endpoint, сети или DNS ломает уже выданные профили: устройства придётся перевыпустить.")
+	b.WriteString(l.Text(msgHubWarning))
 
 	rows := [][]tg.InlineKeyboardButton{
-		{btn("✏️ Endpoint", "hub:e:endpoint"), btn("✏️ DNS", "hub:e:dns_address")},
-		{btn("✏️ Клиентская сеть", "hub:e:client_cidr"), btn("➕ AWG-параметр", "hub:aa")},
+		{btn("✏️ "+l.Text(msgButtonEndpoint), "hub:e:endpoint"), btn("✏️ "+l.Text(msgButtonDNS), "hub:e:dns_address")},
+		{btn("✏️ "+l.Text(msgButtonClientNetwork), "hub:e:client_cidr"), btn("➕ "+l.Text(msgButtonAWGParameter), "hub:aa")},
 	}
 	if len(hub.AWGInterface) > 0 {
 		keys := make([]string, 0, len(hub.AWGInterface))
@@ -984,8 +1234,8 @@ func renderHub(hub domain.Hub) (string, *tg.InlineKeyboardMarkup) {
 		}
 	}
 	rows = append(rows,
-		[]tg.InlineKeyboardButton{btn("🔑 Ротация ключа хаба", "hub:rk"), btn("📦 Выгрузить конфиг", "hub:dl")},
-		backRow)
+		[]tg.InlineKeyboardButton{btn("🔑 "+l.Text(msgButtonRotateHubKey), "hub:rk"), btn("📦 "+l.Text(msgButtonExportConfig), "hub:dl")},
+		backRow(l))
 	return b.String(), keyboard(rows...)
 }
 
@@ -999,56 +1249,57 @@ var probeKinds = []struct {
 	{"dns", "dns_name", "DNS", "host.corp.internal"},
 }
 
-func renderProbes(tunnelID string, health domain.HealthCheck) (string, *tg.InlineKeyboardMarkup) {
+func renderProbes(l Localizer, tunnelID string, health domain.HealthCheck) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "🩺 <b>Пробы туннеля %s</b>\n\n", esc(tunnelID))
-	b.WriteString("Проба выполняется внутри namespace туннеля и отвечает на вопрос «идёт ли трафик прямо сейчас». Без проб здоровье — «неизвестно», и это честнее, чем «работает».\n\n")
+	b.WriteString(l.Text(msgProbesTitle, esc(tunnelID)))
+	b.WriteString(l.Text(msgProbesIntro))
 	var rows [][]tg.InlineKeyboardButton
 	for _, kind := range probeKinds {
 		value := probeValue(health, kind.Key)
 		if value == "" {
-			fmt.Fprintf(&b, "• %s: не задана\n", kind.Title)
+			b.WriteString(l.Text(msgProbesUnset, kind.Title))
 			rows = append(rows, []tg.InlineKeyboardButton{btn("➕ "+kind.Title, "tun:ps:"+tunnelID+":"+kind.Key)})
 			continue
 		}
-		fmt.Fprintf(&b, "• %s: <code>%s</code>\n", kind.Title, esc(value))
+		b.WriteString(l.Text(msgProbesValue, kind.Title, esc(value)))
 		rows = append(rows, []tg.InlineKeyboardButton{
 			btn("✏️ "+kind.Title, "tun:ps:"+tunnelID+":"+kind.Key),
 			btn("➖ "+kind.Title, "tun:pd:"+tunnelID+":"+kind.Key),
 		})
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ К туннелю", "tun:c:"+tunnelID), btn("🏠 Меню", "m")})
+	rows = append(rows, []tg.InlineKeyboardButton{btn("⬅️ "+l.Text(msgButtonToTunnel), "tun:c:"+tunnelID), btn("🏠 "+l.Text(msgButtonMenu), "m")})
 	return b.String(), keyboard(rows...)
 }
 
 // --- Settings --------------------------------------------------------------
 
 var notificationCategories = []struct {
-	Key, Title string
+	Key     string
+	TitleID MessageID
 }{
-	{"rollback", "Автооткаты и деплой"},
-	{"agent-error", "Ошибки агента"},
-	{"converge", "Сходимость (инфо)"},
-	{"health", "Здоровье туннелей"},
-	{"drift", "Дрейф хоста"},
-	{"subscription", "Итоги обновления подписок"},
-	{"oob", "Изменения мимо бота"},
+	{"rollback", msgCategoryRollback},
+	{"agent-error", msgCategoryAgentError},
+	{"converge", msgCategoryConverge},
+	{"health", msgCategoryHealth},
+	{"drift", msgCategoryDrift},
+	{"subscription", msgCategorySubscription},
+	{"oob", msgCategoryOutOfBand},
 }
 
-func renderSettings(enabled map[string]bool, notifications Notifications) (string, *tg.InlineKeyboardMarkup) {
+func renderSettings(l Localizer, enabled map[string]bool, notifications Notifications) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString("🔔 <b>Настройки уведомлений</b>\n\n")
-	fmt.Fprintf(&b, "Интервалы: здоровье — %s, дрейф — %s, подписки — %s (меняются в telegram.yaml).\n\nКатегории:\n",
-		ruDuration(notifications.HealthInterval), ruDuration(notifications.DriftInterval), ruDuration(notifications.SubscriptionRefresh))
+	b.WriteString(l.Text(msgSettingsTitle))
+	b.WriteString(l.Text(msgSettingsIntervals,
+		formatDuration(l, notifications.HealthInterval), formatDuration(l, notifications.DriftInterval), formatDuration(l, notifications.SubscriptionRefresh)))
 	var rows [][]tg.InlineKeyboardButton
 	for _, category := range notificationCategories {
 		mark := "🔕"
 		if enabled[category.Key] {
 			mark = "🔔"
 		}
-		rows = append(rows, []tg.InlineKeyboardButton{btn(mark+" "+category.Title, "set:t:"+category.Key)})
+		rows = append(rows, []tg.InlineKeyboardButton{btn(mark+" "+l.Text(category.TitleID), "set:t:"+category.Key)})
 	}
-	b.WriteString("Нажатие переключает категорию; выбор сохраняется на хабе и переживает рестарт бота.")
-	rows = append(rows, backRow)
+	b.WriteString(l.Text(msgSettingsExplanation))
+	rows = append(rows, backRow(l))
 	return b.String(), keyboard(rows...)
 }

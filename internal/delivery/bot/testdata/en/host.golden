@@ -1,0 +1,13 @@
+🖥 <b>Host</b>
+
+Uptime: 26h 3m
+Load: 0.15 0.10 0.05
+Disk /: 18.0 GiB free of 25.0 GiB
+
+<b>Units:</b>
+🟢 <code>vpn-hub-agent.service</code> — active (running)
+🟢 <code>vpn-hub-proxy-nl.service</code> — active (running), restarts: 1
+
+--- keyboard ---
+[🔄 Refresh](host) | [🔁 Restart agent](host:ra)
+[🏠 Menu](m)

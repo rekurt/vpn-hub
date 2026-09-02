@@ -28,7 +28,7 @@ func (b *Bot) buildTunnels(ctx context.Context) screen {
 	if err != nil {
 		return renderFailure("конфигурация не читается", err)
 	}
-	return scr(renderTunnels(entries))
+	return scr(renderTunnels(task2EnglishLocalizer, entries))
 }
 
 func (b *Bot) buildTunnelCard(ctx context.Context, tunnelID string) screen {
@@ -38,7 +38,7 @@ func (b *Bot) buildTunnelCard(ctx context.Context, tunnelID string) screen {
 	}
 	for _, entry := range entries {
 		if entry.Tunnel.ID == tunnelID {
-			return scr(renderTunnelCard(entry, b.Now()))
+			return scr(renderTunnelCard(task2EnglishLocalizer, entry, b.Now()))
 		}
 	}
 	return renderFailure("туннель не найден", fmt.Errorf("нет туннеля %q", tunnelID))
@@ -58,7 +58,7 @@ func (b *Bot) routeTunnels(ctx context.Context, cb *tg.CallbackQuery, action str
 		return b.show(ctx, cb, b.buildTunnelCard(ctx, args[0]))
 	case "on", "off":
 		verb := map[string]string{"on": "Включить", "off": "Выключить"}[action]
-		return b.show(ctx, cb, scr(renderConfirm(
+		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
 			fmt.Sprintf("%s туннель <b>%s</b>?", verb, esc(args[0])),
 			"tun:"+action+"!:"+args[0], "tun:c:"+args[0])))
 	case "on!":
@@ -245,7 +245,7 @@ func (b *Bot) testAllTunnels(ctx context.Context, _ *tg.CallbackQuery) result {
 	}
 
 	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,
-		fmt.Sprintf("🩺 Проверяю %d %s…", len(subjects), ruPlural(len(subjects), "туннель", "туннеля", "туннелей")), nil)
+		fmt.Sprintf("🩺 Проверяю %d %s…", len(subjects), plural(task2EnglishLocalizer, len(subjects), msgPluralTunnelOne, msgPluralTunnelFew, msgPluralTunnelMany)), nil)
 	if err != nil {
 		return result{toast: "Не удалось начать: " + err.Error(), alert: true}
 	}
@@ -292,7 +292,7 @@ func (b *Bot) buildAccess(ctx context.Context, tunnelID string) screen {
 	sort.Strings(devices)
 	for _, tunnel := range cfg.Tunnels {
 		if tunnel.ID == tunnelID {
-			return scr(renderAccess(tunnelID, devices, tunnel.AllowedDevices))
+			return scr(renderAccess(task2EnglishLocalizer, tunnelID, devices, tunnel.AllowedDevices))
 		}
 	}
 	return renderFailure("туннель не найден", fmt.Errorf("нет туннеля %q", tunnelID))

@@ -333,7 +333,7 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	b.resumePendingDeploy(ctx)
 
-	menu := scr(renderMain())
+	menu := scr(renderMain(task2EnglishLocalizer))
 	if _, err := b.API.SendMessage(ctx, b.Cfg.AdminID, "🤖 Бот запущен.\n\n"+menu.text, menu.markup); err != nil {
 		b.logf("startup message: %v", err)
 	}
@@ -416,7 +416,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *tg.Message) {
 		b.handleDialogInput(ctx, text)
 		return
 	}
-	b.sendScreen(ctx, scr(renderMain()))
+	b.sendScreen(ctx, scr(renderMain(task2EnglishLocalizer)))
 }
 
 func (b *Bot) handleCommand(ctx context.Context, command string) {
@@ -427,7 +427,7 @@ func (b *Bot) handleCommand(ctx context.Context, command string) {
 	}
 	switch command {
 	case "start", "menu", "help":
-		b.sendScreen(ctx, scr(renderMain()))
+		b.sendScreen(ctx, scr(renderMain(task2EnglishLocalizer)))
 	case "status":
 		b.sendScreen(ctx, b.buildStatus(ctx))
 	case "devices":
@@ -458,7 +458,7 @@ func (b *Bot) handleCommand(ctx context.Context, command string) {
 		b.dialogs.clear()
 		b.send(ctx, "✖️ Диалог отменён.", nil)
 	default:
-		b.sendScreen(ctx, scr(renderMain()))
+		b.sendScreen(ctx, scr(renderMain(task2EnglishLocalizer)))
 	}
 }
 
@@ -506,7 +506,7 @@ func (b *Bot) routeCallback(ctx context.Context, cb *tg.CallbackQuery, parts []s
 
 	switch parts[0] {
 	case "m":
-		return b.show(ctx, cb, scr(renderMain()))
+		return b.show(ctx, cb, scr(renderMain(task2EnglishLocalizer)))
 	case "st":
 		return b.show(ctx, cb, b.buildStatus(ctx))
 	case "dev":

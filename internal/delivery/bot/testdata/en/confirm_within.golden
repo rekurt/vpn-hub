@@ -1,0 +1,5 @@
+⏱ How long do you need to confirm? Without confirmation, the agent restores the previous revision automatically.
+--- keyboard ---
+[1m](dep:go:60:feedface00001111) | [5m](dep:go:300:feedface00001111)
+[15m](dep:go:900:feedface00001111) | [30m](dep:go:1800:feedface00001111)
+[✖️ Back](dep)

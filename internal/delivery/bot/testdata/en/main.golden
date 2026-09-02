@@ -1,0 +1,9 @@
+Management hub
+Choose an action.
+--- keyboard ---
+[📊 Status](st) | [📱 Devices](dev)
+[🚇 Tunnels](tun) | [📡 Subscriptions](sub)
+[🚀 Deploy](dep) | [🗺 Routes](rt)
+[🔐 Between devices](acl)
+[📜 Logs](log) | [🖥 Host](host)
+[⚙️ Hub](hub) | [🔔 Settings](set)

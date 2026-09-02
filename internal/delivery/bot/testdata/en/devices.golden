@@ -1,0 +1,9 @@
+📱 <b>Devices</b>
+
+⚪️ <code>macbook</code> → wg-nl — never connected
+🚫 <code>old-phone</code> → direct — never connected, revoked
+
+--- keyboard ---
+[macbook](dev:c:macbook) | [old-phone](dev:c:old-phone)
+[➕ Add device](dev:add)
+[🏠 Menu](m)

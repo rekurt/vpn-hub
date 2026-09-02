@@ -478,7 +478,7 @@ func (b *Bot) watchDrift(ctx context.Context) {
 		case sawDrift && !alerted:
 			var text strings.Builder
 			fmt.Fprintf(&text, "⚠️ <b>Дрейф</b>: хост расходится с ревизией и не сходится сам (%d %s):\n",
-				len(operations), ruPlural(len(operations), "расхождение", "расхождения", "расхождений"))
+				len(operations), plural(task2EnglishLocalizer, len(operations), msgPluralDiscrepancyOne, msgPluralDiscrepancyFew, msgPluralDiscrepancyMany))
 			for index, operation := range operations {
 				if index == 10 {
 					fmt.Fprintf(&text, " • … и ещё %d\n", len(operations)-index)

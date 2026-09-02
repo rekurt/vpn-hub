@@ -6,6 +6,6 @@
  • <code>5.6.7.8:443: the candidate did not carry traffic: timeout</code>
 
 Агент подхватит новый upstream на ближайшем проходе (обычно в течение минуты).
-⚠️ Агент сейчас не работает (inactive) — изменение не применится, пока он не запустится.
+agent is inactive
 --- keyboard ---
 [📊 Статус](st) | [📡 Подписки](sub)

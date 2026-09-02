@@ -1,0 +1,10 @@
+📡 <b>Subscriptions</b>
+
+🟢 <code>xray-de</code> — 1.2.3.4:443
+⏸ <code>xray-nl</code> — upstream not selected yet
+
+Automatic refresh: every 6h; a candidate must first prove it works in an isolated namespace.
+--- keyboard ---
+[xray-de](sub:c:xray-de)
+[xray-nl](sub:c:xray-nl)
+[🏠 Menu](m)

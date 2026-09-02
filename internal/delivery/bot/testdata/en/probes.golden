@@ -1,0 +1,13 @@
+🩺 <b>Probes for tunnel corp-a</b>
+
+A probe runs inside the tunnel namespace and answers whether traffic is flowing right now. Without probes, health is unknown, which is more accurate than claiming it works.
+
+• TCP: not set
+• HTTPS: <code>https://intranet.corp.internal/health</code>
+• DNS: not set
+
+--- keyboard ---
+[➕ TCP](tun:ps:corp-a:tcp)
+[✏️ HTTPS](tun:ps:corp-a:https) | [➖ HTTPS](tun:pd:corp-a:https)
+[➕ DNS](tun:ps:corp-a:dns)
+[⬅️ To tunnel](tun:c:corp-a) | [🏠 Menu](m)

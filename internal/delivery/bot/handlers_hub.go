@@ -27,7 +27,7 @@ func (b *Bot) buildHub(ctx context.Context) screen {
 	if err != nil {
 		return renderFailure("конфигурация не читается", err)
 	}
-	return scr(renderHub(cfg.Hub))
+	return scr(renderHub(task2EnglishLocalizer, cfg.Hub))
 }
 
 func (b *Bot) routeHub(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {
@@ -63,7 +63,7 @@ func (b *Bot) routeHub(ctx context.Context, cb *tg.CallbackQuery, action string,
 	case "rk":
 		return b.routeKeyRotation(ctx, cb, args)
 	case "dl":
-		return b.show(ctx, cb, scr(renderConfirm(
+		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
 			"Выгрузить YAML-конфигурацию в чат? Файлы содержат подписочные URL с токенами — это секреты. Файлы провайдеров и ключи не выгружаются.",
 			"hub:dl!", "hub")))
 	case "dl!":
@@ -407,7 +407,7 @@ func (b *Bot) rotateHubKey(ctx context.Context, chatID, messageID int64) {
 			"Остался деплой. Страховка тут не поможет: откат ревизии не вернёт старый ключ, поэтому деплойте сразу.",
 		markup: keyboard(
 			[]tg.InlineKeyboardButton{btn("🚀 К деплою", "dep")},
-			backRow,
+			backRow(task2EnglishLocalizer),
 		),
 	})
 	edit("🔑 Ротация выполнена, детали ниже.")
@@ -461,7 +461,7 @@ func (b *Bot) buildProbes(ctx context.Context, tunnelID string) screen {
 	}
 	for _, tunnel := range cfg.Tunnels {
 		if tunnel.ID == tunnelID {
-			return scr(renderProbes(tunnelID, tunnel.Health))
+			return scr(renderProbes(task2EnglishLocalizer, tunnelID, tunnel.Health))
 		}
 	}
 	return renderFailure("туннель не найден", fmt.Errorf("нет туннеля %q", tunnelID))

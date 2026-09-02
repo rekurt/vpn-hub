@@ -1,0 +1,8 @@
+➕ <b>Новое правило</b>
+
+Шаг 1 из 3. Кто получает доступ?
+--- keyboard ---
+[any — любое устройство](acl:src:any)
+[macbook](acl:src:macbook)
+[phone](acl:src:phone)
+[✖️ Отмена](acl:x)

@@ -17,7 +17,7 @@ import (
 func renderFailure(what string, err error) screen {
 	return screen{
 		text:   "⚠️ " + what + ":\n<code>" + esc(err.Error()) + "</code>",
-		markup: keyboard(backRow),
+		markup: keyboard(backRow(task2EnglishLocalizer)),
 	}
 }
 
@@ -89,7 +89,7 @@ func (b *Bot) buildStatus(ctx context.Context) screen {
 	} else {
 		view.Agent = &unit
 	}
-	return scr(renderStatus(view))
+	return scr(renderStatus(task2EnglishLocalizer, view))
 }
 
 // --- Routes ----------------------------------------------------------------
@@ -147,7 +147,7 @@ func (b *Bot) buildRoutes(ctx context.Context) screen {
 			}
 		}
 	}
-	return scr(renderRoutes(lines))
+	return scr(renderRoutes(task2EnglishLocalizer, lines))
 }
 
 // placeholderUpstreams supplies layout-only upstreams: which ports exist does not
@@ -175,7 +175,7 @@ func (b *Bot) buildLogsMenu(ctx context.Context) screen {
 	if err != nil {
 		return renderFailure("список юнитов недоступен", err)
 	}
-	return scr(renderLogsMenu(units))
+	return scr(renderLogsMenu(task2EnglishLocalizer, units))
 }
 
 func (b *Bot) routeLogs(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {
@@ -191,7 +191,7 @@ func (b *Bot) routeLogs(ctx context.Context, cb *tg.CallbackQuery, action string
 		if err != nil {
 			return b.show(ctx, cb, renderFailure("журнал недоступен", err))
 		}
-		return b.show(ctx, cb, scr(renderLogTail(unit, tail)))
+		return b.show(ctx, cb, scr(renderLogTail(task2EnglishLocalizer, unit, tail)))
 	case "f":
 		if len(args) < 1 {
 			return result{toast: "Не указан юнит"}
@@ -237,7 +237,7 @@ func (b *Bot) buildHost(ctx context.Context) screen {
 	if transient, err := b.Units.ListMatching(ctx, "vpn-hub-socks-*"); err == nil {
 		view.Units = append(view.Units, transient...)
 	}
-	return scr(renderHost(view))
+	return scr(renderHost(task2EnglishLocalizer, view))
 }
 
 func (b *Bot) routeHost(ctx context.Context, cb *tg.CallbackQuery, action string) result {
@@ -245,7 +245,7 @@ func (b *Bot) routeHost(ctx context.Context, cb *tg.CallbackQuery, action string
 	case "":
 		return b.show(ctx, cb, b.buildHost(ctx))
 	case "ra":
-		return b.show(ctx, cb, scr(renderConfirm(
+		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
 			"Перезапустить агента? На время рестарта хост перестаёт сходиться (туннели продолжают работать).",
 			"host:ra!", "host")))
 	case "ra!":
@@ -263,7 +263,7 @@ func (b *Bot) routeHost(ctx context.Context, cb *tg.CallbackQuery, action string
 // --- Settings --------------------------------------------------------------
 
 func (b *Bot) buildSettings() screen {
-	return scr(renderSettings(b.alerts.snapshot(), b.Cfg.Notifications))
+	return scr(renderSettings(task2EnglishLocalizer, b.alerts.snapshot(), b.Cfg.Notifications))
 }
 
 func (b *Bot) routeSettings(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {

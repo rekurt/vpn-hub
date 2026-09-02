@@ -1,0 +1,15 @@
+📱 <b>macbook</b>
+
+Address: <code>10.80.0.2/32</code>
+Egress: <code>wg-nl</code>
+Key: <code>6OUoSDjcaLfl…</code>
+
+🟢 online
+Traffic: ⭱ 3.0 GiB from device, ⭳ 512.0 MiB to device
+
+--- keyboard ---
+[🔀 Change egress](dev:eg:macbook)
+[📄 Send current profile](dev:pr:macbook)
+[📤 Reissue profile](dev:re:macbook)
+[🚫 Revoke](dev:rv:macbook)
+[⬅️ Devices](dev) | [🏠 Menu](m)

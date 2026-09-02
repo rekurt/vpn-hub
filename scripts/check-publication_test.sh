@@ -67,6 +67,7 @@ expect_fail telegram-token printf '%s\n' 'token: 123456789:AAExampleSecretValueT
 expect_fail runtime-state printf '%s\n' '{"revision":"abc","hub":{"endpoint":"203.0.113.7:51820"}}'
 expect_pass synthetic-public printf '%s\n' 'public_key: W/kKaUP1n48AgIzxs8po0HKV+UEk1vMcTuBW648atSE='
 expect_fail unknown-host printf '%s\n' 'endpoint: vpn.personal-domain.net:51820'
+expect_fail neighboring-dotted-literal printf '%s\n' 'message_id: confirm.other'
 expect_fail unknown-server-host printf '%s\n' 'server: vpn.personal-domain.net:51820'
 expect_fail unknown-vless-host printf '%s\n' 'vless://id@vpn.personal-domain.net:443'
 expect_fail unknown-dev-host printf '%s\n' 'server: vpn.personal-domain.dev:51820'

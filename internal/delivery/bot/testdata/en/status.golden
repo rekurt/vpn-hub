@@ -1,0 +1,19 @@
+📊 <b>Status</b>
+
+Revision: <code>6b419dc34476ad09</code> (created 2h ago)
+3 tunnels, 2 devices
+
+⏳ <b>Awaiting confirmation</b>: revision <code>aaaa000011112222</code>, 3m 20s left
+
+Agent: 🟢 active (running), restarts: 1
+Drift: ⚠️ 1 discrepancy:
+ • <code>update ingress/awg0: peer set differs</code>
+
+<b>Tunnel health</b> (probe every 5m):
+🟢 <code>corp-a</code> — handshake 10s ago (4m ago)
+🔴 <code>wg-nl</code> — the tunnel has never completed a handshake (4m ago)
+⚪️ <code>xray-de</code> — nothing was measured (4m ago)
+
+--- keyboard ---
+[✅ Confirm](dep:ok) | [↩️ Roll back](dep:rb!)
+[🔄 Refresh](st) | [🏠 Menu](m)

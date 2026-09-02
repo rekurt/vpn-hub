@@ -1,0 +1,4 @@
+Step 2 of 3. Which device should <code>phone</code> be allowed to access?
+--- keyboard ---
+[macbook](acl:tgt:phone:macbook)
+[✖️ Cancel](acl:x)

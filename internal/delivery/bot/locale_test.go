@@ -2,9 +2,19 @@ package bot
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"unicode"
 )
+
+func TestCatalogMessageIDsAreNotDNSNames(t *testing.T) {
+	t.Parallel()
+	for id := range englishCatalog() {
+		if strings.ContainsRune(string(id), '.') {
+			t.Errorf("MessageID %q is DNS-like; use slash-delimited segments", id)
+		}
+	}
+}
 
 func TestNewLocalizerSelectsCatalog(t *testing.T) {
 	t.Parallel()

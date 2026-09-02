@@ -47,7 +47,7 @@ func (b *Bot) buildClientACLs(ctx context.Context) screen {
 	if err != nil {
 		return renderFailure("конфигурация не читается", err)
 	}
-	return scr(renderClientACLs(entries))
+	return scr(renderClientACLs(task2EnglishLocalizer, entries))
 }
 
 func (b *Bot) routeClientACLs(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {
@@ -62,7 +62,7 @@ func (b *Bot) routeClientACLs(ctx context.Context, cb *tg.CallbackQuery, action 
 		if err != nil {
 			return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
 		}
-		return b.show(ctx, cb, scr(renderClientACLSource(devices)))
+		return b.show(ctx, cb, scr(renderClientACLSource(task2EnglishLocalizer, devices)))
 	case "src":
 		if len(args) < 1 {
 			return result{toast: "Нет source"}
@@ -71,7 +71,7 @@ func (b *Bot) routeClientACLs(ctx context.Context, cb *tg.CallbackQuery, action 
 		if err != nil {
 			return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
 		}
-		return b.show(ctx, cb, scr(renderClientACLTarget(args[0], devices)))
+		return b.show(ctx, cb, scr(renderClientACLTarget(task2EnglishLocalizer, args[0], devices)))
 	case "tgt":
 		if len(args) < 2 {
 			return result{toast: "Нет target"}
@@ -99,7 +99,7 @@ func (b *Bot) routeClientACLs(ctx context.Context, cb *tg.CallbackQuery, action 
 		if target == nil {
 			return result{toast: "Правило уже изменилось", alert: true}
 		}
-		return b.show(ctx, cb, scr(renderConfirm(
+		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
 			fmt.Sprintf("Удалить доступ <code>%s</code> → <code>%s</code> <code>%s/%d</code>?", esc(target.Source), esc(target.Target), esc(string(target.Protocol)), target.Port),
 			"acl:rm!:"+args[0], "acl")))
 	case "rm!":

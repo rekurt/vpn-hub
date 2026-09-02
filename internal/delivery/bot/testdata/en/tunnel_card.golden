@@ -1,0 +1,18 @@
+🚇 <b>corp-a</b>
+
+Role: private-network
+Type: wireguard
+State: on
+Source: config <code>corp-a.conf</code>
+Routes: <code>10.20.0.0/16</code>
+DNS zones: <code>corp.internal</code>
+
+🟢 handshake 10s ago (just now)
+
+--- keyboard ---
+[⏸ Disable](tun:off:corp-a) | [🩺 Test](tun:t:corp-a)
+[🩺 Probes (tcp/https/dns)](tun:pr:corp-a)
+[➖ route 10.20.0.0/16](tun:rd:corp-a:10.20.0.0/16)
+[➕ Route](tun:ra:corp-a) | [➕ DNS zone](tun:za:corp-a)
+[➖ zone corp.internal](tun:zd:corp-a:corp.internal)
+[⬅️ Tunnels](tun) | [🏠 Menu](m)

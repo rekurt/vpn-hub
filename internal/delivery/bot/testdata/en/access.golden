@@ -1,0 +1,10 @@
+👥 <b>Access to wg-nl</b>
+
+This egress is available only to selected devices.
+Clear every selection to allow all devices again.
+
+--- keyboard ---
+[☐ laptop](tun:at:wg-nl:laptop)
+[☑️ macbook](tun:at:wg-nl:macbook)
+[☐ phone](tun:at:wg-nl:phone)
+[⬅️ To tunnel](tun:c:wg-nl) | [🏠 Menu](m)

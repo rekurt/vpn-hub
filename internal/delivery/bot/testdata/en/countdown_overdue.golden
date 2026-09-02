@@ -1,0 +1,4 @@
+⛔ Revision <code>feedface00001111</code> was not confirmed in time.
+The agent will restore the previous revision on its next pass; if it is not running, rollback will not happen — check /host.
+--- keyboard ---
+[✅ Confirm anyway](dep:ok) | [↩️ Roll back now](dep:rb!)

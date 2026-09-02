@@ -1,0 +1,17 @@
+🚀 <b>Deploy</b>
+
+Active revision: <code>6b419dc34476ad09</code>
+New revision: <code>feedface00001111</code> (2 tunnels, 2 devices)
+Excluded revoked devices: <code>old-phone</code>
+
+<b>Changes:</b>
+ • ➕ tunnel xray-de
+ • 🔀 macbook: direct → wg-nl
+ • ➕ device phone → direct
+
+With rollback protection, the agent restores the previous revision if you do not confirm in time, even if the new revision cuts off access.
+--- keyboard ---
+[✅ With rollback protection…](dep:arm:feedface00001111)
+[⚡ Apply without protection](dep:now:feedface00001111)
+[↩️ Restore previous revision](dep:rb)
+[🏠 Menu](m)

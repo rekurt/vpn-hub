@@ -1,0 +1,7 @@
+🗺 <b>Маршруты</b>: куда → через что
+
+• <code>0.0.0.0/0</code> → <code>wg-nl</code> — device macbook egress
+• <code>10.20.0.0/16</code> → <code>corp-a</code> — private network
+
+--- keyboard ---
+[🏠 Меню](m)
