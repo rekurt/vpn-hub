@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -11,6 +10,25 @@ import (
 
 	tg "vpn-hub/internal/adapters/telegram"
 	"vpn-hub/internal/domain"
+)
+
+const (
+	msgNotifyAgentRollback      MessageID = "notification/agent_rollback"
+	msgNotifyAgentConverged     MessageID = "notification/agent_converged"
+	msgNotifyAgentError         MessageID = "notification/agent_error"
+	msgNotifyButtonJournal      MessageID = "notification/button/journal"
+	msgNotifyButtonAgentJournal MessageID = "notification/button/agent_journal"
+	msgNotifyOOBPending         MessageID = "notification/oob/pending"
+	msgNotifyOOBProtectionClear MessageID = "notification/oob/protection_cleared"
+	msgNotifyOOBRevision        MessageID = "notification/oob/revision"
+	msgNotifyOOBRevocations     MessageID = "notification/oob/revocations"
+	msgNotifyHealthDown         MessageID = "notification/health/down"
+	msgNotifyHealthUp           MessageID = "notification/health/up"
+	msgNotifyDriftRecovered     MessageID = "notification/drift/recovered"
+	msgNotifyDriftHeader        MessageID = "notification/drift/header"
+	msgNotifyDriftOperation     MessageID = "notification/drift/operation"
+	msgNotifyDriftMore          MessageID = "notification/drift/more"
+	msgNotifyDriftAdvice        MessageID = "notification/drift/advice"
 )
 
 // event is one thing the bot decided to say on its own.
@@ -282,20 +300,39 @@ func (s *selfMarks) recent(now time.Time) bool {
 // change; they are expected activity, not trouble.
 var operationPattern = regexp.MustCompile(`^(create|update|delete) [a-z]+/`)
 
-func classifyAgentLine(message string) (category, text string, ok bool) {
+func classifyAgentLine(l Localizer, message string) (category, text string, ok bool) {
 	message = strings.TrimSpace(message)
 	switch {
 	case message == "":
 		return "", "", false
 	case strings.Contains(message, "was not confirmed within the deadline; restored"):
-		return "rollback", "⛔ <b>Автооткат</b>: агент вернул предыдущую ревизию.\n<code>" + esc(message) + "</code>", true
+		return "rollback", l.Text(msgNotifyAgentRollback, esc(message)), true
 	case strings.HasPrefix(message, "converged on revision "):
-		return "converge", "✅ Агент: " + esc(message), true
+		return "converge", l.Text(msgNotifyAgentConverged, esc(message)), true
 	case operationPattern.MatchString(message):
 		return "", "", false
 	default:
-		return "agent-error", "⚠️ Агент: <code>" + esc(message) + "</code>", true
+		return "agent-error", l.Text(msgNotifyAgentError, esc(message)), true
 	}
+}
+
+func journalNotification(l Localizer, message string) (event, bool) {
+	category, text, ok := classifyAgentLine(l, message)
+	if !ok {
+		return event{}, false
+	}
+	ev := event{category: category, text: text}
+	switch category {
+	case "agent-error":
+		ev.debounce = 15 * time.Minute
+		ev.markup = keyboard([]tg.InlineKeyboardButton{
+			btn("📜 "+l.Text(msgNotifyButtonJournal), "log:u:"+agentUnit),
+			btn("🔁 "+l.Text(msgButtonRestartAgent), "host:ra"),
+		})
+	case "rollback":
+		ev.markup = notificationStatusMarkup(l)
+	}
+	return ev, true
 }
 
 func (b *Bot) watchJournal(ctx context.Context) {
@@ -305,21 +342,9 @@ func (b *Bot) watchJournal(ctx context.Context) {
 		if entry.Unit != agentUnit {
 			continue
 		}
-		category, text, ok := classifyAgentLine(entry.Message)
+		ev, ok := journalNotification(b.L, entry.Message)
 		if !ok {
 			continue
-		}
-		ev := event{category: category, text: text}
-		switch category {
-		case "agent-error":
-			ev.debounce = 15 * time.Minute
-			// Straight from the alert to the fix: the usual first response to a
-			// stuck agent is to restart it.
-			ev.markup = keyboard([]tg.InlineKeyboardButton{
-				btn("📜 Журнал", "log:u:"+agentUnit), btn("🔁 Рестарт агента", "host:ra"),
-			})
-		case "rollback":
-			ev.markup = keyboard([]tg.InlineKeyboardButton{btn("📊 Статус", "st")})
 		}
 		b.emit(ev)
 	}
@@ -330,16 +355,52 @@ func (b *Bot) watchJournal(ctx context.Context) {
 // watchStateFiles notices what happens to the shared state outside the bot:
 // hubctl over SSH writes the same files, and silence about that would leave the
 // admin believing the chat shows the whole story.
+type observedState struct {
+	revision string
+	pending  string
+	revoked  string
+}
+
+func notificationStatusMarkup(l Localizer) *tg.InlineKeyboardMarkup {
+	return keyboard([]tg.InlineKeyboardButton{btn("📊 "+l.Text(MsgButtonStatus), "st")})
+}
+
+func outOfBandNotifications(l Localizer, previous, current observedState) []event {
+	status := notificationStatusMarkup(l)
+	events := make([]event, 0, 4)
+	if current.pending != previous.pending && current.pending != "" {
+		events = append(events, event{
+			category: "oob",
+			text:     l.Text(msgNotifyOOBPending, esc(current.pending)),
+			markup: keyboard([]tg.InlineKeyboardButton{
+				btn("✅ "+l.Text(msgButtonConfirm), "dep:ok"),
+				btn("↩️ "+l.Text(msgButtonRollback), "dep:rb!"),
+			}),
+		})
+	}
+	if current.pending != previous.pending && current.pending == "" && current.revision == previous.revision {
+		events = append(events, event{category: "oob", text: l.Text(msgNotifyOOBProtectionClear), markup: status})
+	}
+	if current.revision != previous.revision {
+		events = append(events, event{
+			category: "oob",
+			text: l.Text(msgNotifyOOBRevision,
+				esc(orDash(previous.revision)), esc(orDash(current.revision))),
+			markup: status,
+		})
+	}
+	if current.revoked != previous.revoked {
+		events = append(events, event{category: "oob", text: l.Text(msgNotifyOOBRevocations), markup: status})
+	}
+	return events
+}
+
 func (b *Bot) watchStateFiles(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	statusButton := func() *tg.InlineKeyboardMarkup {
-		return keyboard([]tg.InlineKeyboardButton{btn("📊 Статус", "st")})
-	}
-
 	primed := false
-	var lastRevision, lastPending, lastRevoked string
+	var previous observedState
 	for {
 		select {
 		case <-ctx.Done():
@@ -347,45 +408,28 @@ func (b *Bot) watchStateFiles(ctx context.Context) {
 		case <-ticker.C:
 		}
 
-		revision := ""
+		current := observedState{}
 		if state, err := b.Revisions.Load(ctx); err == nil {
-			revision = state.Revision
+			current.revision = state.Revision
 		}
-		pending := ""
 		if p, armed, err := b.Confirmations.Load(); err == nil && armed {
-			pending = p.Revision
+			current.pending = p.Revision
 		}
-		revoked := ""
 		if ids, err := b.Revocations.Load(ctx); err == nil {
-			revoked = strings.Join(ids, ",")
+			current.revoked = strings.Join(ids, ",")
 		}
 
 		if !primed {
 			primed = true
-			lastRevision, lastPending, lastRevoked = revision, pending, revoked
+			previous = current
 			continue
 		}
 		if self := b.self.recent(b.Now()); !self {
-			if pending != lastPending && pending != "" {
-				b.emit(event{category: "oob",
-					text: "ℹ️ Мимо бота задеплоена ревизия <code>" + esc(pending) + "</code> со страховкой.",
-					markup: keyboard([]tg.InlineKeyboardButton{
-						btn("✅ Подтвердить", "dep:ok"), btn("↩️ Откатить", "dep:rb!"),
-					})})
-			}
-			if pending != lastPending && pending == "" && revision == lastRevision {
-				b.emit(event{category: "oob", text: "ℹ️ Страховка снята мимо бота (confirm через hubctl?).", markup: statusButton()})
-			}
-			if revision != lastRevision {
-				b.emit(event{category: "oob",
-					text:   "ℹ️ Ревизия изменилась мимо бота: <code>" + esc(orDash(lastRevision)) + "</code> → <code>" + esc(orDash(revision)) + "</code> (hubctl по SSH?)",
-					markup: statusButton()})
-			}
-			if revoked != lastRevoked {
-				b.emit(event{category: "oob", text: "ℹ️ Список отозванных устройств изменился мимо бота.", markup: statusButton()})
+			for _, ev := range outOfBandNotifications(b.L, previous, current) {
+				b.emit(ev)
 			}
 		}
-		lastRevision, lastPending, lastRevoked = revision, pending, revoked
+		previous = current
 	}
 }
 
@@ -430,19 +474,28 @@ func (b *Bot) probeAllTunnels(ctx context.Context) {
 		}
 		entry := healthEntry{ID: tunnel.ID, Status: health.Status, Reason: health.Reason, CheckedAt: health.CheckedAt}
 		down, up := b.health.observe(entry)
-		card := keyboard([]tg.InlineKeyboardButton{btn("🚇 К туннелю", "tun:c:"+tunnel.ID)})
 		if down {
-			b.emit(event{category: "health",
-				text:   "🔴 Туннель <b>" + esc(tunnel.ID) + "</b> нездоров: " + esc(health.Reason),
-				markup: card})
+			b.emit(healthNotification(b.L, tunnel.ID, health.Reason, false))
 		}
 		if up {
-			b.emit(event{category: "health",
-				text:   "🟢 Туннель <b>" + esc(tunnel.ID) + "</b> снова здоров: " + esc(health.Reason),
-				markup: card})
+			b.emit(healthNotification(b.L, tunnel.ID, health.Reason, true))
 		}
 	}
 	b.health.prune(known)
+}
+
+func healthNotification(l Localizer, tunnelID, reason string, recovered bool) event {
+	id := msgNotifyHealthDown
+	if recovered {
+		id = msgNotifyHealthUp
+	}
+	return event{
+		category: "health",
+		text:     l.Text(id, esc(tunnelID), esc(reason)),
+		markup: keyboard([]tg.InlineKeyboardButton{
+			btn("🚇 "+l.Text(msgButtonToTunnel), "tun:c:"+tunnelID),
+		}),
+	}
 }
 
 // --- drift watcher ---------------------------------------------------------
@@ -473,14 +526,11 @@ func (b *Bot) watchDrift(ctx context.Context) {
 		switch {
 		case len(operations) == 0:
 			if alerted {
-				b.emit(event{category: "drift", text: "✅ Дрейф устранён: хост снова сходится с ревизией."})
+				b.emit(driftRecoveredNotification(b.L))
 			}
 			sawDrift, alerted = false, false
 		case sawDrift && !alerted:
-			b.emit(event{category: "drift", text: legacyRussianDriftAlert(operations),
-				markup: keyboard([]tg.InlineKeyboardButton{
-					btn("📜 Журнал агента", "log:u:"+agentUnit), btn("🔁 Рестарт агента", "host:ra"),
-				})})
+			b.emit(driftNotification(b.L, operations))
 			alerted = true
 		default:
 			sawDrift = true
@@ -488,17 +538,28 @@ func (b *Bot) watchDrift(ctx context.Context) {
 	}
 }
 
-func legacyRussianDriftAlert(operations []domain.Operation) string {
+func driftNotification(l Localizer, operations []domain.Operation) event {
 	var text strings.Builder
-	fmt.Fprintf(&text, "⚠️ <b>Дрейф</b>: хост расходится с ревизией и не сходится сам (%d %s):\n",
-		len(operations), plural(task2LegacyRussianLocalizer, len(operations), msgPluralDiscrepancyOne, msgPluralDiscrepancyFew, msgPluralDiscrepancyMany))
+	text.WriteString(l.Text(msgNotifyDriftHeader, len(operations),
+		plural(l, len(operations), msgPluralDiscrepancyOne, msgPluralDiscrepancyFew, msgPluralDiscrepancyMany)))
 	for index, operation := range operations {
 		if index == 10 {
-			fmt.Fprintf(&text, " • … и ещё %d\n", len(operations)-index)
+			text.WriteString(l.Text(msgNotifyDriftMore, len(operations)-index))
 			break
 		}
-		fmt.Fprintf(&text, " • <code>%s</code>\n", esc(operation.String()))
+		text.WriteString(l.Text(msgNotifyDriftOperation, esc(operation.String())))
 	}
-	text.WriteString("Агент должен был устранить это за минуту; проверьте его журнал.")
-	return text.String()
+	text.WriteString(l.Text(msgNotifyDriftAdvice))
+	return event{
+		category: "drift",
+		text:     text.String(),
+		markup: keyboard([]tg.InlineKeyboardButton{
+			btn("📜 "+l.Text(msgNotifyButtonAgentJournal), "log:u:"+agentUnit),
+			btn("🔁 "+l.Text(msgButtonRestartAgent), "host:ra"),
+		}),
+	}
+}
+
+func driftRecoveredNotification(l Localizer) event {
+	return event{category: "drift", text: l.Text(msgNotifyDriftRecovered)}
 }
