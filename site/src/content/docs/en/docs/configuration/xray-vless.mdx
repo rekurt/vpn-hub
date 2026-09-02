@@ -1,0 +1,17 @@
+---
+title: Xray, VLESS, and REALITY upstreams
+description: Store one VLESS share link on the host and understand supported security and transports.
+coverage: []
+---
+
+Use `type: xray`. For a fixed upstream, set `source.kind: config` and point `source.value` at a protected file whose first non-empty, non-comment line is a `vless://` URL. Inline `xray-uri` and `xray-json` values are rejected because a saved revision would retain their credential.
+
+The parser requires a UUID, host, and port. Security may be plain, `tls`, or `reality`; REALITY requires `pbk` and `sni`. Transport may be TCP, WebSocket, HTTP Upgrade, or gRPC. Unknown query parameters are ignored. Before sing-box receives a provider hostname, VPN Hub resolves and pins it to a public address; special-use and internal targets are rejected.
+
+```text
+vless://00000000-0000-4000-8000-000000000001@edge.example.com:443?security=reality&sni=www.example.com&fp=chrome&pbk=SYNTHETIC_PUBLIC_KEY&sid=0011223344556677&type=tcp
+```
+
+This is a syntax example using reserved domains and synthetic credentials; it will not connect. Encrypt the real link file with SOPS/age. The UUID, subscription token, and provider link are secrets even though the server name and REALITY public key are not.
+
+For rotating provider lists, use [Subscriptions](../subscriptions/).

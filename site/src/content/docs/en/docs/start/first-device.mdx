@@ -1,0 +1,46 @@
+---
+title: Add the first device
+description: Generate one client profile without storing its private key on the hub.
+---
+
+import VerifyBlock from '../../../../../components/VerifyBlock.astro';
+
+`hubctl device add` generates a new key pair. It prints the public configuration entry and writes the private key only into the requested client profile. The CLI does not retain that private key, so a lost profile must be reissued.
+
+## Prerequisites
+
+- A validated hub at `/etc/vpn-hub/hub.yaml`.
+- A protected destination for the generated profile.
+- A free host route inside `hub.client_cidr` that is not the network, broadcast, or `hub.dns_address`.
+
+## Generate and enroll
+
+```bash
+sudo install -d -m 0700 /root/vpn-hub-profiles
+sudo hubctl --config /etc/vpn-hub/hub.yaml device add laptop \
+  --address 10.80.0.2/32 \
+  --egress direct \
+  --output /root/vpn-hub-profiles/laptop.conf
+```
+
+Append the printed entry to `devices:` in `/etc/vpn-hub/hub.yaml`, then:
+
+```bash
+sudoedit /etc/vpn-hub/hub.yaml
+sudo hubctl --config /etc/vpn-hub/hub.yaml validate
+sudo hubctl --config /etc/vpn-hub/hub.yaml deploy --confirm-within 5m
+```
+
+**Expected result:** a `0600` profile exists, validation reports one device, and deploy prints whether rollback was armed. A first-ever deploy cannot arm rollback because no prior revision exists.
+
+<VerifyBlock command="sudo stat -c '%a' /root/vpn-hub-profiles/laptop.conf && sudo hubctl --config /etc/vpn-hub/hub.yaml device list" expected="600 and a row for laptop with 10.80.0.2/32 and direct" />
+
+Import the profile into AmneziaWG, connect, and complete [traffic verification](../verify/) before running `sudo hubctl confirm`.
+
+## Roll back
+
+Run `sudo hubctl rollback` before the deadline, or let the timer expire. Remove the device entry and redeploy if it should no longer be admitted. Delete the local profile copy after secure delivery.
+
+## Next
+
+[Verify traffic, DNS, and fail-closed behavior](../verify/).

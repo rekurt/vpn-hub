@@ -1,0 +1,50 @@
+---
+title: Hub configuration
+description: Configure ingress identity, client addressing, AmneziaWG parameters, and optional 443 fallbacks.
+coverage:
+  - hub.endpoint
+  - hub.server_public_key
+  - hub.client_cidr
+  - hub.dns_address
+  - hub.awg_interface
+  - hub.fallback
+  - hub.fallback.udp443
+  - hub.fallback.reality
+  - hub.fallback.reality.enabled
+  - hub.fallback.reality.server_name
+---
+
+import ConfigField from '../../../../../components/ConfigField.astro';
+
+The hub block defines the one client ingress. Changes to endpoint, key, client network, DNS address, or AWG parameters require profile reissue because those values are embedded in client profiles.
+
+<ConfigField path="hub.endpoint" type="string host:port" required="Yes" defaultValue="None" validation="Non-empty host and numeric port 1–65535; control characters are rejected." secret="No; public endpoint." sideEffects="Sets the profile endpoint and AmneziaWG listen port." example="vpn.example.com:51820" />
+
+<ConfigField path="hub.server_public_key" type="base64 string" required="Yes" defaultValue="None" validation="Must decode to a 32-byte X25519 public key." secret="No; keep the matching server.key secret." sideEffects="Identifies the hub in every client profile." example="W/kKaUP1n48AgIzxs8po0HKV+UEk1vMcTuBW648atSE=" />
+
+<ConfigField path="hub.client_cidr" type="CIDR string" required="Yes" defaultValue="None" validation="Must parse as a network and must not overlap the internal 10.90.0.0/16 egress-link range." secret="No; topology metadata." sideEffects="Defines ingress addressing, firewall scopes, and device allocation." example="10.80.0.0/24" />
+
+<ConfigField path="hub.dns_address" type="IP string" required="Yes" defaultValue="None" validation="Must be an address inside client_cidr and cannot be assigned to a device." secret="No." sideEffects="Becomes the client-facing DNS and gateway address." example="10.80.0.1" />
+
+<ConfigField path="hub.awg_interface" type="map of string to numeric string" required="No" defaultValue="Empty map" validation="Keys are Jc, Jmin, Jmax, S1, S2, H1, H2, H3, or H4, case-insensitive; values are unsigned 32-bit decimal numbers." secret="No; obfuscation parameters are not credentials." sideEffects="Rendered into the ingress and every issued AmneziaWG profile." example="{ Jc: 4, Jmin: 64, Jmax: 256 }" />
+
+<ConfigField path="hub.fallback" type="object" required="No" defaultValue="Both fallback paths disabled" validation="Nested fallback settings are validated only when enabled where stated." secret="No, but enabling listeners changes attack surface." sideEffects="May accept ingress on UDP/443 and TCP/443." example="fallback: { udp443: false }" />
+
+<ConfigField path="hub.fallback.udp443" type="boolean" required="No" defaultValue="false" validation="Cannot be true when endpoint already listens on port 443." secret="No." sideEffects="Redirects uplink UDP/443 to the configured AmneziaWG ingress port." example="udp443: true" />
+
+<ConfigField path="hub.fallback.reality" type="object" required="No" defaultValue="Disabled object" validation="server_name becomes required when enabled is true." secret="No; the listener key stays in reality.key." sideEffects="Controls the optional TCP/443 VLESS/REALITY listener." example="reality: { enabled: false }" />
+
+<ConfigField path="hub.fallback.reality.enabled" type="boolean" required="No" defaultValue="false" validation="When true, a valid server_name and /etc/vpn-hub/reality.key are needed." secret="No." sideEffects="Opens TCP/443 in the host rules only when the listener can be compiled." example="enabled: true" />
+
+<ConfigField path="hub.fallback.reality.server_name" type="hostname string" required="When REALITY is enabled" defaultValue="Empty" validation="Bare multi-label hostname, max 253 characters; cannot equal the hub endpoint host." secret="No." sideEffects="Selects the real TLS 1.3 site mimicked and used for unauthenticated handoff." example="www.example.com" />
+
+The outer Terraform firewall exposes 22/TCP only to `ssh_allowed_cidrs`, 51820/UDP globally, optional fallback transports 443/TCP and 443/UDP, and ICMP. It intentionally leaves both 443 rules present; `hub.fallback` is the authoritative host-level switch.
+
+Generate keys rather than inventing them:
+
+```bash
+sudo hubctl keygen --output /etc/vpn-hub/server.key
+sudo hubctl keygen --reality --output /etc/vpn-hub/reality.key
+```
+
+Next: [Fallback and firewall semantics](../../concepts/architecture/) and [Devices](../devices/).

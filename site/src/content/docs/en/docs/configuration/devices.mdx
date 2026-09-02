@@ -1,0 +1,45 @@
+---
+title: Device configuration
+description: Enroll one public key and one default Internet egress per device.
+coverage:
+  - devices[].id
+  - devices[].address
+  - devices[].public_key
+  - devices[].egress
+  - devices[].profiles[]
+  - devices[].profiles[].id
+  - devices[].profiles[].egress
+  - devices[].profiles[].address
+  - devices[].profiles[].client_public_key
+  - devices[].profiles[].client_private_key
+---
+
+import ConfigField from '../../../../../components/ConfigField.astro';
+
+A device has one stable ingress profile. Its default Internet egress is a hub-side policy and can change without editing the client. Private-network routes are destination-based and work in addition to that egress.
+
+<ConfigField path="devices[].id" type="string" required="Yes" defaultValue="None" validation="Unique; 1–32 characters matching lowercase letters, digits, and internal hyphens." secret="No; identifier metadata." sideEffects="Names peers, bot callbacks, revocations, profile-key files, and policies." example="laptop" />
+
+<ConfigField path="devices[].address" type="host CIDR string" required="Yes" defaultValue="None" validation="A /32 or /128 host route inside client_cidr; not the network, IPv4 broadcast, or dns_address; unique." secret="No; topology metadata." sideEffects="Becomes the peer address and policy source identity." example="10.80.0.2/32" />
+
+<ConfigField path="devices[].public_key" type="base64 string" required="Yes" defaultValue="None" validation="Unique and decodes to a 32-byte X25519 public key." secret="No; the client private half must remain secret." sideEffects="Admits the AmneziaWG peer and participates in REALITY credential derivation." example="TE5crMJPBmCr2bF/uSbHqAlTAHKQwLKMs0RQxfQ0LU4=" />
+
+<ConfigField path="devices[].egress" type="string" required="Yes" defaultValue="None" validation="Either direct or an existing, enabled role=egress tunnel that permits this device." secret="No; policy metadata." sideEffects="Marks this device's non-private traffic for the selected path." example="direct" />
+
+The following `profiles` shape is decoded only to produce a migration error. It is not accepted by validation; remove it and use the four fields above.
+
+<ConfigField path="devices[].profiles[]" type="deprecated array" required="Must be absent" defaultValue="Empty" validation="Any non-empty value is rejected as a pre-M5 configuration." secret="May contain private keys; remove and rotate them." sideEffects="Blocks validation and deployment." example="profiles: []" />
+
+<ConfigField path="devices[].profiles[].id" type="deprecated string" required="Must be absent" defaultValue="None" validation="Parent profiles list is rejected." secret="No." sideEffects="Blocks validation when present inside a non-empty legacy profile." example="legacy-profile" />
+
+<ConfigField path="devices[].profiles[].egress" type="deprecated string" required="Must be absent" defaultValue="None" validation="Parent profiles list is rejected." secret="No." sideEffects="Blocks validation when present inside a non-empty legacy profile." example="direct" />
+
+<ConfigField path="devices[].profiles[].address" type="deprecated string" required="Must be absent" defaultValue="None" validation="Parent profiles list is rejected." secret="No." sideEffects="Blocks validation when present inside a non-empty legacy profile." example="10.80.0.2/32" />
+
+<ConfigField path="devices[].profiles[].client_public_key" type="deprecated string" required="Must be absent" defaultValue="None" validation="Parent profiles list is rejected." secret="Public half only." sideEffects="Blocks validation when present inside a non-empty legacy profile." example="deprecated" />
+
+<ConfigField path="devices[].profiles[].client_private_key" type="deprecated secret string" required="Must be absent" defaultValue="None" validation="Parent profiles list is rejected." secret="Yes; rotate if this legacy field was exposed." sideEffects="Blocks validation; a private key must never live in hub YAML." example="REDACTED" />
+
+CLI-generated profiles are written `0600` and their private key is not retained. Bot-issued profiles deliberately retain the private key at `/var/lib/vpn-hub/device-profiles/<id>.key`, mode `0600` inside a `0700` directory, so the bot can deliver the same profile again.
+
+Next: [Tunnel configuration](../tunnels/) and [Client ACLs](../client-acls/).
