@@ -152,9 +152,9 @@ extract_address_candidates() {
 check_addresses() {
 	ref=$1
 	if [ -n "$ref" ]; then
-		candidates=$(git grep -n -I -z -e '' "$ref" -- ':!scripts/check-publication_test.sh' 2>/dev/null | extract_address_candidates)
+		candidates=$(git grep -n -I -z -e '' "$ref" -- ':!scripts/check-publication_test.sh' ':!package-lock.json' ':!**/package-lock.json' 2>/dev/null | extract_address_candidates)
 	else
-		candidates=$(git grep -n -I -z -e '' -- ':!scripts/check-publication_test.sh' 2>/dev/null | extract_address_candidates)
+		candidates=$(git grep -n -I -z -e '' -- ':!scripts/check-publication_test.sh' ':!package-lock.json' ':!**/package-lock.json' 2>/dev/null | extract_address_candidates)
 	fi
 	bad=0
 	while IFS='|' read -r value line; do
@@ -180,6 +180,40 @@ EOF
 	[ "$bad" -eq 0 ]
 }
 
+package_lock_paths() {
+	ref=$1
+	if [ -n "$ref" ]; then
+		git ls-tree -r --name-only "$ref" | grep -E '(^|/)package-lock\.json$' || true
+	else
+		git ls-files | grep -E '(^|/)package-lock\.json$' || true
+	fi
+}
+
+check_package_locks() {
+	ref=$1
+	if ! command -v node >/dev/null 2>&1; then
+		echo "The node executable is required to validate tracked package-lock.json files." >&2
+		return 1
+	fi
+
+	locks=$(package_lock_paths "$ref")
+	[ -n "$locks" ] || return 0
+	failed=0
+	while IFS= read -r lock; do
+		[ -n "$lock" ] || continue
+		if [ -n "$ref" ]; then
+			if ! git show "$ref:$lock" | node "$script_dir/validate-package-lock.mjs" "$lock"; then
+				failed=1
+			fi
+		elif ! node "$script_dir/validate-package-lock.mjs" "$lock" <"$lock"; then
+			failed=1
+		fi
+	done <<EOF
+$locks
+EOF
+	[ "$failed" -eq 0 ]
+}
+
 check_ref() {
 	ref=$1
 	failed=0
@@ -199,7 +233,11 @@ check_ref() {
 			failed=1
 		fi
 	fi
-	check_addresses "$ref" || failed=1
+	if check_package_locks "$ref"; then
+		check_addresses "$ref" || failed=1
+	else
+		failed=1
+	fi
 	[ "$failed" -eq 0 ]
 }
 
