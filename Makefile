@@ -37,6 +37,14 @@ publication-check:
 	sh scripts/check-publication.sh
 	sh scripts/check-publication_test.sh
 
+## bot-docs: regenerate tested Telegram UI examples for the website
+bot-docs:
+	go test ./internal/delivery/bot -run TestDocumentationExamples -update-docs
+
+## bot-docs-check: verify committed Telegram UI examples match the renderers
+bot-docs-check:
+	go test ./internal/delivery/bot -run TestDocumentationExamples
+
 ## test-integration: drive real interfaces, rules and traffic (Linux, needs root)
 # Stop any running agent first: it reconciles on a timer and will restore its own
 # ruleset over the one under test.
@@ -122,4 +130,4 @@ logs:
 logs-bot:
 	$(SSH) 'journalctl -u vpn-hub-bot -f'
 
-.PHONY: help fmt lint test test-integration test-integration-box ci golangci terraform-check build build-linux $(STAND_TARGETS) deploy-lab ssh logs logs-bot
+.PHONY: help fmt lint test test-integration test-integration-box ci golangci terraform-check build build-linux $(STAND_TARGETS) deploy-lab ssh logs logs-bot bot-docs bot-docs-check

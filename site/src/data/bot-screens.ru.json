@@ -1,0 +1,576 @@
+[
+  {
+    "id": "candidates",
+    "locale": "ru",
+    "title": "Кандидаты",
+    "text": "📋 <b>docs-egress</b>: 2 кандидата в подписке\n\nВыбранный кандидат сперва проверяется в изолированном namespace; действующий upstream меняется только на доказанно рабочий.\n",
+    "rows": [
+      [
+        {
+          "label": "• 203.0.113.44:443 (текущий)",
+          "callback": "sub:pick:docs-egress:0"
+        }
+      ],
+      [
+        {
+          "label": "198.51.100.44:8443",
+          "callback": "sub:pick:docs-egress:1"
+        }
+      ],
+      [
+        {
+          "label": "⬅️ К подписке",
+          "callback": "sub:c:docs-egress"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "client-acls",
+    "locale": "ru",
+    "title": "🔐 Доступ между устройствами",
+    "text": "🔐 <b>Доступ между устройствами</b>\n\nПо умолчанию VPN-клиенты не ходят друг к другу. Здесь — только точечные разрешения.\n\n• <code>docs-phone</code> → <code>docs-laptop</code> <code>tcp/22</code>\n",
+    "rows": [
+      [
+        {
+          "label": "➖ docs-phone → docs-laptop tcp/22",
+          "callback": "acl:rm:0"
+        }
+      ],
+      [
+        {
+          "label": "➕ Добавить",
+          "callback": "acl:add"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "deploy-countdown",
+    "locale": "ru",
+    "title": "🚀 Деплой",
+    "text": "⏳ Ревизия <code>docs-next-0002</code> применена и ждёт подтверждения.\nОсталось: <b>3м 20с</b>\n\nБез подтверждения агент вернёт предыдущую ревизию.",
+    "rows": [
+      [
+        {
+          "label": "✅ Подтвердить",
+          "callback": "dep:ok"
+        },
+        {
+          "label": "↩️ Откатить",
+          "callback": "dep:rb!"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "deploy-preview",
+    "locale": "ru",
+    "title": "🚀 Деплой",
+    "text": "🚀 <b>Деплой</b>\n\nАктивная ревизия: <code>docs-current-0001</code>\nНовая ревизия: <code>docs-next-0002</code> (2 туннеля, 2 устройства)\nИсключены отозванные: <code>docs-retired</code>\n\n<b>Изменения:</b>\n • ➕ туннель docs-private\n • 🔀 docs-laptop: direct → docs-egress\n • ➕ устройство docs-phone → direct\n\nСо страховкой агент вернёт предыдущую ревизию сам, если не подтвердить за выбранное время — даже если новая ревизия отрежет доступ.",
+    "rows": [
+      [
+        {
+          "label": "✅ Со страховкой…",
+          "callback": "dep:arm:docs-next-0002"
+        }
+      ],
+      [
+        {
+          "label": "⚡ Применить без страховки",
+          "callback": "dep:now:docs-next-0002"
+        }
+      ],
+      [
+        {
+          "label": "↩️ Вернуть предыдущую ревизию",
+          "callback": "dep:rb"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "device-card",
+    "locale": "ru",
+    "title": "Устройства",
+    "text": "📱 <b>docs-laptop</b>\n\nАдрес: <code>192.0.2.10/32</code>\nEgress: <code>docs-egress</code>\nКлюч: <code>PUBLIC-KEY-E…</code>\n\n🟢 онлайн\nТрафик: ⭱ 3.0 ГиБ от устройства, ⭳ 512.0 МиБ к нему\n",
+    "rows": [
+      [
+        {
+          "label": "🔀 Сменить egress",
+          "callback": "dev:eg:docs-laptop"
+        }
+      ],
+      [
+        {
+          "label": "📄 Прислать текущий профиль",
+          "callback": "dev:pr:docs-laptop"
+        }
+      ],
+      [
+        {
+          "label": "📤 Перевыпустить профиль",
+          "callback": "dev:re:docs-laptop"
+        }
+      ],
+      [
+        {
+          "label": "🚫 Отозвать",
+          "callback": "dev:rv:docs-laptop"
+        }
+      ],
+      [
+        {
+          "label": "⬅️ Устройства",
+          "callback": "dev"
+        },
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "devices",
+    "locale": "ru",
+    "title": "📱 Устройства",
+    "text": "📱 <b>Устройства</b>\n\n🟢 <code>docs-laptop</code> → docs-egress — онлайн\n🚫 <code>docs-phone</code> → direct — не подключалось, отозвано\n",
+    "rows": [
+      [
+        {
+          "label": "docs-laptop",
+          "callback": "dev:c:docs-laptop"
+        },
+        {
+          "label": "docs-phone",
+          "callback": "dev:c:docs-phone"
+        }
+      ],
+      [
+        {
+          "label": "➕ Добавить устройство",
+          "callback": "dev:add"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "host",
+    "locale": "ru",
+    "title": "🖥 Хост",
+    "text": "🖥 <b>Хост</b>\n\nАптайм: 26ч 3м\nЗагрузка: 0.15 0.10 0.05\nДиск /: свободно 18.0 ГиБ из 25.0 ГиБ\n\n<b>Юниты:</b>\n🟢 <code>vpn-hub-agent.service</code> — active (running)\n",
+    "rows": [
+      [
+        {
+          "label": "🔄 Обновить",
+          "callback": "host"
+        },
+        {
+          "label": "🔁 Перезапустить агента",
+          "callback": "host:ra"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "hub",
+    "locale": "ru",
+    "title": "⚙️ Хаб",
+    "text": "⚙️ <b>Хаб</b>\n\nEndpoint: <code>hub.example.test:51820</code>\nКлиентская сеть: <code>192.0.2.0/24</code>\nDNS: <code>192.0.2.1</code>\nПубличный ключ: <code>PUBLIC-KEY-E…</code>\n\n<b>AmneziaWG-параметры:</b>\n • <code>Jc = 5</code>\n • <code>Jmin = 50</code>\n\n⚠️ Смена endpoint, сети или DNS ломает уже выданные профили: устройства придётся перевыпустить.",
+    "rows": [
+      [
+        {
+          "label": "✏️ Endpoint",
+          "callback": "hub:e:endpoint"
+        },
+        {
+          "label": "✏️ DNS",
+          "callback": "hub:e:dns_address"
+        }
+      ],
+      [
+        {
+          "label": "✏️ Клиентская сеть",
+          "callback": "hub:e:client_cidr"
+        },
+        {
+          "label": "➕ AWG-параметр",
+          "callback": "hub:aa"
+        }
+      ],
+      [
+        {
+          "label": "➖ Jc",
+          "callback": "hub:ad:jc"
+        }
+      ],
+      [
+        {
+          "label": "➖ Jmin",
+          "callback": "hub:ad:jmin"
+        }
+      ],
+      [
+        {
+          "label": "🔑 Ротация ключа хаба",
+          "callback": "hub:rk"
+        },
+        {
+          "label": "📦 Выгрузить конфиг",
+          "callback": "hub:dl"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "logs",
+    "locale": "ru",
+    "title": "📜 Логи",
+    "text": "📜 <b>Логи</b>\n\nЮниты vpn-hub на хосте:\n• <code>vpn-hub-agent.service</code> — active (running)\n• <code>vpn-hub-docs.service</code> — active (running)\n",
+    "rows": [
+      [
+        {
+          "label": "Агент",
+          "callback": "log:u:vpn-hub-agent.service"
+        },
+        {
+          "label": "Бот",
+          "callback": "log:u:vpn-hub-bot.service"
+        }
+      ],
+      [
+        {
+          "label": "vpn-hub-docs.service",
+          "callback": "log:u:vpn-hub-docs.service"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "main",
+    "locale": "ru",
+    "title": "Центр управления",
+    "text": "Центр управления\nВыберите действие.",
+    "rows": [
+      [
+        {
+          "label": "📊 Статус",
+          "callback": "st"
+        },
+        {
+          "label": "📱 Устройства",
+          "callback": "dev"
+        }
+      ],
+      [
+        {
+          "label": "🚇 Туннели",
+          "callback": "tun"
+        },
+        {
+          "label": "📡 Подписки",
+          "callback": "sub"
+        }
+      ],
+      [
+        {
+          "label": "🚀 Деплой",
+          "callback": "dep"
+        },
+        {
+          "label": "🗺 Маршруты",
+          "callback": "rt"
+        }
+      ],
+      [
+        {
+          "label": "🔐 Между устройствами",
+          "callback": "acl"
+        }
+      ],
+      [
+        {
+          "label": "📜 Логи",
+          "callback": "log"
+        },
+        {
+          "label": "🖥 Хост",
+          "callback": "host"
+        }
+      ],
+      [
+        {
+          "label": "⚙️ Хаб",
+          "callback": "hub"
+        },
+        {
+          "label": "🔔 Настройки",
+          "callback": "set"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "settings",
+    "locale": "ru",
+    "title": "🔔 Настройки уведомлений",
+    "text": "🔔 <b>Настройки уведомлений</b>\n\nИнтервалы: здоровье — 5м, дрейф — 30м, подписки — 6ч (меняются в telegram.yaml).\n\nКатегории:\nНажатие переключает категорию; выбор сохраняется на хабе и переживает рестарт бота.",
+    "rows": [
+      [
+        {
+          "label": "🔔 Автооткаты и деплой",
+          "callback": "set:t:rollback"
+        }
+      ],
+      [
+        {
+          "label": "🔔 Ошибки агента",
+          "callback": "set:t:agent-error"
+        }
+      ],
+      [
+        {
+          "label": "🔕 Сходимость (инфо)",
+          "callback": "set:t:converge"
+        }
+      ],
+      [
+        {
+          "label": "🔔 Здоровье туннелей",
+          "callback": "set:t:health"
+        }
+      ],
+      [
+        {
+          "label": "🔔 Дрейф хоста",
+          "callback": "set:t:drift"
+        }
+      ],
+      [
+        {
+          "label": "🔔 Итоги обновления подписок",
+          "callback": "set:t:subscription"
+        }
+      ],
+      [
+        {
+          "label": "🔔 Изменения мимо бота",
+          "callback": "set:t:oob"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "status",
+    "locale": "ru",
+    "title": "📊 Статус",
+    "text": "📊 <b>Статус</b>\n\nРевизия: <code>docs-current-0001</code> (создана 2ч назад)\n2 туннеля, 2 устройства\n\n⏳ <b>Ждёт подтверждения</b>: ревизия <code>docs-next-0002</code>, осталось 3м 20с\n\nАгент: 🟢 active (running), рестартов: 0\nДрейф: ✅ хост сошёлся с ревизией\n",
+    "rows": [
+      [
+        {
+          "label": "✅ Подтвердить",
+          "callback": "dep:ok"
+        },
+        {
+          "label": "↩️ Откатить",
+          "callback": "dep:rb!"
+        }
+      ],
+      [
+        {
+          "label": "🔄 Обновить",
+          "callback": "st"
+        },
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "subscription-card",
+    "locale": "ru",
+    "title": "Подписки",
+    "text": "📡 <b>docs-egress</b> (вкл)\n\nUpstream: <code>203.0.113.44:443</code>\nЕсть last-known-good — предыдущий работавший upstream.\n\n🟢 probe passed\n",
+    "rows": [
+      [
+        {
+          "label": "🔄 Обновить (авто)",
+          "callback": "sub:r:docs-egress"
+        },
+        {
+          "label": "📋 Кандидаты",
+          "callback": "sub:cand:docs-egress"
+        }
+      ],
+      [
+        {
+          "label": "↩️ Вернуть last-known-good",
+          "callback": "sub:lkg:docs-egress"
+        }
+      ],
+      [
+        {
+          "label": "⬅️ Подписки",
+          "callback": "sub"
+        },
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "subscriptions",
+    "locale": "ru",
+    "title": "📡 Подписки",
+    "text": "📡 <b>Подписки</b>\n\n🟢 <code>docs-egress</code> — 203.0.113.44:443\n\nАвтообновление: раз в 6ч, кандидат сперва доказывает работоспособность в изолированном namespace.",
+    "rows": [
+      [
+        {
+          "label": "docs-egress",
+          "callback": "sub:c:docs-egress"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "tunnel-card",
+    "locale": "ru",
+    "title": "Туннели",
+    "text": "🚇 <b>docs-private</b>\n\nРоль: private-network\nТип: wireguard\nСостояние: вкл\nИсточник: config <code>docs-private.conf</code>\nМаршруты: <code>198.51.100.0/24</code>\nDNS-зоны: <code>docs.example.test</code>\n\n🟢 handshake 10s ago (только что)\n",
+    "rows": [
+      [
+        {
+          "label": "⏸ Выключить",
+          "callback": "tun:off:docs-private"
+        },
+        {
+          "label": "🩺 Проверить",
+          "callback": "tun:t:docs-private"
+        }
+      ],
+      [
+        {
+          "label": "🩺 Пробы (tcp/https/dns)",
+          "callback": "tun:pr:docs-private"
+        }
+      ],
+      [
+        {
+          "label": "➖ маршрут 198.51.100.0/24",
+          "callback": "tun:rd:docs-private:198.51.100.0/24"
+        }
+      ],
+      [
+        {
+          "label": "➕ Маршрут",
+          "callback": "tun:ra:docs-private"
+        },
+        {
+          "label": "➕ DNS-зона",
+          "callback": "tun:za:docs-private"
+        }
+      ],
+      [
+        {
+          "label": "➖ зона docs.example.test",
+          "callback": "tun:zd:docs-private:docs.example.test"
+        }
+      ],
+      [
+        {
+          "label": "⬅️ Туннели",
+          "callback": "tun"
+        },
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "tunnels",
+    "locale": "ru",
+    "title": "🚇 Туннели",
+    "text": "🚇 <b>Туннели</b>\n\n🟢 <code>docs-private</code> — private-network, wireguard, вкл\n⏸ <code>docs-egress</code> — egress, xray, выкл\n",
+    "rows": [
+      [
+        {
+          "label": "docs-private",
+          "callback": "tun:c:docs-private"
+        }
+      ],
+      [
+        {
+          "label": "docs-egress",
+          "callback": "tun:c:docs-egress"
+        }
+      ],
+      [
+        {
+          "label": "🩺 Проверить все",
+          "callback": "tun:ta"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Меню",
+          "callback": "m"
+        }
+      ]
+    ]
+  }
+]
