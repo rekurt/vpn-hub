@@ -31,7 +31,11 @@ ConfigurationDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 
 UMask=0077
+Environment=SOPS_AGE_KEY_FILE=/etc/vpn-hub/age/keys.txt
 ProtectSystem=strict
+# Configuration is supplied by the operator. The reconciler may read decrypted
+# material but must not mutate /etc/vpn-hub.
+ReadOnlyPaths=/etc/vpn-hub
 # RuntimeDirectory is normally writable under ProtectSystem=strict. Declare it
 # explicitly as well: the reconciler writes one-time key and provider files here,
 # and older systemd sandbox combinations otherwise expose it read-only.

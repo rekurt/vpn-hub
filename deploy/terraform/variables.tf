@@ -41,9 +41,23 @@ variable "extra_ssh_key_fingerprints" {
 }
 
 variable "ssh_allowed_cidrs" {
-  description = "Sources permitted to reach SSH at the cloud firewall. Narrow this to your own address once the hub is not being rebuilt constantly."
+  description = "Sources permitted to reach SSH at the cloud firewall. This value is required; use allow_global_ssh only for an explicit break-glass recovery."
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+
+  validation {
+    condition = alltrue([
+      for cidr in var.ssh_allowed_cidrs : can(cidrhost(cidr, 0)) && (
+        var.allow_global_ssh || !contains(["0.0.0.0/0", "::/0"], cidr)
+      )
+    ])
+    error_message = "ssh_allowed_cidrs must contain valid CIDRs and cannot include 0.0.0.0/0 or ::/0 unless allow_global_ssh is true."
+  }
+}
+
+variable "allow_global_ssh" {
+  description = "Break-glass override permitting global SSH CIDRs. Keep false unless recovery access requires temporary global exposure."
+  type        = bool
+  default     = false
 }
 
 variable "wireguard_port" {
