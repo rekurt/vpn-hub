@@ -26,7 +26,7 @@ func TestRevertEditTellsTheTruthWhenTheUndoFails(t *testing.T) {
 	}
 	for _, tt := range locales {
 		t.Run(string(tt.locale), func(t *testing.T) {
-			l, err := NewLocalizer(tt.locale)
+			l, err := newStrictLocalizer(tt.locale)
 			if err != nil {
 				t.Fatal(err)
 			}

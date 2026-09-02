@@ -2,7 +2,9 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,12 +32,10 @@ const (
 	msgFailureSubscriptionDownload MessageID = "failure/subscription_download"
 	msgFailureSubscriptionParse    MessageID = "failure/subscription_parse"
 	msgFailureSubscriptionEmpty    MessageID = "failure/subscription_empty"
-	msgReasonSubscriptionEmpty     MessageID = "reason/subscription_empty"
 	msgCandidateListStale          MessageID = "subscription/candidate_list_stale"
 	msgCandidateChecking           MessageID = "subscription/candidate_checking"
 	msgFailureCandidateStart       MessageID = "failure/candidate_start"
 	msgFailureCandidatePublic      MessageID = "failure/candidate_public"
-	msgFailureUplink               MessageID = "failure/uplink"
 	msgCandidateRejected           MessageID = "subscription/candidate_rejected"
 	msgButtonToCandidates          MessageID = "button/to_candidates"
 	msgFailureCandidateWrite       MessageID = "failure/candidate_write"
@@ -47,8 +47,84 @@ const (
 	msgAgentInactiveWarning        MessageID = "subscription/agent_inactive_warning"
 	msgSubscriptionProgress        MessageID = "subscription/progress"
 	msgNoCandidatePassed           MessageID = "subscription/no_candidate_passed"
+	msgFailureSubscriptionRefresh  MessageID = "failure/subscription_refresh"
 	msgScheduledRefresh            MessageID = "subscription/scheduled_refresh"
 )
+
+type subscriptionFailureKind uint8
+
+const (
+	subscriptionFailureUnknown subscriptionFailureKind = iota
+	subscriptionFailureFetch
+	subscriptionFailureParse
+	subscriptionFailureNoCandidates
+	subscriptionFailureValidation
+	subscriptionFailureProbe
+	subscriptionFailureStore
+)
+
+func (kind subscriptionFailureKind) messageID() MessageID {
+	switch kind {
+	case subscriptionFailureFetch:
+		return msgFailureSubscriptionDownload
+	case subscriptionFailureParse:
+		return msgFailureSubscriptionParse
+	case subscriptionFailureNoCandidates:
+		return msgFailureSubscriptionEmpty
+	case subscriptionFailureValidation:
+		return msgFailureCandidatePublic
+	case subscriptionFailureProbe:
+		return msgNoCandidatePassed
+	case subscriptionFailureStore:
+		return msgFailureCandidateWrite
+	default:
+		return msgFailureSubscriptionRefresh
+	}
+}
+
+type subscriptionStageError struct {
+	kind subscriptionFailureKind
+	err  error
+}
+
+func (e *subscriptionStageError) Error() string { return e.err.Error() }
+func (e *subscriptionStageError) Unwrap() error { return e.err }
+func (e *subscriptionStageError) safeMessageID() MessageID {
+	return e.kind.messageID()
+}
+
+func categorizeSubscriptionError(kind subscriptionFailureKind, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &subscriptionStageError{kind: kind, err: err}
+}
+
+func subscriptionFailureKindFor(err error) subscriptionFailureKind {
+	var stage *subscriptionStageError
+	if errors.As(err, &stage) {
+		return stage.kind
+	}
+	var transport *url.Error
+	if errors.As(err, &transport) {
+		return subscriptionFailureFetch
+	}
+	return subscriptionFailureUnknown
+}
+
+type subscriptionFetcherFunc func(context.Context, string) ([]byte, error)
+
+func (fetch subscriptionFetcherFunc) Fetch(ctx context.Context, sourceURL string) ([]byte, error) {
+	return fetch(ctx, sourceURL)
+}
+
+type categorizedUpstreamWriter struct {
+	store upstreamStore
+}
+
+func (writer categorizedUpstreamWriter) Write(ctx context.Context, tunnel domain.Tunnel, chosen domain.ProxyTunnel) error {
+	return categorizeSubscriptionError(subscriptionFailureStore, writer.store.Write(ctx, tunnel, chosen))
+}
 
 func (b *Bot) subscriptionTunnels(cfg domain.Config) []domain.Tunnel {
 	var tunnels []domain.Tunnel
@@ -75,7 +151,8 @@ func (b *Bot) subEntryFor(tunnel domain.Tunnel) subEntry {
 func (b *Bot) buildSubs(ctx context.Context) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
+		b.logf("load subscriptions: %v", err)
+		return renderSubscriptionFailure(b.L, subscriptionFailureValidation)
 	}
 	var entries []subEntry
 	for _, tunnel := range b.subscriptionTunnels(cfg) {
@@ -221,16 +298,18 @@ func (b *Bot) showCandidates(ctx context.Context, cb *tg.CallbackQuery, tunnelID
 
 		payload, err := b.Fetch(ctx, tunnel.Source.Value)
 		if err != nil {
-			edit(renderFailure(b.L, b.text(msgFailureSubscriptionDownload), err))
+			b.logf("fetch subscription candidates for %s: %v", tunnelID, err)
+			edit(renderSubscriptionFailure(b.L, subscriptionFailureFetch))
 			return
 		}
 		candidates, err := b.Parse(payload)
 		if err != nil {
-			edit(renderFailure(b.L, b.text(msgFailureSubscriptionParse), err))
+			b.logf("parse subscription candidates for %s: %v", tunnelID, err)
+			edit(renderSubscriptionFailure(b.L, subscriptionFailureParse))
 			return
 		}
 		if len(candidates) == 0 {
-			edit(renderFailure(b.L, b.text(msgFailureSubscriptionEmpty), fmt.Errorf("%s", b.text(msgReasonSubscriptionEmpty))))
+			edit(renderSubscriptionFailure(b.L, subscriptionFailureNoCandidates))
 			return
 		}
 		b.candidates.put(tunnelID, candidates)
@@ -285,26 +364,30 @@ func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID 
 
 		candidate, err := health.PinPublicEndpoint(ctx, b.Resolver, candidate)
 		if err != nil {
-			edit(renderFailure(b.L, b.text(msgFailureCandidatePublic), err))
+			b.logf("validate subscription candidate for %s: %v", tunnelID, err)
+			edit(renderSubscriptionFailure(b.L, subscriptionFailureValidation))
 			return
 		}
 		uplink, err := b.Uplink(ctx)
 		if err != nil {
-			edit(renderFailure(b.L, b.text(msgFailureUplink), err))
+			b.logf("prepare subscription candidate probe for %s: %v", tunnelID, err)
+			edit(renderSubscriptionFailure(b.L, subscriptionFailureProbe))
 			return
 		}
 		if err := b.Prove(ctx, candidate, uplink); err != nil {
+			b.logf("probe subscription candidate for %s: %v", tunnelID, err)
 			edit(screen{
-				text:   b.text(msgCandidateRejected, esc(candidate.Server), candidate.Port, esc(err.Error())),
+				text:   b.text(msgCandidateRejected, esc(candidate.Server), candidate.Port, b.text(subscriptionFailureProbe.messageID())),
 				markup: keyboard([]tg.InlineKeyboardButton{btn("📋 "+b.text(msgButtonToCandidates), "sub:cand:"+tunnelID), btn("📡 "+b.text(msgButtonToSubscription), "sub:c:"+tunnelID)}),
 			})
 			return
 		}
 		if err := b.Upstreams.Write(ctx, tunnel, candidate); err != nil {
-			edit(renderFailure(b.L, b.text(msgFailureCandidateWrite), err))
+			b.logf("store subscription candidate for %s: %v", tunnelID, err)
+			edit(renderSubscriptionFailure(b.L, subscriptionFailureStore))
 			return
 		}
-		edit(scr(renderRefreshResult(b.L, tunnelID, candidate, nil, b.agentInactiveWarning(ctx))))
+		edit(scr(renderRefreshResult(b.L, tunnelID, candidate, 0, b.agentInactiveWarning(ctx))))
 	})
 	return result{toast: b.text(msgCandidateCheckingToast)}
 }
@@ -315,7 +398,8 @@ func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID 
 func (b *Bot) startManualRefresh(ctx context.Context, cb *tg.CallbackQuery, tunnelID string) result {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
+		b.logf("load subscriptions for refresh %s: %v", tunnelID, err)
+		return b.show(ctx, cb, renderSubscriptionFailure(b.L, subscriptionFailureValidation))
 	}
 	var subject domain.Tunnel
 	for _, tunnel := range b.subscriptionTunnels(cfg) {
@@ -345,9 +429,13 @@ func (b *Bot) startManualRefresh(ctx context.Context, cb *tg.CallbackQuery, tunn
 		chosen, rejected, err := b.Refresh(ctx, subject, b.progressEditor(ctx, message.Chat.ID, message.ID, tunnelID))
 		var view screen
 		if err != nil {
-			view = scr(renderRefreshFailure(b.L, tunnelID, rejected, err.Error()))
+			b.logf("refresh subscription %s: %v; rejected=%q", tunnelID, err, rejected)
+			view = scr(renderRefreshFailure(b.L, tunnelID, len(rejected), subscriptionFailureKindFor(err)))
 		} else {
-			view = scr(renderRefreshResult(b.L, tunnelID, chosen, rejected, b.agentInactiveWarning(ctx)))
+			if len(rejected) > 0 {
+				b.logf("refresh subscription %s rejected candidates: %q", tunnelID, rejected)
+			}
+			view = scr(renderRefreshResult(b.L, tunnelID, chosen, len(rejected), b.agentInactiveWarning(ctx)))
 		}
 		if err := b.API.EditMessageText(ctx, message.Chat.ID, message.ID, view.text, view.markup); err != nil {
 			b.logf("refresh edit: %v", err)
@@ -380,7 +468,10 @@ func (b *Bot) progressEditor(ctx context.Context, chatID, messageID int64, tunne
 
 		var text strings.Builder
 		text.WriteString(b.text(msgSubscriptionProgress, esc(tunnelID), tried, total))
-		appendRejections(b.L, &text, rejected)
+		if len(rejected) > 0 {
+			b.logf("subscription refresh progress %s: tried=%d total=%d rejected=%q", tunnelID, tried, total, rejected)
+		}
+		appendRejectionSummary(b.L, &text, len(rejected))
 		if err := b.API.EditMessageText(ctx, chatID, messageID, text.String(), nil); err != nil {
 			b.logf("progress edit: %v", err)
 		}
@@ -393,26 +484,34 @@ func (b *Bot) progressEditor(ctx context.Context, chatID, messageID int64, tunne
 func (b *Bot) canaryRefresh(ctx context.Context, tunnel domain.Tunnel, progress func(tried, total int, rejected []string)) (domain.ProxyTunnel, []string, error) {
 	uplink, err := b.Uplink(ctx)
 	if err != nil {
-		return domain.ProxyTunnel{}, nil, err
+		return domain.ProxyTunnel{}, nil, categorizeSubscriptionError(subscriptionFailureProbe, err)
 	}
 	canary := linux.Canary{Egress: linux.Egress{SecretsDir: b.RuntimeDir}}
 
 	return application.SubscriptionRefresher{
-		Fetch: health.HTTPSSubscriptionFetcher{},
-		Parse: linux.ParseSubscription,
-		Prove: func(ctx context.Context, candidates []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
-			return b.provePublicCandidates(ctx, candidates,
-				func(ctx context.Context, pinned []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
-					chosen, reasons, err := canary.SelectCandidate(ctx, pinned, uplink, progress)
-					if err != nil {
-						// SelectCandidate's aggregate error repeats every rejection, and the
-						// screen renders the rejection list itself -- keep the one-line verdict.
-						err = fmt.Errorf("%s", b.text(msgNoCandidatePassed))
-					}
-					return chosen, reasons, err
-				})
+		Fetch: subscriptionFetcherFunc(func(ctx context.Context, sourceURL string) ([]byte, error) {
+			payload, err := (health.HTTPSSubscriptionFetcher{}).Fetch(ctx, sourceURL)
+			return payload, categorizeSubscriptionError(subscriptionFailureFetch, err)
+		}),
+		Parse: func(payload []byte) ([]domain.ProxyTunnel, error) {
+			candidates, err := linux.ParseSubscription(payload)
+			if err != nil {
+				return nil, categorizeSubscriptionError(subscriptionFailureParse, err)
+			}
+			if len(candidates) == 0 {
+				return nil, categorizeSubscriptionError(subscriptionFailureNoCandidates, errors.New("subscription contains no supported candidates"))
+			}
+			return candidates, nil
 		},
-		Store: linux.UpstreamFile{Dir: b.ConfigDir},
+		Prove: func(ctx context.Context, candidates []domain.ProxyTunnel) (domain.ProxyTunnel, []string, error) {
+			pinned, err := health.PinPublicEndpoints(ctx, b.Resolver, candidates)
+			if err != nil {
+				return domain.ProxyTunnel{}, nil, categorizeSubscriptionError(subscriptionFailureValidation, err)
+			}
+			chosen, reasons, err := canary.SelectCandidate(ctx, pinned, uplink, progress)
+			return chosen, reasons, categorizeSubscriptionError(subscriptionFailureProbe, err)
+		},
+		Store: categorizedUpstreamWriter{store: b.Upstreams},
 	}.Refresh(ctx, tunnel)
 }
 
@@ -467,10 +566,14 @@ func (b *Bot) refreshScheduled(ctx context.Context, tunnel domain.Tunnel) {
 
 	chosen, rejected, err := b.Refresh(ctx, tunnel, nil)
 	if err != nil {
-		view := scr(renderRefreshFailure(b.L, tunnel.ID, rejected, err.Error()))
+		b.logf("scheduled subscription refresh %s: %v; rejected=%q", tunnel.ID, err, rejected)
+		view := scr(renderRefreshFailure(b.L, tunnel.ID, len(rejected), subscriptionFailureKindFor(err)))
 		b.emit(event{category: "subscription", text: b.text(msgScheduledRefresh) + "\n\n" + view.text, markup: view.markup})
 		return
 	}
-	view := scr(renderRefreshResult(b.L, tunnel.ID, chosen, rejected, b.agentInactiveWarning(ctx)))
+	if len(rejected) > 0 {
+		b.logf("scheduled subscription refresh %s rejected candidates: %q", tunnel.ID, rejected)
+	}
+	view := scr(renderRefreshResult(b.L, tunnel.ID, chosen, len(rejected), b.agentInactiveWarning(ctx)))
 	b.emit(event{category: "subscription", text: b.text(msgScheduledRefresh) + "\n\n" + view.text, markup: view.markup})
 }

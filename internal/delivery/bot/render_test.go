@@ -164,7 +164,7 @@ func TestRenderRefreshResult(t *testing.T) {
 	renderLocales(t, "refresh_result.golden", func(l Localizer) (string, *tg.InlineKeyboardMarkup) {
 		return renderRefreshResult(l, "xray-de",
 			domain.ProxyTunnel{Server: "1.2.3.4", Port: 443},
-			[]string{"5.6.7.8:443: the candidate did not carry traffic: timeout"},
+			1,
 			"agent is inactive")
 	})
 }
@@ -304,8 +304,7 @@ func TestRenderCountdownOverdue(t *testing.T) {
 func TestRenderRefreshFailure(t *testing.T) {
 	t.Parallel()
 	renderLocales(t, "refresh_failure.golden", func(l Localizer) (string, *tg.InlineKeyboardMarkup) {
-		return renderRefreshFailure(l, "xray-de",
-			[]string{"1.2.3.4:443: did not carry traffic: timeout"}, "no candidate carried traffic")
+		return renderRefreshFailure(l, "xray-de", 1, subscriptionFailureProbe)
 	})
 }
 
@@ -386,7 +385,7 @@ func TestRenderLogTailStaysUnderTheCap(t *testing.T) {
 	for i := 0; i < 400; i++ {
 		lines = append(lines, "line with <angle> & \"quote\" chars that esc() expands")
 	}
-	l, err := NewLocalizer(LocaleEnglish)
+	l, err := newStrictLocalizer(LocaleEnglish)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +414,7 @@ func TestShortenKeepsValidUTF8(t *testing.T) {
 // The subscription URL carries a token; the tunnel card must never echo it.
 func TestTunnelCardHidesSubscriptionURL(t *testing.T) {
 	t.Parallel()
-	l, err := NewLocalizer(LocaleEnglish)
+	l, err := newStrictLocalizer(LocaleEnglish)
 	if err != nil {
 		t.Fatal(err)
 	}

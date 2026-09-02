@@ -1,8 +1,13 @@
 package bot
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -156,6 +161,140 @@ func TestCatalogsHaveParity(t *testing.T) {
 			t.Errorf("English catalog is missing %q", id)
 		}
 	}
+}
+
+func TestProductionMessageIDsExistInBothCatalogs(t *testing.T) {
+	t.Parallel()
+
+	sources := map[string][]byte{}
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources[name] = body
+	}
+
+	missing, err := missingCatalogMessageIDs(sources, englishCatalog(), russianCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("production MessageIDs missing from locale catalogs: %s", strings.Join(missing, ", "))
+	}
+}
+
+func TestMessageIDCatalogContractRejectsSyntheticMissingID(t *testing.T) {
+	t.Parallel()
+
+	sources := map[string][]byte{
+		"synthetic_source": []byte("package bot\nconst msgSyntheticMissing MessageID = \"synthetic/missing\"\nfunc text(MessageID) {}\nfunc syntheticUse() { text(\"synthetic/used\") }\n"),
+	}
+	missing, err := missingCatalogMessageIDs(sources, Catalog{}, Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(missing, []string{"synthetic/missing", "synthetic/used"}) {
+		t.Fatalf("missing IDs = %v, want declared and directly used synthetic IDs", missing)
+	}
+}
+
+func missingCatalogMessageIDs(sources map[string][]byte, catalogs ...Catalog) ([]string, error) {
+	declared := map[MessageID]struct{}{}
+	files := make([]string, 0, len(sources))
+	for name := range sources {
+		files = append(files, name)
+	}
+	sort.Strings(files)
+
+	for _, name := range files {
+		file, err := parser.ParseFile(token.NewFileSet(), name, sources[name], 0)
+		if err != nil {
+			return nil, err
+		}
+		for _, declaration := range file.Decls {
+			group, ok := declaration.(*ast.GenDecl)
+			if !ok || group.Tok != token.CONST {
+				continue
+			}
+			messageIDGroup := false
+			for _, specification := range group.Specs {
+				values := specification.(*ast.ValueSpec)
+				if values.Type != nil {
+					identifier, ok := values.Type.(*ast.Ident)
+					messageIDGroup = ok && identifier.Name == "MessageID"
+				}
+				if !messageIDGroup {
+					continue
+				}
+				for _, value := range values.Values {
+					literal, ok := value.(*ast.BasicLit)
+					if !ok || literal.Kind != token.STRING {
+						continue
+					}
+					decoded, err := strconv.Unquote(literal.Value)
+					if err != nil {
+						return nil, err
+					}
+					declared[MessageID(decoded)] = struct{}{}
+				}
+			}
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := ""
+			switch function := call.Fun.(type) {
+			case *ast.Ident:
+				name = function.Name
+			case *ast.SelectorExpr:
+				name = function.Sel.Name
+			}
+			positions := map[string][]int{
+				"MessageID":    {0},
+				"Text":         {0},
+				"text":         {0},
+				"newOperation": {0},
+				"plural":       {2, 3, 4},
+			}[name]
+			for _, position := range positions {
+				if position >= len(call.Args) {
+					continue
+				}
+				literal, ok := call.Args[position].(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					continue
+				}
+				decoded, err := strconv.Unquote(literal.Value)
+				if err == nil {
+					declared[MessageID(decoded)] = struct{}{}
+				}
+			}
+			return true
+		})
+	}
+
+	missing := make([]string, 0)
+	for id := range declared {
+		for _, catalog := range catalogs {
+			if _, ok := catalog[id]; !ok {
+				missing = append(missing, string(id))
+				break
+			}
+		}
+	}
+	sort.Strings(missing)
+	return missing, nil
 }
 
 type formatArgument struct {

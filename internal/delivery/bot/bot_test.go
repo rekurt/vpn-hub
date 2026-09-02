@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -231,9 +232,14 @@ tunnels:
 	}
 
 	api := &fakeAPI{}
+	localizer, err := newStrictLocalizer(locale)
+	if err != nil {
+		t.Fatal(err)
+	}
 	instance := &Bot{
 		API:           api,
 		Cfg:           Config{AdminID: adminID, Locale: locale, Notifications: Notifications{HealthInterval: time.Minute, DriftInterval: time.Minute, SubscriptionRefresh: time.Hour}},
+		L:             localizer,
 		ConfigPath:    configPath,
 		StateDir:      stateDir,
 		ConfigDir:     configDir,
@@ -452,7 +458,7 @@ func TestLocaleCommandDescriptionsAndStartup(t *testing.T) {
 			instance, api := hubFixtureLocale(t, tt.locale)
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			if err := instance.Run(ctx); err != context.Canceled {
+			if err := instance.Run(ctx); !errors.Is(err, context.Canceled) {
 				t.Fatalf("Run error = %v, want context canceled", err)
 			}
 
@@ -1777,7 +1783,7 @@ func TestKeyRotationPartialFailureIsHonest(t *testing.T) {
 	if !strings.Contains(last.text, "Rotation stopped") {
 		t.Fatalf("expected an interrupted-rotation message:\n%s", last.text)
 	}
-	if !strings.Contains(last.text, "manual reissue") {
+	if !strings.Contains(last.text, "Manual reissue") {
 		t.Fatalf("the message must name devices needing manual re-issue:\n%s", last.text)
 	}
 }

@@ -10,8 +10,8 @@ func TestSubscriptionProgressIsLocalized(t *testing.T) {
 		locale Locale
 		want   string
 	}{
-		{LocaleEnglish, "📡 <b>wg-nl</b>: checking candidate 2 of 3 in an isolated namespace…\n\nRejected (1):\n • <code>timeout</code>\n"},
-		{LocaleRussian, "📡 <b>wg-nl</b>: проверяю кандидата 2 из 3 в изолированном namespace…\n\nОтклонены (1):\n • <code>timeout</code>\n"},
+		{LocaleEnglish, "📡 <b>wg-nl</b>: checking candidate 2 of 3 in an isolated namespace…\n\nRejected candidates: 1. Details are available in the bot service log.\n"},
+		{LocaleRussian, "📡 <b>wg-nl</b>: проверяю кандидата 2 из 3 в изолированном namespace…\n\nОтклонено кандидатов: 1. Подробности доступны в журнале сервиса бота.\n"},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.locale), func(t *testing.T) {
