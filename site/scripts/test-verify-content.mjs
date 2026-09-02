@@ -10,9 +10,9 @@ function verify(root, ...args) {
   return spawnSync(process['execPath'], [verifier, '--docs-root', root, ...args], { encoding: 'utf8' });
 }
 
-const checkedIn = resolve(scriptsDir, '../src/content/docs');
-notEqual(verify(checkedIn)['status'], 0, 'strict parity must fail while Task 9 translations are missing');
-equal(verify(checkedIn, '--source-locale', 'en')['status'], 0, 'the canonical English source passes');
+equal(verify(join(fixtures, 'complete'))['status'], 0, 'a complete three-locale tree passes strict parity');
+equal(verify(resolve(scriptsDir, '../src/content/docs'), '--source-locale', 'en')['status'], 0,
+  'the canonical English source passes independently of translation progress');
 equal(verify(join(fixtures, 'missing-peer'), '--source-locale', 'en')['status'], 0,
   'canonical source mode does not require translation peers');
 notEqual(verify(join(fixtures, 'duplicate-route'), '--source-locale', 'en')['status'], 0,

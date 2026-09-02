@@ -35,10 +35,13 @@ ssh root@"$HUB_HOST" 'sh /run/vpn-hub-stage/install.sh'
 Keep the previous verified artifact before replacing binaries. Restage that artifact and run the same `deploy/install.sh`. To undo a first install before configuration exists:
 
 ```bash
-sudo systemctl disable --now vpn-hub-bot vpn-hub-agent
-sudo rm -f /usr/local/bin/hubctl /usr/local/bin/vpn-hub-agent /usr/local/bin/vpn-hub-bot
-sudo rm -f /etc/systemd/system/vpn-hub-agent.service /etc/systemd/system/vpn-hub-bot.service
-sudo systemctl daemon-reload
+ssh root@"$HUB_HOST" '
+set -eu
+systemctl disable --now vpn-hub-bot vpn-hub-agent
+rm -f /usr/local/bin/hubctl /usr/local/bin/vpn-hub-agent /usr/local/bin/vpn-hub-bot
+rm -f /etc/systemd/system/vpn-hub-agent.service /etc/systemd/system/vpn-hub-bot.service
+systemctl daemon-reload
+'
 ```
 
 Do not remove `/etc/vpn-hub` or `/var/lib/vpn-hub` after real use until their secrets and recovery state have been backed up or deliberately destroyed.

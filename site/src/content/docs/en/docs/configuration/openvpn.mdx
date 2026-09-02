@@ -35,11 +35,53 @@ SYNTHETIC-DOCUMENTATION-KEY
 </key>
 ```
 
+On a fresh hub, open a root SSH session and bootstrap the age identity consumed by the systemd units:
+
 ```bash
-sops --encrypt --in-place /etc/vpn-hub/secrets/office.ovpn
-sudo chmod 0600 /etc/vpn-hub/secrets/office.ovpn
-sudo hubctl --config /etc/vpn-hub validate
+ssh root@"$HUB_HOST"
 ```
+
+At the remote root prompt, run:
+
+```bash
+apt-get update
+apt-get install -y age
+install -d -m 0700 /etc/vpn-hub/age /etc/vpn-hub/secrets
+test ! -e /etc/vpn-hub/age/keys.txt
+age-keygen -o /etc/vpn-hub/age/keys.txt
+chmod 0600 /etc/vpn-hub/age/keys.txt
+age-keygen -y /etc/vpn-hub/age/keys.txt > /etc/vpn-hub/age/recipient.txt
+chmod 0644 /etc/vpn-hub/age/recipient.txt
+```
+
+Create plaintext only on tmpfs and encrypt it explicitly as binary data. Point `source.value` in `hub.yaml` at `secrets/office.ovpn.sops.binary`, then prove the actual runtime decrypt and OpenVPN parser paths:
+
+```bash
+umask 077
+plain=$(mktemp /run/office-ovpn.XXXXXX)
+encrypted=$(mktemp /run/office-ovpn-sops.XXXXXX)
+trap 'rm -f -- "$plain" "$encrypted"' EXIT
+${EDITOR:-vi} "$plain"
+recipient=$(cat /etc/vpn-hub/age/recipient.txt)
+sops encrypt --age "$recipient" --input-type binary --output-type binary "$plain" \
+  > "$encrypted"
+install -o root -g root -m 0600 "$encrypted" \
+  /etc/vpn-hub/secrets/office.ovpn.sops.binary
+rm -f -- "$plain" "$encrypted"
+trap - EXIT
+export SOPS_AGE_KEY_FILE=/etc/vpn-hub/age/keys.txt
+sops --decrypt /etc/vpn-hub/secrets/office.ovpn.sops.binary >/dev/null
+hubctl --config /etc/vpn-hub/hub.yaml validate
+verify_state=$(mktemp -d /run/vpn-hub-verify.XXXXXX)
+trap 'rm -rf -- "$verify_state"' EXIT
+hubctl --config /etc/vpn-hub/hub.yaml deploy --state-dir "$verify_state"
+vpn-hub-agent reconcile --dry-run --state-dir "$verify_state" \
+  --config-dir /etc/vpn-hub --server-key /etc/vpn-hub/server.key
+rm -rf -- "$verify_state"
+trap - EXIT
+```
+
+**Expected result:** decryption exits zero and dry-run prints planned operations rather than a SOPS or OpenVPN parser error. Back up `/etc/vpn-hub/age/keys.txt` separately; rotate a disclosed identity by re-encrypting every provider file to a new recipient before removing the old key.
 
 The placeholders are not valid credentials. A `private-network` OpenVPN profile must not contain `redirect-gateway`; VPN Hub rejects it because it would make that namespace a default route.
 
