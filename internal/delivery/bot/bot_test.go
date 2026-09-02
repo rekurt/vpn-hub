@@ -395,7 +395,7 @@ func TestEnglishAndRussianDeviceTunnelWorkflows(t *testing.T) {
 				t.Fatalf("stale dialog toast = %q, want %q", got, tt.staleDialog)
 			}
 
-			release, _, ok := instance.gate.Acquire("background task")
+			release, _, ok := instance.gate.Acquire(newOperation(msgOperationHubKeyRotation))
 			if !ok {
 				t.Fatal("gate is unexpectedly busy")
 			}
@@ -544,6 +544,19 @@ func screenCallbackData(markup *tg.InlineKeyboardMarkup) []string {
 	return values
 }
 
+func screenButtonText(markup *tg.InlineKeyboardMarkup) string {
+	if markup == nil {
+		return ""
+	}
+	var values []string
+	for _, row := range markup.InlineKeyboard {
+		for _, button := range row {
+			values = append(values, button.Text)
+		}
+	}
+	return strings.Join(values, "\n")
+}
+
 type localeBehavior struct {
 	locale               Locale
 	start                string
@@ -593,7 +606,7 @@ func localeBehaviors() []localeBehavior {
 			zonePrompt:           "➕ Which DNS zone should be added to <b>wg-nl</b>? Send a domain, for example <code>corp.internal</code>.",
 			accessChanged:        "The change will take effect after deployment.",
 			staleDialog:          "This dialog has already ended",
-			busy:                 "⏳ Busy: background task",
+			busy:                 "⏳ Busy: rotating hub key",
 			startupPrefix:        "🤖 Bot started.",
 			commandDescriptions: []string{
 				"Main menu", "Hub status", "Devices", "Tunnels", "Deploy configuration", "Subscriptions", "Routes",
@@ -621,7 +634,7 @@ func localeBehaviors() []localeBehavior {
 			zonePrompt:           "➕ Какую DNS-зону добавить в <b>wg-nl</b>? Пришлите домен, например <code>corp.internal</code>.",
 			accessChanged:        "Изменение вступит в силу после деплоя.",
 			staleDialog:          "Диалог уже завершён",
-			busy:                 "⏳ Занято: background task",
+			busy:                 "⏳ Занято: ротация ключа хаба",
 			startupPrefix:        "🤖 Бот запущен.",
 			commandDescriptions: []string{
 				"Главное меню", "Статус хаба", "Устройства", "Туннели", "Деплой конфигурации", "Подписки", "Маршруты",
@@ -790,7 +803,7 @@ func TestBusyGateAnswersWithTheRunningOperation(t *testing.T) {
 	t.Parallel()
 	instance, api := hubFixture(t)
 
-	release, _, ok := instance.gate.Acquire("тестовая операция")
+	release, _, ok := instance.gate.Acquire(newOperation(msgOperationHubKeyRotation))
 	if !ok {
 		t.Fatal("gate is unexpectedly busy")
 	}
@@ -800,8 +813,34 @@ func TestBusyGateAnswersWithTheRunningOperation(t *testing.T) {
 	api.mu.Lock()
 	lastToast := api.toasts[len(api.toasts)-1]
 	api.mu.Unlock()
-	if !strings.Contains(lastToast, "тестовая операция") {
+	if !strings.Contains(lastToast, "rotating hub key") {
 		t.Fatalf("the busy answer does not name the operation: %q", lastToast)
+	}
+}
+
+func TestEnglishACLResultRemainsConsistentlyLegacyRussian(t *testing.T) {
+	t.Parallel()
+	instance, api := hubFixtureLocale(t, LocaleEnglish)
+
+	instance.addClientACL(context.Background(), nil, domain.ClientACLAny, "macbook", domain.ClientACLTCP, 22)
+	view := api.lastScreen(t)
+	for _, fragment := range []string{
+		"🔐 Разрешён доступ <b>any</b> → <b>macbook</b> <code>tcp/22</code>.",
+		"Изменение вступит в силу после деплоя.",
+		"🚀 Деплой",
+		"🏠 Меню",
+	} {
+		if !strings.Contains(view.text+screenButtonText(view.markup), fragment) {
+			t.Fatalf("legacy ACL result is missing %q: text=%q markup=%+v", fragment, view.text, view.markup)
+		}
+	}
+	for _, fragment := range []string{"The change will take effect after deployment.", "Deploy", "Menu"} {
+		if strings.Contains(view.text+screenButtonText(view.markup), fragment) {
+			t.Fatalf("legacy ACL result mixes in English %q: text=%q markup=%+v", fragment, view.text, view.markup)
+		}
+	}
+	if got := screenCallbackData(view.markup); !equalStrings(got, []string{"dep", "acl", "m"}) {
+		t.Fatalf("ACL result callbacks = %v", got)
 	}
 }
 

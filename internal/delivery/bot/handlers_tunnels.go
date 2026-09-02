@@ -156,9 +156,9 @@ func (b *Bot) routeTunnels(ctx context.Context, cb *tg.CallbackQuery, action str
 // revert discipline: disabling a tunnel a device depends on is refused with the
 // exact reason.
 func (b *Bot) toggleTunnel(ctx context.Context, cb *tg.CallbackQuery, tunnelID string, enable bool) result {
-	name := b.text(msgOperationTunnelDisable, tunnelID)
+	name := newOperation(msgOperationTunnelDisable, tunnelID)
 	if enable {
-		name = b.text(msgOperationTunnelEnable, tunnelID)
+		name = newOperation(msgOperationTunnelEnable, tunnelID)
 	}
 	release, busy := b.claim(name)
 	if busy != nil {
@@ -189,7 +189,7 @@ func (b *Bot) toggleTunnel(ctx context.Context, cb *tg.CallbackQuery, tunnelID s
 // that was written but no longer validates is reported rather than silently left to
 // fail at deploy.
 func (b *Bot) editTunnelList(ctx context.Context, cb *tg.CallbackQuery, tunnelID, field, value string, add bool) result {
-	release, busy := b.claim(b.text(msgOperationTunnelListEdit, field, tunnelID))
+	release, busy := b.claim(newOperation(msgOperationTunnelListEdit, field, tunnelID))
 	if busy != nil {
 		return *busy
 	}
@@ -336,7 +336,7 @@ func (b *Bot) buildAccess(ctx context.Context, tunnelID string) screen {
 // resulting config no longer validates -- excluding the only device that uses this
 // egress is exactly the mistake validation exists to catch.
 func (b *Bot) toggleAccess(ctx context.Context, cb *tg.CallbackQuery, tunnelID, deviceID string) result {
-	release, busy := b.claim(b.text(msgOperationTunnelAccess, tunnelID))
+	release, busy := b.claim(newOperation(msgOperationTunnelAccess, tunnelID))
 	if busy != nil {
 		return *busy
 	}

@@ -123,7 +123,7 @@ func (b *Bot) handleClientACLInput(ctx context.Context, dialog *dialog, text str
 }
 
 func (b *Bot) addClientACL(ctx context.Context, cb *tg.CallbackQuery, source, target string, protocol domain.ClientACLProtocol, port uint16) result {
-	release, busy := b.claim("правка client ACL")
+	release, busy := b.claim(newOperation(msgOperationClientACLEdit))
 	if busy != nil {
 		return *busy
 	}
@@ -139,7 +139,7 @@ func (b *Bot) addClientACL(ctx context.Context, cb *tg.CallbackQuery, source, ta
 		return b.show(ctx, cb, view)
 	}
 	text := fmt.Sprintf("🔐 Разрешён доступ <b>%s</b> → <b>%s</b> <code>%s/%d</code>.", esc(source), esc(target), esc(string(protocol)), port)
-	return b.show(ctx, cb, b.afterConfigChange(text, backToACLs))
+	return b.show(ctx, cb, legacyRussianACLAfterConfigChange(text))
 }
 
 func (b *Bot) removeClientACL(ctx context.Context, cb *tg.CallbackQuery, ordinal string) result {
@@ -157,7 +157,7 @@ func (b *Bot) removeClientACL(ctx context.Context, cb *tg.CallbackQuery, ordinal
 	if target == nil {
 		return result{toast: "Правило уже изменилось", alert: true}
 	}
-	release, busy := b.claim("правка client ACL")
+	release, busy := b.claim(newOperation(msgOperationClientACLEdit))
 	if busy != nil {
 		return *busy
 	}
@@ -172,7 +172,17 @@ func (b *Bot) removeClientACL(ctx context.Context, cb *tg.CallbackQuery, ordinal
 		})
 		return b.show(ctx, cb, view)
 	}
-	return b.show(ctx, cb, b.afterConfigChange("🔐 Правило удалено.", backToACLs))
+	return b.show(ctx, cb, legacyRussianACLAfterConfigChange("🔐 Правило удалено."))
+}
+
+func legacyRussianACLAfterConfigChange(text string) screen {
+	return screen{
+		text: text + "\n\nИзменение вступит в силу после деплоя.",
+		markup: keyboard(
+			[]tg.InlineKeyboardButton{btn("🚀 Деплой", "dep")},
+			backToACLs,
+		),
+	}
 }
 
 func parseClientACLSpec(value string) (domain.ClientACLProtocol, uint16, error) {

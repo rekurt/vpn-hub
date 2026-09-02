@@ -230,7 +230,7 @@ func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args 
 	if target == current {
 		return result{toast: b.text(msgDeviceAlreadySelected)}
 	}
-	release, busy := b.claim(b.text(msgOperationEgressChange, deviceID))
+	release, busy := b.claim(newOperation(msgOperationEgressChange, deviceID))
 	if busy != nil {
 		return *busy
 	}
@@ -431,7 +431,7 @@ func (b *Bot) finishDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, egress 
 	}
 	deviceID, address := dialog.data["id"], dialog.data["address"]
 
-	release, busy := b.claim(b.text(msgOperationDeviceAdd, deviceID))
+	release, busy := b.claim(newOperation(msgOperationDeviceAdd, deviceID))
 	if busy != nil {
 		return *busy
 	}
@@ -481,7 +481,7 @@ func (b *Bot) saveProfileKey(ctx context.Context, deviceID, privateKey string) e
 // profile issued before key storage was introduced cannot be reconstructed, so the
 // operator gets an explicit, safe reissue path instead of a different profile.
 func (b *Bot) sendCurrentProfile(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busy := b.claim(b.text(msgOperationProfileSend, deviceID))
+	release, busy := b.claim(newOperation(msgOperationProfileSend, deviceID))
 	if busy != nil {
 		return *busy
 	}
@@ -631,7 +631,7 @@ func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID
 // --- reissue / revoke ------------------------------------------------------
 
 func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busy := b.claim(b.text(msgOperationProfileReissue, deviceID))
+	release, busy := b.claim(newOperation(msgOperationProfileReissue, deviceID))
 	if busy != nil {
 		return *busy
 	}
@@ -683,7 +683,7 @@ func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID 
 }
 
 func (b *Bot) revokeDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busy := b.claim(b.text(msgOperationDeviceRevoke, deviceID))
+	release, busy := b.claim(newOperation(msgOperationDeviceRevoke, deviceID))
 	if busy != nil {
 		return *busy
 	}

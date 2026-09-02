@@ -142,7 +142,7 @@ func (b *Bot) handleHubEditInput(ctx context.Context, dialog *dialog, text strin
 	}
 	b.dialogs.clear()
 
-	release := b.claimForDialog(ctx, "правка хаба: "+field)
+	release := b.claimForDialog(ctx, newOperation(msgOperationHubEdit, field))
 	if release == nil {
 		return
 	}
@@ -198,7 +198,7 @@ func (b *Bot) handleAWGSetInput(ctx context.Context, _ *dialog, text string) {
 	}
 	b.dialogs.clear()
 
-	release := b.claimForDialog(ctx, "правка AWG-параметра "+canonical)
+	release := b.claimForDialog(ctx, newOperation(msgOperationAWGSet, canonical))
 	if release == nil {
 		return
 	}
@@ -241,7 +241,7 @@ func (b *Bot) afterHubChange(text string) screen {
 }
 
 func (b *Bot) removeAWGParameter(ctx context.Context, cb *tg.CallbackQuery, key string) result {
-	release, busy := b.claim("удаление AWG-параметра " + key)
+	release, busy := b.claim(newOperation(msgOperationAWGRemove, key))
 	if busy != nil {
 		return *busy
 	}
@@ -289,7 +289,7 @@ func (b *Bot) routeKeyRotation(ctx context.Context, cb *tg.CallbackQuery, args [
 		return result{toast: "Не понимаю эту кнопку"}
 	}
 
-	release, busy := b.claim("ротация ключа хаба")
+	release, busy := b.claim(newOperation(msgOperationHubKeyRotation))
 	if busy != nil {
 		return *busy
 	}
@@ -482,7 +482,7 @@ func (b *Bot) startProbeDialog(ctx context.Context, cb *tg.CallbackQuery, tunnel
 
 func (b *Bot) handleProbeSetInput(ctx context.Context, dialog *dialog, text string) {
 	tunnelID, kindKey := dialog.data["tunnel"], dialog.data["kind"]
-	field, title, _, ok := probeKind(kindKey)
+	field, _, _, ok := probeKind(kindKey)
 	if !ok {
 		b.dialogs.clear()
 		return
@@ -504,7 +504,7 @@ func (b *Bot) handleProbeSetInput(ctx context.Context, dialog *dialog, text stri
 	}
 	b.dialogs.clear()
 
-	release := b.claimForDialog(ctx, "проба "+title+" у "+tunnelID)
+	release := b.claimForDialog(ctx, newOperation(msgOperationProbeSet, kindKey, tunnelID))
 	if release == nil {
 		return
 	}
@@ -528,7 +528,7 @@ func (b *Bot) removeProbe(ctx context.Context, cb *tg.CallbackQuery, tunnelID, k
 	if !ok {
 		return result{toast: "Не понимаю вид пробы"}
 	}
-	release, busy := b.claim("удаление пробы " + title + " у " + tunnelID)
+	release, busy := b.claim(newOperation(msgOperationProbeRemove, kindKey, tunnelID))
 	if busy != nil {
 		return *busy
 	}

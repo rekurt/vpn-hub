@@ -86,7 +86,7 @@ func (b *Bot) routeDeploy(ctx context.Context, cb *tg.CallbackQuery, action stri
 
 // applyDeploy is `hubctl deploy --dry-run=false [--confirm-within N]` in-process.
 func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRevision string, confirmWithin time.Duration) result {
-	release, busy := b.claim("деплой")
+	release, busy := b.claim(newOperation(msgOperationDeploy))
 	if busy != nil {
 		return *busy
 	}
@@ -143,7 +143,7 @@ func (b *Bot) confirmDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
 	// Serialize with the other confirmation-state mutators (rollback, scheduled
 	// refresh) through the same gate rollbackDeploy takes: both write Confirmations,
 	// and confirming while a rollback is in flight must not race.
-	release, busy := b.claim("подтверждение")
+	release, busy := b.claim(newOperation(msgOperationDeployConfirm))
 	if busy != nil {
 		return *busy
 	}
@@ -170,7 +170,7 @@ func (b *Bot) confirmDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
 }
 
 func (b *Bot) rollbackDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
-	release, busy := b.claim("откат")
+	release, busy := b.claim(newOperation(msgOperationDeployRollback))
 	if busy != nil {
 		return *busy
 	}

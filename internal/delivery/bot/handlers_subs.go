@@ -111,7 +111,7 @@ func (b *Bot) routeSubs(ctx context.Context, cb *tg.CallbackQuery, action string
 // --- last-known-good -------------------------------------------------------
 
 func (b *Bot) restoreLastGood(ctx context.Context, cb *tg.CallbackQuery, tunnelID string) result {
-	release, busy := b.claim("возврат last-known-good " + tunnelID)
+	release, busy := b.claim(newOperation(msgOperationSubRestore, tunnelID))
 	if busy != nil {
 		return *busy
 	}
@@ -226,7 +226,7 @@ func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID 
 	}
 	candidate := candidates[index]
 
-	release, busy := b.claim(fmt.Sprintf("проверка кандидата %s:%d", candidate.Server, candidate.Port))
+	release, busy := b.claim(newOperation(msgOperationSubCandidate, candidate.Server, candidate.Port))
 	if busy != nil {
 		return *busy
 	}
@@ -291,7 +291,7 @@ func (b *Bot) startManualRefresh(ctx context.Context, cb *tg.CallbackQuery, tunn
 		return result{toast: "Это не подписочный туннель", alert: true}
 	}
 
-	release, busy := b.claim("обновление подписки " + tunnelID)
+	release, busy := b.claim(newOperation(msgOperationSubRefresh, tunnelID))
 	if busy != nil {
 		return *busy
 	}
@@ -419,11 +419,11 @@ func (b *Bot) scheduleRefreshes(ctx context.Context) {
 }
 
 func (b *Bot) refreshScheduled(ctx context.Context, tunnel domain.Tunnel) {
-	release, busyWith, ok := b.gate.Acquire("плановое обновление подписки " + tunnel.ID)
+	release, busyWith, ok := b.gate.Acquire(newOperation(msgOperationSubScheduled, tunnel.ID))
 	if !ok {
 		// Not an error: the next tick retries, and whatever holds the gate was
 		// started by the admin on purpose.
-		b.logf("scheduled refresh of %s skipped: busy with %s", tunnel.ID, busyWith)
+		b.logf("scheduled refresh of %s skipped: busy with %s", tunnel.ID, busyWith.text(b.L))
 		return
 	}
 	defer release()
