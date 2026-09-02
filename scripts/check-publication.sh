@@ -11,13 +11,30 @@ report_matches() {
 	ref=$3
 	if [ -n "$ref" ]; then
 		matches=$(git grep -nE "$pattern" "$ref" -- ':!scripts/check-publication_test.sh' 2>/dev/null) || return 0
+		if [ -n "$matches" ]; then
+			echo "$label detected:" >&2
+			printf '%s\n' "$matches" >&2
+			return 1
+		fi
 	else
-		matches=$(git grep -nE "$pattern" -- ':!scripts/check-publication_test.sh' 2>/dev/null) || return 0
-	fi
-	if [ -n "$matches" ]; then
-		echo "$label detected:" >&2
-		printf '%s\n' "$matches" >&2
-		return 1
+		index_matches=$(git grep --cached -nE "$pattern" -- ':!scripts/check-publication_test.sh' 2>/dev/null) || index_matches=
+		worktree_matches=$(git grep -nE "$pattern" -- ':!scripts/check-publication_test.sh' 2>/dev/null) || worktree_matches=
+		if [ -n "$index_matches" ] || [ -n "$worktree_matches" ]; then
+			echo "$label detected:" >&2
+			if [ -n "$index_matches" ]; then
+				printf '%s\n' "$index_matches" | sed 's/^/[index] /' >&2
+			fi
+			while IFS= read -r match; do
+				[ -n "$match" ] || continue
+				if [ -n "$index_matches" ] && printf '%s\n' "$index_matches" | grep -Fqx -e "$match"; then
+					continue
+				fi
+				printf '[worktree] %s\n' "$match" >&2
+			done <<EOF
+$worktree_matches
+EOF
+			return 1
+		fi
 	fi
 }
 
@@ -151,35 +168,70 @@ extract_address_candidates() {
 	'
 }
 
-check_addresses() {
-	ref=$1
-	if [ -n "$ref" ]; then
-		candidates=$(git grep -n -I -z -e '' "$ref" -- ':!scripts/check-publication_test.sh' ':!package-lock.json' ':!**/package-lock.json' 2>/dev/null | extract_address_candidates)
-	else
-		candidates=$(git grep -n -I -z -e '' -- ':!scripts/check-publication_test.sh' ':!package-lock.json' ':!**/package-lock.json' 2>/dev/null | extract_address_candidates)
+report_address_candidates() {
+	scope=$1
+	candidate_lines=$2
+	skip_lines=$3
+	if [ -n "$skip_lines" ]; then
+		candidate_lines=$(
+			{
+				printf '%s\n' "$skip_lines"
+				printf '%s\n' '__VPN_HUB_PUBLICATION_SOURCE_BOUNDARY__'
+				printf '%s\n' "$candidate_lines"
+			} | awk '
+				$0 == "__VPN_HUB_PUBLICATION_SOURCE_BOUNDARY__" { worktree = 1; next }
+				!worktree { seen[$0] = 1; next }
+				!seen[$0]
+			'
+		)
 	fi
-	bad=0
-	while IFS='|' read -r value line; do
-		[ -n "$value" ] || continue
+	candidate_bad=0
+	while IFS= read -r candidate; do
+		[ -n "$candidate" ] || continue
+		value=${candidate%%|*}
+		line=${candidate#*|}
 		is_non_network_literal "$value" && continue
 		case "$value" in
 			*[!0-9.]* )
 				if ! is_allowed_host "$value"; then
-					echo "unreviewed public hostname $value: $line" >&2
-					bad=1
+					if [ -n "$scope" ]; then
+						echo "unreviewed public hostname $value [$scope]: $line" >&2
+					else
+						echo "unreviewed public hostname $value: $line" >&2
+					fi
+					candidate_bad=1
 				fi
 				;;
 			*)
 				if ! is_allowed_ip "$value"; then
-					echo "unreviewed public IPv4 $value: $line" >&2
-					bad=1
+					if [ -n "$scope" ]; then
+						echo "unreviewed public IPv4 $value [$scope]: $line" >&2
+					else
+						echo "unreviewed public IPv4 $value: $line" >&2
+					fi
+					candidate_bad=1
 				fi
 				;;
 		esac
 	done <<EOF
-$candidates
+$candidate_lines
 EOF
-	[ "$bad" -eq 0 ]
+	[ "$candidate_bad" -eq 0 ]
+}
+
+check_addresses() {
+	ref=$1
+	if [ -n "$ref" ]; then
+		candidates=$(git grep -n -I -z -e '' "$ref" -- ':!scripts/check-publication_test.sh' ':!package-lock.json' ':!**/package-lock.json' 2>/dev/null | extract_address_candidates)
+		report_address_candidates '' "$candidates" ''
+	else
+		index_candidates=$(git grep --cached -n -I -z -e '' -- ':!scripts/check-publication_test.sh' ':!package-lock.json' ':!**/package-lock.json' 2>/dev/null | extract_address_candidates)
+		worktree_candidates=$(git grep -n -I -z -e '' -- ':!scripts/check-publication_test.sh' ':!package-lock.json' ':!**/package-lock.json' 2>/dev/null | extract_address_candidates)
+		address_failed=0
+		report_address_candidates index "$index_candidates" '' || address_failed=1
+		report_address_candidates worktree "$worktree_candidates" "$index_candidates" || address_failed=1
+		[ "$address_failed" -eq 0 ]
+	fi
 }
 
 check_package_locks() {
@@ -198,10 +250,6 @@ check_package_locks() {
 check_ref() {
 	ref=$1
 	failed=0
-	active_allowlist=$(cat "$allowlist")
-	if [ -n "$ref" ] && git cat-file -e "$ref:scripts/publication-allowlist.txt" 2>/dev/null; then
-		active_allowlist=$(git show "$ref:scripts/publication-allowlist.txt")
-	fi
 	report_matches 'private key' '(client_private_key|private_key)[[:space:]]*[:=][[:space:]]*[A-Za-z0-9+/]{42,}={0,2}' "$ref" || failed=1
 	report_matches 'Telegram bot token' '[0-9]{8,10}:AA[A-Za-z0-9_-]{30,}' "$ref" || failed=1
 	report_matches 'runtime state document' '"revision"[^}]*"hub"[[:space:]]*:' "$ref" || failed=1

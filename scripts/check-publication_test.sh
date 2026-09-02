@@ -160,8 +160,102 @@ expect_unstaged_package_lock_fail() {
 	printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://registry.npmjs.org/example.tgz"}}}' >"$repo/site/package-lock.json"
 	commit_fixture site/package-lock.json
 	printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://evil.registry.example.dev/example.tgz"}}}' >"$repo/site/package-lock.json"
-	if (cd "$repo" && sh scripts/check-publication.sh); then
+	output="$repo/check-output"
+	if (cd "$repo" && sh scripts/check-publication.sh) >"$output" 2>&1; then
 		echo "$name: expected unstaged package-lock content to fail" >&2
+		failed=1
+	fi
+	if ! grep -Fq 'worktree:site/package-lock.json' "$output"; then
+		echo "$name: expected worktree evidence label" >&2
+		failed=1
+	fi
+}
+
+expect_staged_package_lock_fail() {
+	name=$1
+	new_repo "$name"
+	mkdir -p "$repo/site"
+	printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://registry.npmjs.org/example.tgz"}}}' >"$repo/site/package-lock.json"
+	commit_fixture site/package-lock.json
+	printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://evil.registry.example.dev/example.tgz"}}}' >"$repo/site/package-lock.json"
+	git -C "$repo" add -- site/package-lock.json
+	printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://registry.npmjs.org/example.tgz"}}}' >"$repo/site/package-lock.json"
+	output="$repo/check-output"
+	if (cd "$repo" && sh scripts/check-publication.sh) >"$output" 2>&1; then
+		echo "$name: expected staged package-lock content to fail" >&2
+		failed=1
+	fi
+	if ! grep -Fq 'index:site/package-lock.json' "$output"; then
+		echo "$name: expected index evidence label" >&2
+		failed=1
+	fi
+}
+
+expect_staged_secret_fail() {
+	name=$1
+	new_repo "$name"
+	printf '%s\n' 'safe fixture' >"$repo/fixture.txt"
+	commit_fixture
+	printf '%s\n' 'private_key = BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=' >"$repo/fixture.txt"
+	git -C "$repo" add -- fixture.txt
+	printf '%s\n' 'safe fixture' >"$repo/fixture.txt"
+	output="$repo/check-output"
+	if (cd "$repo" && sh scripts/check-publication.sh) >"$output" 2>&1; then
+		echo "$name: expected staged private key to fail" >&2
+		failed=1
+	fi
+	if ! grep -Fq '[index]' "$output"; then
+		echo "$name: expected staged private key index evidence" >&2
+		failed=1
+	fi
+}
+
+expect_large_lock_blob_pass() {
+	name=$1
+	new_repo "$name"
+	mkdir -p "$repo/site"
+	node -e "process.stdout.write(JSON.stringify({note:'x'.repeat(1200000),packages:{}}))" >"$repo/site/package-lock.json"
+	commit_fixture site/package-lock.json
+	if ! (cd "$repo" && node scripts/check-package-locks.mjs --ref HEAD); then
+		echo "$name: expected valid package-lock blob larger than 1.1 MiB to pass" >&2
+		failed=1
+	fi
+}
+
+expect_large_tree_listing_pass() {
+	name=$1
+	new_repo "$name"
+	printf '%s\n' '{"packages":{}}' >"$repo/valid-lock.json"
+	blob_oid=$(git -C "$repo" hash-object -w valid-lock.json)
+	tree_oid=$(
+		node - "$blob_oid" <<'NODE' | git -C "$repo" mktree -z
+const oid = process.argv[2];
+for (let index = 0; index < 8000; index += 1) {
+  const suffix = String(index).padStart(5, '0');
+  process.stdout.write(`100644 blob ${oid}\tentry-${suffix}-${'x'.repeat(120)}.txt\0`);
+}
+process.stdout.write(`100644 blob ${oid}\tpackage-lock.json\0`);
+NODE
+	)
+	if ! (cd "$repo" && node scripts/check-package-locks.mjs --ref "$tree_oid"); then
+		echo "$name: expected Git tree listing larger than 1.1 MiB to pass" >&2
+		failed=1
+	fi
+}
+
+expect_oversized_lock_blob_fail_clearly() {
+	name=$1
+	new_repo "$name"
+	node -e "process.stdout.write(JSON.stringify({note:'x'.repeat(65 * 1024 * 1024),packages:{}}))" >"$repo/oversized-lock.json"
+	blob_oid=$(git -C "$repo" hash-object -w oversized-lock.json)
+	tree_oid=$(printf '100644 blob %s\tpackage-lock.json\0' "$blob_oid" | git -C "$repo" mktree -z)
+	output="$repo/check-output"
+	if (cd "$repo" && node scripts/check-package-locks.mjs --ref "$tree_oid") >"$output" 2>&1; then
+		echo "$name: expected package-lock blob beyond the Git response cap to fail" >&2
+		failed=1
+	fi
+	if ! grep -Fq 'exceeded 64 MiB Git output limit' "$output"; then
+		echo "$name: expected explicit 64 MiB Git output limit diagnostic" >&2
 		failed=1
 	fi
 }
@@ -222,7 +316,12 @@ expect_nested_path_lock_pass nested-path-lock
 expect_package_lock_symlink_fail lock-symlink
 expect_worktree_package_lock_symlink_fail worktree-lock-symlink
 expect_unstaged_package_lock_fail unstaged-lock-content
+expect_staged_package_lock_fail staged-lock-content
+expect_staged_secret_fail staged-secret
 expect_invalid_utf8_package_lock_path_fail invalid-utf8-lock-path
+expect_large_lock_blob_pass large-lock-blob
+expect_large_tree_listing_pass large-tree-listing
+expect_oversized_lock_blob_fail_clearly oversized-lock-blob
 
 if [ -e "$script_dir/../site/.gitattributes" ]; then
 	echo "package-lock must not use a binary attribute workaround" >&2
@@ -241,17 +340,17 @@ if (cd "$repo" && sh scripts/check-publication.sh --history); then
 fi
 
 new_repo history-allowlist
-printf '%s\n' 'value: actual.has' >"$repo/fixture.txt"
+printf '%s\n' 'value: retired.invalid' >"$repo/fixture.txt"
 cp "$repo/scripts/publication-allowlist.txt" "$repo/scripts/publication-allowlist.before"
-printf '%s\n' 'actual.has' >>"$repo/scripts/publication-allowlist.txt"
+printf '%s\n' 'retired.invalid' >>"$repo/scripts/publication-allowlist.txt"
 git -C "$repo" add -- fixture.txt scripts/publication-allowlist.txt
 git -C "$repo" commit -qm "test: historical allowlist entry"
 mv "$repo/scripts/publication-allowlist.before" "$repo/scripts/publication-allowlist.txt"
 mv "$repo/fixture.txt" "$repo/fixture.before"
 git -C "$repo" add -- fixture.txt scripts/publication-allowlist.txt
 git -C "$repo" commit -qm "test: remove historical fixture"
-if ! (cd "$repo" && sh scripts/check-publication.sh --history); then
-	echo "history-allowlist: expected history publication check to pass" >&2
+if (cd "$repo" && sh scripts/check-publication.sh --history); then
+	echo "history-allowlist: expected current allowlist to reject historical self-approval" >&2
 	failed=1
 fi
 
