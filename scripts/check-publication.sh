@@ -52,27 +52,76 @@ is_allowed_ip() {
 }
 
 is_allowed_host() {
-	host=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+	host=$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')
 	case "$host" in
-		*.example.com|*.example.net|*.example.org|example.com|example.net|example.org|*.internal|*.test|localhost) return 0 ;;
+		*.example.com|*.example.net|*.example.org|example.com|example.net|example.org|*.example|*.test|localhost) return 0 ;;
 	esac
 	printf '%s\n' "$active_allowlist" | grep -Fxq "$host"
 }
 
 is_non_network_literal() {
-	# These tracked file names match the DNS grammar but cannot be hostnames.
-	case "$1" in
-		99-vpn-hub.conf|2026-09-01-publication-security-hardening.md|0-release-evidence.md) return 0 ;;
+	value=$1
+	evidence=$2
+	tracked_names=$3
+	case "$value" in
+		Egress.Apply|DNS.Apply|sops-v*.linux|b.text|concurrency.group|main.version|http.server|hub.id|hub.endpoint|hub.dnsaddress|hub.fallback|hub.fallback.reality|hub.fallback.reality.enabled|source.kind|source.value|github.ref|github.token|net.ipv4.conf.*|net.ipv6.conf.*|Interface.DNS|Interface.MTU|Interface.PrivateKey|Interface.Address|Peer.PublicKey|Peer.Endpoint|Peer.PresharedKey|Peer.AllowedIPs|Peer.PersistentKeepalive) return 0 ;;
+	esac
+	content=${evidence#*:}
+	content=${content#*:}
+	before=${content%%"$value"*}
+	after=${content#*"$value"}
+	before=$(printf '%s' "$before" | perl -0777 -pe '$_ = substr($_, -80) if length($_) > 80')
+	after=$(printf '%s' "$after" | perl -0777 -pe '$_ = substr($_, 0, 48) if length($_) > 48')
+	surrounding=$before$after
+	surrounding=$(printf '%s' "$surrounding" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+	network_context=0
+	case "$surrounding" in
+		*endpoint*|*hostname*|*url*|*dns*|*connect*|*address*|*contact*|*origin*|*server:*|*server\ =*|*server=*|*host:*|*host\ =*|*host=*) network_context=1 ;;
+	esac
+	filename_context=0
+	case "$surrounding" in
+		*file*|*path*|*config*|*source*|*output*|*archive*|*state*|*key*|*unit*|*systemd*|*artifact*|*install*|*write*|*read*|*stat*|*join*|*copy*|*remove*|*saved*|*mode*|*profile*|*credential*|*telegram*|*target*|*create*|*\`*|*'<code>'*|*'</code>'*) filename_context=1 ;;
+	esac
+	if [ -n "$tracked_names" ] && printf '%s\n' "$tracked_names" | grep -Fqx "$value"; then
+		{ [ "$filename_context" -eq 1 ] || [ "$network_context" -eq 0 ]; } && return 0
+	fi
+	case "$value" in
+		*.conf|*.yaml|*.yml|*.json|*.md|*.mdx|*.go|*.mjs|*.js|*.ts|*.astro|*.svg|*.css|*.txt|*.key|*.key.*|*.crt|*.csr|*.nft|*.service|*.target|*.sock|*.log|*.tfstate|*.tfvars|*.golden|*.link|*.hcl|*.sh|*.gz|*.binary|*.html|*.auth|*.ovpn)
+			{ [ "$filename_context" -eq 1 ] || [ "$network_context" -eq 0 ]; } && return 0
+			;;
+	esac
+	case "$evidence" in
+		*"\`"*"$value"*"\`"*)
+			case "$value" in *[A-Z]*) return 0 ;; esac
+			;;
+	esac
+	case "$value" in
+		*[A-Z]* )
+			case "$value" in
+				*[a-z]* )
+					[ "$network_context" -eq 0 ] && return 0
+					;;
+			esac
+			;;
 	esac
 	return 1
 }
 
 extract_address_candidates() {
 	perl -ne '
-		BEGIN { $state = "code"; $current_path = ""; }
+		BEGIN {
+			$state = "code";
+			$current_path = "";
+			$astro_frontmatter = 0;
+			$astro_brace_depth = 0;
+			$astro_expression = "";
+			$astro_style = 0;
+			$markdown_fence = 0;
+			$markdown_code = 0;
+		}
 
-		sub go_text {
-			my ($line) = @_;
+		sub code_text {
+			my ($line, $single_is_string) = @_;
 			my $text = "";
 			my $length = length $line;
 			my $offset = 0;
@@ -101,11 +150,12 @@ extract_address_candidates() {
 					}
 					next;
 				}
-				if ($state eq "quoted") {
+				if ($state eq "quoted" || $state eq "single") {
 					if ($char eq "\\" && $offset + 1 < $length) {
 						$text .= substr $line, $offset, 2;
 						$offset += 2;
-					} elsif ($char eq "\"") {
+					} elsif (($state eq "quoted" && $char eq "\"") ||
+						($state eq "single" && $char eq "\x27")) {
 						$state = "code";
 						$text .= " ";
 						$offset++;
@@ -144,13 +194,75 @@ extract_address_candidates() {
 					$state = "raw";
 					$text .= " ";
 				} elsif ($char eq "\x27") {
-					$state = "rune";
+					$state = $single_is_string ? "single" : "rune";
 				}
 				$offset++;
 			}
 
-			$state = "code" if $state eq "quoted" || $state eq "rune";
+			$state = "code" if $state eq "quoted" || $state eq "single" || $state eq "rune";
 			return $text;
+		}
+
+		sub astro_text {
+			my ($line) = @_;
+			if ($line eq "---" && $astro_frontmatter < 2) {
+				$astro_frontmatter++;
+				return "";
+			}
+			return code_text($line, 1) if $astro_frontmatter == 1;
+
+			$astro_style = 1 if $line =~ /<style(?:\s|>)/;
+			if ($astro_style) {
+				$astro_style = 0 if $line =~ m{</style>};
+				return $line;
+			}
+
+			my $text = "";
+			for (my $offset = 0; $offset < length($line); $offset++) {
+				my $char = substr($line, $offset, 1);
+				if ($astro_brace_depth == 0) {
+					if ($char eq "{") {
+						$astro_brace_depth = 1;
+						$astro_expression = "";
+					} else {
+						$text .= $char;
+					}
+					next;
+				}
+				if ($char eq "{") {
+					$astro_brace_depth++;
+					$astro_expression .= $char;
+				} elsif ($char eq "}") {
+					$astro_brace_depth--;
+					if ($astro_brace_depth == 0) {
+						$text .= code_text($astro_expression, 1);
+						$astro_expression = "";
+					} else {
+						$astro_expression .= $char;
+					}
+				} else {
+					$astro_expression .= $char;
+				}
+			}
+			$astro_expression .= "\n" if $astro_brace_depth > 0;
+			return $text;
+		}
+
+		sub markdown_text {
+			my ($line) = @_;
+			if ($line =~ /^```([A-Za-z0-9_-]*)\s*$/) {
+				if ($markdown_fence) {
+					$markdown_fence = 0;
+					$markdown_code = 0;
+					$state = "code";
+				} else {
+					my $language = lc $1;
+					$markdown_fence = 1;
+					$markdown_code = $language =~ /^(?:go|javascript|js|typescript|ts|hcl|terraform)$/;
+				}
+				return "";
+			}
+			return $markdown_code ? code_text($line, $path !~ /\.go$/) : $line;
 		}
 
 		chomp;
@@ -160,10 +272,30 @@ extract_address_candidates() {
 		if ($path ne $current_path) {
 			$state = "code";
 			$current_path = $path;
+			$astro_frontmatter = 0;
+			$astro_brace_depth = 0;
+			$astro_expression = "";
+			$astro_style = 0;
+			$markdown_fence = 0;
+			$markdown_code = 0;
 		}
-		my $text = $path =~ /\.go$/ ? go_text($content) : $content;
+		my $text = $path =~ /\.go$/ ? code_text($content, 0)
+			: $path =~ /\.(?:[cm]?js|ts|tf)$/ ? code_text($content, 1)
+			: $path =~ /\.astro$/ ? astro_text($content)
+			: $path =~ /\.mdx?$/ ? markdown_text($content)
+			: $content;
 		while ($text =~ /(?<![A-Za-z0-9_-])((?:\d{1,3}\.){3}\d{1,3}|(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,})(?![A-Za-z0-9_-])/g) {
-			print "$1|$path:$number:$content\n";
+			my $value = $1;
+			my $start = $-[1];
+			my $before = substr($text, 0, $start);
+			my $previous = $start > 0 ? substr($text, $start - 1, 1) : "";
+			next if $previous eq "/" && $before !~ m{://\z};
+			next if $previous eq "%";
+			next if $before =~ /(?:├──|└──)\s*\z/;
+			my $template_open = rindex($before, "\${");
+			my $template_close = rindex($before, "}");
+			next if $template_open > $template_close && $previous ne "\"" && $previous ne "\x27";
+			print "$value|$path:$number:$content\n";
 		}
 	'
 }
@@ -172,6 +304,7 @@ report_address_candidates() {
 	scope=$1
 	candidate_lines=$2
 	skip_lines=$3
+	tracked_names=$4
 	if [ -n "$skip_lines" ]; then
 		candidate_lines=$(
 			{
@@ -190,7 +323,7 @@ report_address_candidates() {
 		[ -n "$candidate" ] || continue
 		value=${candidate%%|*}
 		line=${candidate#*|}
-		is_non_network_literal "$value" && continue
+		is_non_network_literal "$value" "$line" "$tracked_names" && continue
 		case "$value" in
 			*[!0-9.]* )
 				if ! is_allowed_host "$value"; then
@@ -223,13 +356,15 @@ check_addresses() {
 	ref=$1
 	if [ -n "$ref" ]; then
 		candidates=$(git grep -n -I -z -e '' "$ref" -- ':!scripts/check-publication_test.sh' ':!package-lock.json' ':!**/package-lock.json' 2>/dev/null | extract_address_candidates)
-		report_address_candidates '' "$candidates" ''
+		tracked_names=$(git ls-tree -r --name-only "$ref" | sed 's|.*/||' | sort -u)
+		report_address_candidates '' "$candidates" '' "$tracked_names"
 	else
 		index_candidates=$(git grep --cached -n -I -z -e '' -- ':!scripts/check-publication_test.sh' ':!package-lock.json' ':!**/package-lock.json' 2>/dev/null | extract_address_candidates)
 		worktree_candidates=$(git grep -n -I -z -e '' -- ':!scripts/check-publication_test.sh' ':!package-lock.json' ':!**/package-lock.json' 2>/dev/null | extract_address_candidates)
+		tracked_names=$(git ls-files | sed 's|.*/||' | sort -u)
 		address_failed=0
-		report_address_candidates index "$index_candidates" '' || address_failed=1
-		report_address_candidates worktree "$worktree_candidates" "$index_candidates" || address_failed=1
+		report_address_candidates index "$index_candidates" '' "$tracked_names" || address_failed=1
+		report_address_candidates worktree "$worktree_candidates" "$index_candidates" "$tracked_names" || address_failed=1
 		[ "$address_failed" -eq 0 ]
 	fi
 }
