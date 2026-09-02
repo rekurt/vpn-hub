@@ -257,7 +257,7 @@
     "id": "logs",
     "locale": "en",
     "title": "📜 Logs",
-    "text": "📜 <b>Logs</b>\n\nvpn-hub units on the host:\n• <code>vpn-hub-agent.service</code> — active (running)\n• <code>vpn-hub-docs.service</code> — active (running)\n",
+    "text": "📜 <b>Logs</b>\n\nvpn-hub units on the host:\n• <code>vpn-hub-agent.service</code> — active (running)\n• <code>docs-worker</code> — active (running)\n",
     "rows": [
       [
         {
@@ -271,8 +271,8 @@
       ],
       [
         {
-          "label": "vpn-hub-docs.service",
-          "callback": "log:u:vpn-hub-docs.service"
+          "label": "docs-worker",
+          "callback": "log:u:docs-worker"
         }
       ],
       [
@@ -489,7 +489,7 @@
     "id": "tunnel-card",
     "locale": "en",
     "title": "Tunnels",
-    "text": "🚇 <b>docs-private</b>\n\nRole: private-network\nType: wireguard\nState: on\nSource: config <code>docs-private.conf</code>\nRoutes: <code>198.51.100.0/24</code>\nDNS zones: <code>docs.example.test</code>\n\n🟢 handshake 10s ago (just now)\n",
+    "text": "🚇 <b>docs-private</b>\n\nRole: private-network\nType: wireguard\nState: on\nSource: subscription <code>[hidden]</code>\nRoutes: <code>198.51.100.0/24</code>\nDNS zones: <code>docs.example.test</code>\n\n🟢 handshake 10s ago (just now)\n",
     "rows": [
       [
         {

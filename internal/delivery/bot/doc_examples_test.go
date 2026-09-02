@@ -118,7 +118,7 @@ func documentationExamples(l Localizer) ([]byte, error) {
 	}
 	tunnel := tunnelEntry{Tunnel: domain.Tunnel{
 		ID: "docs-private", Type: domain.TunnelWireGuard, Role: domain.RolePrivateNetwork,
-		Enabled: &enabled, Source: domain.TunnelSource{Kind: domain.SourceConfig, Value: "docs-private.conf"},
+		Enabled: &enabled, Source: domain.TunnelSource{Kind: domain.SourceSubscription},
 		Routes: []string{"198.51.100.0/24"}, DNSZones: []string{"docs.example.test"},
 	}, Health: &healthEntry{ID: "docs-private", Status: domain.HealthHealthy, Reason: "handshake 10s ago", CheckedAt: now.Add(-30 * time.Second)}}
 
@@ -156,7 +156,7 @@ func documentationExamples(l Localizer) ([]byte, error) {
 			return renderClientACLs(l, []clientACLEntry{{Rule: domain.ClientACL{Source: "docs-phone", Target: "docs-laptop", Protocol: domain.ClientACLTCP, Port: 22}, Ordinal: 0}})
 		}},
 		{"logs", msgLogsTitle, func() (string, *tg.InlineKeyboardMarkup) {
-			return renderLogsMenu(l, []linux.UnitStatus{{Unit: "vpn-hub-agent.service", Active: "active", Sub: "running"}, {Unit: "vpn-hub-docs.service", Active: "active", Sub: "running"}})
+			return renderLogsMenu(l, []linux.UnitStatus{{Unit: "vpn-hub-agent.service", Active: "active", Sub: "running"}, {Unit: "docs-worker", Active: "active", Sub: "running"}})
 		}},
 		{"host", msgHostTitle, func() (string, *tg.InlineKeyboardMarkup) {
 			return renderHost(l, hostView{Snapshot: linux.HostSnapshot{Uptime: 26*time.Hour + 3*time.Minute, Load1: "0.15", Load5: "0.10", Load15: "0.05", DiskTotal: 25 << 30, DiskFree: 18 << 30}, Units: []linux.UnitStatus{{Unit: "vpn-hub-agent.service", Active: "active", Sub: "running"}}})

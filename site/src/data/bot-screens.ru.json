@@ -257,7 +257,7 @@
     "id": "logs",
     "locale": "ru",
     "title": "📜 Логи",
-    "text": "📜 <b>Логи</b>\n\nЮниты vpn-hub на хосте:\n• <code>vpn-hub-agent.service</code> — active (running)\n• <code>vpn-hub-docs.service</code> — active (running)\n",
+    "text": "📜 <b>Логи</b>\n\nЮниты vpn-hub на хосте:\n• <code>vpn-hub-agent.service</code> — active (running)\n• <code>docs-worker</code> — active (running)\n",
     "rows": [
       [
         {
@@ -271,8 +271,8 @@
       ],
       [
         {
-          "label": "vpn-hub-docs.service",
-          "callback": "log:u:vpn-hub-docs.service"
+          "label": "docs-worker",
+          "callback": "log:u:docs-worker"
         }
       ],
       [
@@ -489,7 +489,7 @@
     "id": "tunnel-card",
     "locale": "ru",
     "title": "Туннели",
-    "text": "🚇 <b>docs-private</b>\n\nРоль: private-network\nТип: wireguard\nСостояние: вкл\nИсточник: config <code>docs-private.conf</code>\nМаршруты: <code>198.51.100.0/24</code>\nDNS-зоны: <code>docs.example.test</code>\n\n🟢 handshake 10s ago (только что)\n",
+    "text": "🚇 <b>docs-private</b>\n\nРоль: private-network\nТип: wireguard\nСостояние: вкл\nИсточник: subscription <code>[скрыто]</code>\nМаршруты: <code>198.51.100.0/24</code>\nDNS-зоны: <code>docs.example.test</code>\n\n🟢 handshake 10s ago (только что)\n",
     "rows": [
       [
         {
