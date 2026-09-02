@@ -300,6 +300,8 @@ func (s *selfMarks) recent(now time.Time) bool {
 // change; they are expected activity, not trouble.
 var operationPattern = regexp.MustCompile(`^(create|update|delete) [a-z]+/`)
 
+const agentConvergedRevisionPrefix = "converged on revision "
+
 func classifyAgentLine(l Localizer, message string) (category, text string, ok bool) {
 	message = strings.TrimSpace(message)
 	switch {
@@ -307,8 +309,9 @@ func classifyAgentLine(l Localizer, message string) (category, text string, ok b
 		return "", "", false
 	case strings.Contains(message, "was not confirmed within the deadline; restored"):
 		return "rollback", l.Text(msgNotifyAgentRollback, esc(message)), true
-	case strings.HasPrefix(message, "converged on revision "):
-		return "converge", l.Text(msgNotifyAgentConverged, esc(message)), true
+	case strings.HasPrefix(message, agentConvergedRevisionPrefix):
+		revision := strings.TrimSpace(strings.TrimPrefix(message, agentConvergedRevisionPrefix))
+		return "converge", l.Text(msgNotifyAgentConverged, esc(revision)), true
 	case operationPattern.MatchString(message):
 		return "", "", false
 	default:
