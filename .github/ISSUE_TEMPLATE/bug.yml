@@ -1,0 +1,27 @@
+name: Bug report
+description: Report a reproducible, non-sensitive defect.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include credentials, profiles, private addresses, hostnames, provider URLs, Telegram data, or unredacted logs. Use private vulnerability reporting for security issues."
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal sanitized reproduction
+      description: Include revision, Ubuntu release, tunnel type, and safe commands or configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Operational impact and recovery
+      description: Describe traffic impact and whether rollback or independent host access was available.
