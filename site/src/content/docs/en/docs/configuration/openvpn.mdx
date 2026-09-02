@@ -1,0 +1,46 @@
+---
+title: OpenVPN upstreams
+description: Import an unattended OpenVPN profile with all credential material inline and SOPS-encrypted.
+coverage: []
+---
+
+Use `type: openvpn`, `source.kind: config`, and a `.ovpn` file. The parser requires at least one `remote`. It reads protocol, device, connection blocks, and `redirect-gateway`, then hands the validated original text to OpenVPN inside the tunnel namespace.
+
+External file references and command references are rejected, including certificate/key paths, `auth-user-pass` paths, scripts, plugins, and prefixed forms. Put certificates, keys, and a complete username/password pair inline, then SOPS-encrypt the one file:
+
+```text
+client
+dev tun
+proto udp
+remote openvpn.example.com 1194
+auth-user-pass
+<auth-user-pass>
+synthetic-user
+synthetic-password-replace-before-use
+</auth-user-pass>
+<ca>
+-----BEGIN CERTIFICATE-----
+SYNTHETIC-DOCUMENTATION-CERTIFICATE
+-----END CERTIFICATE-----
+</ca>
+<cert>
+-----BEGIN CERTIFICATE-----
+SYNTHETIC-DOCUMENTATION-CERTIFICATE
+-----END CERTIFICATE-----
+</cert>
+<key>
+-----BEGIN PRIVATE KEY-----
+SYNTHETIC-DOCUMENTATION-KEY
+-----END PRIVATE KEY-----
+</key>
+```
+
+```bash
+sops --encrypt --in-place /etc/vpn-hub/secrets/office.ovpn
+sudo chmod 0600 /etc/vpn-hub/secrets/office.ovpn
+sudo hubctl --config /etc/vpn-hub validate
+```
+
+The placeholders are not valid credentials. A `private-network` OpenVPN profile must not contain `redirect-gateway`; VPN Hub rejects it because it would make that namespace a default route.
+
+Next: [Private networks](../private-networks/) and [Secrets](../../concepts/secrets/).

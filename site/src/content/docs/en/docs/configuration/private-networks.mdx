@@ -1,0 +1,33 @@
+---
+title: Private routes and DNS
+description: Route explicit subnets and private DNS answers through one destination-selected tunnel.
+coverage:
+  - tunnels[].routes[]
+  - tunnels[].dns_servers[]
+  - tunnels[].dns_zones[]
+---
+
+import ConfigField from '../../../../../components/ConfigField.astro';
+
+Use `role: private-network`. Static routes and DNS-learned addresses take precedence over every device's default egress.
+
+<ConfigField path="tunnels[].routes[]" type="array of CIDR strings" required="No" defaultValue="Empty array" validation="Every value must be a network prefix; no two tunnel routes may overlap." secret="No; private topology metadata." sideEffects="Adds destinations to a per-tunnel nftables set and policy route." example="routes: [10.20.0.0/16]" />
+
+<ConfigField path="tunnels[].dns_servers[]" type="array of IP strings" required="When dns_zones is non-empty" defaultValue="Empty array" validation="Every item must parse as an IP address." secret="No; private topology metadata." sideEffects="Starts a forwarder inside this tunnel namespace for private-zone queries." example="dns_servers: [10.20.0.53]" />
+
+<ConfigField path="tunnels[].dns_zones[]" type="array of domain strings" required="No" defaultValue="Empty array" validation="Safe domain-label syntax; a zone may not overlap a zone owned by another tunnel; requires dns_servers." secret="No; private naming metadata." sideEffects="Forwards matching queries privately and adds answers to this tunnel's dynamic nftables set." example="dns_zones: [corp.example]" />
+
+```yaml
+  - id: office
+    type: wireguard
+    role: private-network
+    source: { kind: config, value: secrets/office.conf }
+    routes: [10.20.0.0/16]
+    dns_servers: [10.20.0.53]
+    dns_zones: [corp.example]
+    allowed_devices: [laptop]
+```
+
+Public DNS is source-aware across mixed egresses. A laptop assigned to `edge-wg` sends ordinary DNS through that namespace, while `corp.example` still goes through `office`. Disable forced client DoH when relying on this split.
+
+Next: [DNS design](../../concepts/dns/) and [Health](../health/).

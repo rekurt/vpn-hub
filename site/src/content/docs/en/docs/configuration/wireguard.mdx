@@ -1,0 +1,34 @@
+---
+title: WireGuard upstreams
+description: Import the supported subset of a provider WireGuard configuration without putting credentials in hub YAML.
+coverage: []
+---
+
+Use `type: wireguard`, `source.kind: config`, and a file below `/etc/vpn-hub`. The parser reads one `[Interface]` and exactly one `[Peer]`.
+
+Required provider fields are `Interface.PrivateKey`, `Interface.Address`, `Peer.PublicKey`, and `Peer.Endpoint`. Supported optional fields are `Interface.DNS`, `Interface.MTU`, `Peer.PresharedKey`, `Peer.AllowedIPs`, and `Peer.PersistentKeepalive`. Unknown provider keys are ignored because provider files commonly carry tool-specific additions.
+
+```ini
+[Interface]
+PrivateKey = SYNTHETIC-PRIVATE-KEY-REPLACE-BEFORE-USE
+Address = 192.0.2.2/32
+DNS = 192.0.2.53
+MTU = 1380
+
+[Peer]
+PublicKey = W/kKaUP1n48AgIzxs8po0HKV+UEk1vMcTuBW648atSE=
+Endpoint = edge.example.com:51820
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+```
+
+The private and preshared keys are secrets. Encrypt the real file with SOPS/age; the agent decrypts it at runtime and renders protected material below `/run/vpn-hub`.
+
+```bash
+sops --encrypt --in-place /etc/vpn-hub/secrets/edge-wg.conf
+sudo hubctl --config /etc/vpn-hub validate
+```
+
+The documentation-only endpoint and private key above cannot establish a tunnel.
+
+Next: [Tunnel fields](../tunnels/) and [Health probes](../health/).

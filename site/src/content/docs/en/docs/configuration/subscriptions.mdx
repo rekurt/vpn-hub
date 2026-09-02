@@ -1,0 +1,31 @@
+---
+title: Tunnel sources and subscriptions
+description: Select protected host files or a bounded VLESS subscription without persisting provider credentials.
+coverage:
+  - tunnels[].source
+  - tunnels[].source.kind
+  - tunnels[].source.value
+---
+
+import ConfigField from '../../../../../components/ConfigField.astro';
+
+<ConfigField path="tunnels[].source" type="object" required="Yes" defaultValue="None" validation="Its kind must be compatible with tunnel type and value must be non-empty." secret="Treat the whole object as sensitive until kind and value are inspected." sideEffects="Chooses where the agent or subscription refresher obtains provider input." example="source: { kind: config, value: secrets/edge.conf }" />
+
+<ConfigField path="tunnels[].source.kind" type="enum" required="Yes" defaultValue="None" validation="Constants are config, subscription, xray-uri, and xray-json. Non-Xray tunnels require config; Xray accepts config or subscription. Inline xray-uri and xray-json are rejected by validation." secret="No by itself." sideEffects="Selects protected-file loading or fetch/prove/promote subscription flow." example="config" />
+
+<ConfigField path="tunnels[].source.value" type="string" required="Yes" defaultValue="None" validation="Non-empty. For config, an absolute or config-directory-relative path; for subscription, an HTTPS fetch URL handled by the refresher." secret="Paths may reveal layout; subscription URLs and inline links are credentials." sideEffects="Reads a provider file or fetches a subscription; credential-bearing values are redacted from desired-state JSON." example="secrets/edge-wg.conf" />
+
+```yaml
+  - id: rotating-edge
+    type: xray
+    role: egress
+    source:
+      kind: subscription
+      value: ENC[AES256_GCM,data:SYNTHETIC,...]
+```
+
+A refresh accepts at most 32 usable VLESS candidates and 8192 bytes per line, runs within a two-minute default deadline, rejects special-use/internal destinations, proves candidates in isolation, and promotes only a working one. The last-known-good link remains restorable.
+
+The `ENC[...]` fragment is illustrative, not a complete SOPS document. Use `sops` to produce the real envelope; never hand-author it.
+
+Next: [Subscription lifecycle](../../concepts/subscriptions/) and [Xray/VLESS](../xray-vless/).

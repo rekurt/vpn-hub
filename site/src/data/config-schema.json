@@ -1,0 +1,245 @@
+{
+  "version": 1,
+  "sourceFiles": [
+    "internal/domain/model.go",
+    "internal/domain/fallback.go",
+    "internal/domain/healthcheck.go"
+  ],
+  "fields": [
+    {
+      "path": "client_acls[]",
+      "goType": "[]ClientACL",
+      "source": "internal/domain/model.go:128"
+    },
+    {
+      "path": "client_acls[].port",
+      "goType": "uint16",
+      "source": "internal/domain/model.go:109"
+    },
+    {
+      "path": "client_acls[].protocol",
+      "goType": "ClientACLProtocol",
+      "acceptedValues": [
+        "tcp",
+        "udp"
+      ],
+      "source": "internal/domain/model.go:108"
+    },
+    {
+      "path": "client_acls[].source",
+      "goType": "string",
+      "source": "internal/domain/model.go:106"
+    },
+    {
+      "path": "client_acls[].target",
+      "goType": "string",
+      "source": "internal/domain/model.go:107"
+    },
+    {
+      "path": "devices[]",
+      "goType": "[]Device",
+      "source": "internal/domain/model.go:126"
+    },
+    {
+      "path": "devices[].address",
+      "goType": "string",
+      "source": "internal/domain/model.go:114"
+    },
+    {
+      "path": "devices[].egress",
+      "goType": "string",
+      "source": "internal/domain/model.go:119"
+    },
+    {
+      "path": "devices[].id",
+      "goType": "string",
+      "source": "internal/domain/model.go:113"
+    },
+    {
+      "path": "devices[].profiles[]",
+      "goType": "[]DeviceProfile",
+      "source": "internal/domain/model.go:121"
+    },
+    {
+      "path": "devices[].profiles[].address",
+      "goType": "string",
+      "source": "internal/domain/model.go:91"
+    },
+    {
+      "path": "devices[].profiles[].client_private_key",
+      "goType": "string",
+      "source": "internal/domain/model.go:93"
+    },
+    {
+      "path": "devices[].profiles[].client_public_key",
+      "goType": "string",
+      "source": "internal/domain/model.go:92"
+    },
+    {
+      "path": "devices[].profiles[].egress",
+      "goType": "string",
+      "source": "internal/domain/model.go:90"
+    },
+    {
+      "path": "devices[].profiles[].id",
+      "goType": "string",
+      "source": "internal/domain/model.go:89"
+    },
+    {
+      "path": "devices[].public_key",
+      "goType": "string",
+      "source": "internal/domain/model.go:116"
+    },
+    {
+      "path": "hub",
+      "goType": "Hub",
+      "source": "internal/domain/model.go:125"
+    },
+    {
+      "path": "hub.awg_interface",
+      "goType": "map[string]string",
+      "source": "internal/domain/model.go:38"
+    },
+    {
+      "path": "hub.client_cidr",
+      "goType": "string",
+      "source": "internal/domain/model.go:36"
+    },
+    {
+      "path": "hub.dns_address",
+      "goType": "string",
+      "source": "internal/domain/model.go:37"
+    },
+    {
+      "path": "hub.endpoint",
+      "goType": "string",
+      "source": "internal/domain/model.go:34"
+    },
+    {
+      "path": "hub.fallback",
+      "goType": "IngressFallback",
+      "source": "internal/domain/model.go:41"
+    },
+    {
+      "path": "hub.fallback.reality",
+      "goType": "RealityFallback",
+      "source": "internal/domain/fallback.go:14"
+    },
+    {
+      "path": "hub.fallback.reality.enabled",
+      "goType": "bool",
+      "source": "internal/domain/fallback.go:19"
+    },
+    {
+      "path": "hub.fallback.reality.server_name",
+      "goType": "string",
+      "source": "internal/domain/fallback.go:23"
+    },
+    {
+      "path": "hub.fallback.udp443",
+      "goType": "bool",
+      "source": "internal/domain/fallback.go:12"
+    },
+    {
+      "path": "hub.server_public_key",
+      "goType": "string",
+      "source": "internal/domain/model.go:35"
+    },
+    {
+      "path": "tunnels[]",
+      "goType": "[]Tunnel",
+      "source": "internal/domain/model.go:127"
+    },
+    {
+      "path": "tunnels[].allowed_devices[]",
+      "goType": "[]string",
+      "source": "internal/domain/model.go:79"
+    },
+    {
+      "path": "tunnels[].dns_servers[]",
+      "goType": "[]string",
+      "source": "internal/domain/model.go:77"
+    },
+    {
+      "path": "tunnels[].dns_zones[]",
+      "goType": "[]string",
+      "source": "internal/domain/model.go:78"
+    },
+    {
+      "path": "tunnels[].enabled",
+      "goType": "*bool",
+      "source": "internal/domain/model.go:74"
+    },
+    {
+      "path": "tunnels[].health",
+      "goType": "HealthCheck",
+      "source": "internal/domain/model.go:80"
+    },
+    {
+      "path": "tunnels[].health.dns_name",
+      "goType": "string",
+      "source": "internal/domain/model.go:65"
+    },
+    {
+      "path": "tunnels[].health.https_url",
+      "goType": "string",
+      "source": "internal/domain/model.go:64"
+    },
+    {
+      "path": "tunnels[].health.tcp_address",
+      "goType": "string",
+      "source": "internal/domain/model.go:63"
+    },
+    {
+      "path": "tunnels[].id",
+      "goType": "string",
+      "source": "internal/domain/model.go:69"
+    },
+    {
+      "path": "tunnels[].role",
+      "goType": "TunnelRole",
+      "acceptedValues": [
+        "egress",
+        "private-network"
+      ],
+      "source": "internal/domain/model.go:71"
+    },
+    {
+      "path": "tunnels[].routes[]",
+      "goType": "[]string",
+      "source": "internal/domain/model.go:76"
+    },
+    {
+      "path": "tunnels[].source",
+      "goType": "TunnelSource",
+      "source": "internal/domain/model.go:75"
+    },
+    {
+      "path": "tunnels[].source.kind",
+      "goType": "SourceKind",
+      "acceptedValues": [
+        "config",
+        "subscription",
+        "xray-json",
+        "xray-uri"
+      ],
+      "source": "internal/domain/model.go:45"
+    },
+    {
+      "path": "tunnels[].source.value",
+      "goType": "string",
+      "source": "internal/domain/model.go:46"
+    },
+    {
+      "path": "tunnels[].type",
+      "goType": "TunnelType",
+      "acceptedValues": [
+        "amneziawg",
+        "openvpn",
+        "wireguard",
+        "xray"
+      ],
+      "source": "internal/domain/model.go:70"
+    }
+  ]
+}

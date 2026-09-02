@@ -1,0 +1,67 @@
+---
+interface Props {
+  path: string;
+  type: string;
+  required: string;
+  defaultValue: string;
+  validation: string;
+  secret: string;
+  sideEffects: string;
+  example: string;
+}
+
+const field = Astro.props;
+---
+
+<section class="config-field" aria-labelledby={`field-${field.path.replaceAll(/[^a-z0-9]+/gi, '-')}`}>
+  <h3 id={`field-${field.path.replaceAll(/[^a-z0-9]+/gi, '-')}`}><code>{field.path}</code></h3>
+  <dl>
+    <div><dt>Type</dt><dd><code>{field.type}</code></dd></div>
+    <div><dt>Required</dt><dd>{field.required}</dd></div>
+    <div><dt>Default</dt><dd>{field.defaultValue}</dd></div>
+    <div><dt>Validation</dt><dd>{field.validation}</dd></div>
+    <div><dt>Secret classification</dt><dd>{field.secret}</dd></div>
+    <div><dt>Side effects</dt><dd>{field.sideEffects}</dd></div>
+    <div><dt>Minimal example</dt><dd><code>{field.example}</code></dd></div>
+  </dl>
+</section>
+
+<style>
+  .config-field {
+    border-block-start: 1px solid var(--vpn-grid-line);
+    margin-block: 2rem;
+    padding-block-start: 1rem;
+  }
+
+  .config-field h3 {
+    margin-block: 0 0.75rem;
+  }
+
+  .config-field dl {
+    display: grid;
+    gap: 0.35rem;
+    margin: 0;
+  }
+
+  .config-field dl div {
+    display: grid;
+    grid-template-columns: minmax(9rem, 0.35fr) 1fr;
+    gap: 0.75rem;
+  }
+
+  .config-field dt {
+    color: var(--vpn-muted-text);
+    font-weight: 700;
+  }
+
+  .config-field dd {
+    margin: 0;
+  }
+
+  @media (max-width: 35rem) {
+    .config-field dl div {
+      grid-template-columns: 1fr;
+      gap: 0.1rem;
+    }
+  }
+</style>

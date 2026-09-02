@@ -1,0 +1,81 @@
+<figure class="architecture" aria-labelledby="architecture-title architecture-description">
+  <svg viewBox="0 0 900 360" role="img">
+    <title id="architecture-title">VPN Hub control and traffic boundaries</title>
+    <desc id="architecture-description">The operator and optional Telegram bot change configuration. Hubctl compiles a redacted desired-state revision. The root agent reconciles ingress, nftables policy, DNS, and isolated provider namespaces. Client traffic enters through AmneziaWG and leaves only through its selected route.</desc>
+    <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z"></path></marker></defs>
+    <g class="control">
+      <rect x="20" y="24" width="150" height="52" rx="8"></rect>
+      <text x="95" y="55">Operator config</text>
+      <rect x="20" y="104" width="150" height="52" rx="8"></rect>
+      <text x="95" y="135">Telegram bot</text>
+      <rect x="235" y="64" width="180" height="72" rx="8"></rect>
+      <text x="325" y="94">hubctl</text>
+      <text x="325" y="117">redacted revision</text>
+      <path d="M170 50 L235 85"></path>
+      <path d="M170 130 L235 112"></path>
+    </g>
+    <g class="host">
+      <rect x="475" y="24" width="190" height="132" rx="8"></rect>
+      <text x="570" y="55">root agent</text>
+      <text x="570" y="82">nftables policy</text>
+      <text x="570" y="109">split DNS</text>
+      <text x="570" y="136">AWG ingress</text>
+      <path d="M415 100 L475 100"></path>
+    </g>
+    <g class="traffic">
+      <rect x="20" y="238" width="150" height="62" rx="8"></rect>
+      <text x="95" y="273">Enrolled device</text>
+      <path d="M170 269 L475 132"></path>
+      <rect x="710" y="188" width="170" height="52" rx="8"></rect>
+      <text x="795" y="220">Selected egress</text>
+      <rect x="710" y="260" width="170" height="52" rx="8"></rect>
+      <text x="795" y="292">Private network</text>
+      <path d="M665 108 L710 212"></path>
+      <path d="M665 120 L710 281"></path>
+    </g>
+  </svg>
+  <figcaption>Configuration changes and packets cross different boundaries. Provider files and subscription responses remain untrusted input; the host agent is the only component that changes networking.</figcaption>
+</figure>
+
+<style>
+  .architecture {
+    margin-inline: 0;
+  }
+
+  .architecture svg {
+    background: var(--vpn-navy);
+    border-radius: 0.75rem;
+    color: var(--vpn-warm-white);
+    inline-size: 100%;
+  }
+
+  .architecture rect {
+    fill: color-mix(in srgb, var(--vpn-navy) 82%, var(--vpn-cyan));
+    stroke: var(--vpn-cyan);
+    stroke-width: 2;
+  }
+
+  .architecture text {
+    fill: currentColor;
+    font-family: var(--vpn-mono);
+    font-size: 14px;
+    text-anchor: middle;
+  }
+
+  .architecture path {
+    fill: none;
+    marker-end: url(#arrow);
+    stroke: var(--vpn-amber);
+    stroke-width: 2;
+  }
+
+  .architecture marker path {
+    fill: var(--vpn-amber);
+  }
+
+  .architecture figcaption {
+    color: var(--vpn-muted-text);
+    font-size: 0.9rem;
+    margin-block-start: 0.75rem;
+  }
+</style>

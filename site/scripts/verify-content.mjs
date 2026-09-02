@@ -3,6 +3,8 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { parseDocument } from 'yaml';
 
 const locales = ['en', 'ru', 'zh-cn'];
+const sourceLocaleOption = process['argv']['indexOf']('--source-locale');
+const sourceLocale = sourceLocaleOption === -1 ? undefined : process['argv'][sourceLocaleOption + 1];
 const docsRootOption = process['argv']['indexOf']('--docs-root');
 const docsRoot = docsRootOption === -1
   ? resolve(dirname(process['argv'][1]), '../src/content/docs')
@@ -52,6 +54,10 @@ const localeDocuments = new Map();
 const routes = new Map();
 const failures = [];
 
+if (sourceLocaleOption !== -1 && sourceLocale !== 'en') {
+  failures['push']('--source-locale currently accepts only the canonical en source');
+}
+
 async function isDirectory(directory) {
   try {
     return (await stat(directory))['isDirectory']();
@@ -64,7 +70,8 @@ async function isDirectory(directory) {
 if (!(await isDirectory(docsRoot))) {
   failures['push'](`docs root is required: ${docsRoot}`);
 } else {
-  for (const locale of locales) {
+  const checkedLocales = sourceLocale === 'en' ? ['en'] : locales;
+  for (const locale of checkedLocales) {
     const localeRoot = join(docsRoot, locale);
     if (!(await isDirectory(localeRoot))) {
       failures['push'](`${locale}: locale directory is required`);
@@ -97,7 +104,7 @@ if (!(await isDirectory(docsRoot))) {
 }
 
 const expected = localeDocuments['get']('en');
-if (expected) {
+if (expected && sourceLocale === undefined) {
   for (const locale of locales['slice'](1)) {
     const actual = localeDocuments['get'](locale) ?? new Set();
     for (const relativePath of expected) {
@@ -113,5 +120,6 @@ if (failures['length'] > 0) {
   console['error'](`Content verification failed:\n${failures['map']((failure) => `- ${failure}`)['join']('\n')}`);
   process['exitCode'] = 1;
 } else {
-  console['log'](`Content verification passed for ${expected?.['size'] ?? 0} locale-relative document path(s).`);
+  const scope = sourceLocale === 'en' ? 'canonical English' : 'locale-relative';
+  console['log'](`Content verification passed for ${expected?.['size'] ?? 0} ${scope} document path(s).`);
 }

@@ -1,0 +1,59 @@
+---
+title: Verify a deployment
+description: Prove the desired revision, client address, DNS path, selected egress, and kill switch.
+---
+
+import VerifyBlock from '../../../../../components/VerifyBlock.astro';
+
+Do not confirm a remote change merely because the client connected. Verify the control state and the data path from the affected device.
+
+## Prerequisites
+
+- The device is connected using its newly issued profile.
+- An independent SSH session remains open.
+- The deploy used `--confirm-within` when a previous revision existed.
+
+## Check control state on the hub
+
+```bash
+sudo hubctl status
+sudo vpn-hub-agent status
+sudo systemctl is-active vpn-hub-agent
+sudo journalctl -u vpn-hub-agent --since '-5 minutes' --no-pager
+sudo hubctl --config /etc/vpn-hub/hub.yaml routes
+```
+
+**Expected result:** `hubctl` and the agent name the same desired revision, the unit is active, the journal has no repeating reconcile error, and routes name the intended egresses.
+
+## Check from the device
+
+```bash
+curl --fail --silent --show-error https://example.com/ >/dev/null
+nslookup example.com 10.80.0.1
+```
+
+For a provider egress, compare the observed public address with the provider's documented exit by using an operator-chosen diagnostic endpoint. VPN Hub does not bundle a third-party “what is my IP” dependency.
+
+## Prove fail-closed behavior
+
+Use a non-critical test device assigned to a provider tunnel. Stop that upstream or disable it only after moving every production device away. Traffic assigned to an unavailable egress must stop; it must not move to `direct`. Restore the tunnel and run its configured probe.
+
+```bash
+sudo hubctl --config /etc/vpn-hub/hub.yaml test tunnel edge-wg
+```
+
+An unconfigured probe returns `unknown` as an error; it is not reported healthy.
+
+<VerifyBlock command="sudo nft list table inet vpn_hub >/dev/null && sudo ip link show awg0 >/dev/null" expected="both commands exit zero" />
+
+## Roll back or confirm
+
+```bash
+sudo hubctl confirm
+```
+
+If any check fails, do not confirm. Run `sudo hubctl rollback` over SSH or let the confirmation deadline restore the previous revision.
+
+## Next
+
+Read [Architecture](../../concepts/architecture/) and the [Configuration overview](../../configuration/overview/).
