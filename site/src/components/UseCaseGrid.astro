@@ -7,14 +7,17 @@ type UseCase = {
 };
 
 type Props = {
+  id: string;
+  heading: string;
   items: UseCase[];
 };
 
-const { items } = Astro.props as Props;
+const { id, heading, items } = Astro.props as Props;
 ---
 
-<section class="landing-section" id="use-cases">
-  <h2>Use cases</h2>
+<section class="landing-section" id={id} aria-labelledby={`${id}-title`}>
+  <p class="section-eyebrow">04 / covered in the real world</p>
+  <h2 id={`${id}-title`}>{heading}</h2>
   <div class="usecase-grid">
     {items.map((item) => (
       <article class="usecase-grid__card">
@@ -26,4 +29,3 @@ const { items } = Astro.props as Props;
     ))}
   </div>
 </section>
-

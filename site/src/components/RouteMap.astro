@@ -4,10 +4,6 @@ const { steps } = Astro.props as {
 };
 ---
 
-<section class="landing-section" id="architecture-map">
-  <h2>Routing map</h2>
-  <ol class="route-map">
-    {steps.map((step) => <li>{step}</li>)}
-  </ol>
-</section>
-
+<ol class="route-map" aria-label="Routing steps">
+  {steps.map((step) => <li>{step}</li>)}
+</ol>

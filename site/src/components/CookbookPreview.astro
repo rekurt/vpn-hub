@@ -6,15 +6,18 @@ type CookbookLink = {
 };
 
 type Props = {
+  id: string;
+  heading: string;
   intro: string;
   links: CookbookLink[];
 };
 
-const { intro, links } = Astro.props as Props;
+const { id, heading, intro, links } = Astro.props as Props;
 ---
 
-<section class="landing-section" id="cookbook">
-  <h2>Cookbook</h2>
+<section class="landing-section" id={id} aria-labelledby={`${id}-title`}>
+  <p class="section-eyebrow">06 / repeatable operations</p>
+  <h2 id={`${id}-title`}>{heading}</h2>
   <p>{intro}</p>
   <div class="cookbook-grid">
     {links.map((link) => (
@@ -25,4 +28,3 @@ const { intro, links } = Astro.props as Props;
     ))}
   </div>
 </section>
-

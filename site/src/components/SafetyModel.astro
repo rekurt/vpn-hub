@@ -1,18 +1,19 @@
 ---
 type Props = {
+  id: string;
   heading: string;
   text: string;
   checks: string[];
 };
 
-const { heading, text, checks } = Astro.props as Props;
+const { id, heading, text, checks } = Astro.props as Props;
 ---
 
-<section class="landing-section" id="safety">
-  <h2>{heading}</h2>
+<section class="landing-section" id={id} aria-labelledby={`${id}-title`}>
+  <p class="section-eyebrow">03 / safety stays observable</p>
+  <h2 id={`${id}-title`}>{heading}</h2>
   <p>{text}</p>
   <ul class="safety-list">
     {checks.map((check) => <li>{check}</li>)}
   </ul>
 </section>
-

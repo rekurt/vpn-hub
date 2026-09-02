@@ -36,6 +36,7 @@ const structuredData = {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/vpn-hub/favicon.svg" />
     <meta name="description" content={copy.description} />
     <meta name="robots" content="index,follow" />
     <link rel="canonical" href={canonical} />
@@ -53,7 +54,7 @@ const structuredData = {
     <script type="application/ld+json" set:html={JSON.stringify(structuredData)} />
     <title>{copy.title}</title>
   </head>
-  <body>
+  <body class="landing-page">
     <a href="#main-content" class="skip-link">{copy.skipToContent}</a>
     <SiteHeader copy={copy} />
     <main id="main-content">

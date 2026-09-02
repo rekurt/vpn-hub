@@ -27,9 +27,11 @@ const defaultRows = [
   ['Inspect devices', 'Inspect tunnels'],
   ['Open status', 'Open settings'],
 ];
+const docsRoot = copy.locale === 'en' ? '/vpn-hub/docs/' : `/vpn-hub/${copy.locale}/docs/`;
 ---
 
 <section class="landing-section" id="bot-management">
+  <p class="section-eyebrow">05 / operate from anywhere</p>
   <h2>{copy.bot.heading}</h2>
   <p>{copy.bot.intro}</p>
 
@@ -47,12 +49,12 @@ const defaultRows = [
       ))}
     </div>
     <aside id="bot-preview__panel" class="bot-preview__panel">
-      <h3>Sample operator flow</h3>
+      <h3>{copy.locale === 'ru' ? 'Пример сценария оператора' : copy.locale === 'zh-cn' ? '运维操作示例' : 'Sample operator flow'}</h3>
       <ol>
         {copy.bot.steps.map((step) => <li>{step}</li>)}
       </ol>
     </aside>
   </div>
-  <a class="secondary-cta" href="/vpn-hub/docs/telegram-bot/">View bot operation docs</a>
+  <a class="secondary-cta" href={`${docsRoot}telegram-bot/`}>{copy.locale === 'ru' ? 'Открыть документацию бота' : copy.locale === 'zh-cn' ? '查看机器人文档' : 'View bot operation docs'}</a>
   <div class="screen-reader-only">Fallback bot flow: {defaultRows.flat().join(', ')}</div>
 </section>

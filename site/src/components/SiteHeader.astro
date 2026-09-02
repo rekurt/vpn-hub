@@ -6,24 +6,32 @@ type Props = {
 };
 
 const { copy } = Astro.props;
+const localeRoot = copy.locale === 'en' ? '/vpn-hub' : `/vpn-hub/${copy.locale}`;
+const docsRoot = `${localeRoot}/docs/`;
+const locales = [
+  { label: 'EN', href: '/vpn-hub/', locale: 'en' },
+  { label: 'RU', href: '/vpn-hub/ru/', locale: 'ru' },
+  { label: 'ZH', href: '/vpn-hub/zh-cn/', locale: 'zh-cn' },
+];
+const mobileMenuLabel = copy.locale === 'ru' ? 'Меню' : copy.locale === 'zh-cn' ? '菜单' : 'Menu';
 ---
 
 <header class="landing-header">
   <div class="landing-header__content">
-    <a class="landing-brand" href="/vpn-hub/">VPN Hub</a>
+    <a class="landing-brand" href={`${localeRoot}/`}>VPN Hub</a>
     <nav aria-label={copy.nav.home} class="landing-nav">
       <ul class="landing-nav__list">
-        <li><a href="/vpn-hub/docs/" class="landing-nav__link">{copy.nav.docs}</a></li>
-        <li><a href="/vpn-hub/docs/telegram-bot/" class="landing-nav__link">{copy.nav.bot}</a></li>
-        <li><a href="/vpn-hub/docs/cookbook/" class="landing-nav__link">{copy.nav.cookbook}</a></li>
-        <li><a href="/vpn-hub/docs/use-cases/" class="landing-nav__link">{copy.nav.useCases}</a></li>
+        <li><a href={docsRoot} class="landing-nav__link">{copy.nav.docs}</a></li>
+        <li><a href={`${docsRoot}telegram-bot/`} class="landing-nav__link">{copy.nav.bot}</a></li>
+        <li><a href={`${docsRoot}cookbook/`} class="landing-nav__link">{copy.nav.cookbook}</a></li>
+        <li><a href={`${docsRoot}use-cases/`} class="landing-nav__link">{copy.nav.useCases}</a></li>
       </ul>
     </nav>
+    <a class="landing-mobile-menu" href={docsRoot}>{mobileMenuLabel}</a>
     <div class="landing-locale">
-      <a href="/vpn-hub/">EN</a>
-      <a href="/vpn-hub/ru/">RU</a>
-      <a href="/vpn-hub/zh-cn/">ZH</a>
+      {locales.map((locale) => (
+        <a href={locale.href} aria-current={locale.locale === copy.locale ? 'page' : undefined}>{locale.label}</a>
+      ))}
     </div>
   </div>
 </header>
-

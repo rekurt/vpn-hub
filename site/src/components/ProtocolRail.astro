@@ -6,14 +6,17 @@ type Protocol = {
 };
 
 type Props = {
+  id: string;
+  heading: string;
   protocols: Protocol[];
 };
 
-const { protocols } = Astro.props as Props;
+const { id, heading, protocols } = Astro.props as Props;
 ---
 
-<section class="landing-section" id="protocols">
-  <h2>Protocols</h2>
+<section class="landing-section" id={id} aria-labelledby={`${id}-title`}>
+  <p class="section-eyebrow">02 / transport, by intent</p>
+  <h2 id={`${id}-title`}>{heading}</h2>
   <div class="protocol-rail">
     {protocols.map((protocol) => (
       <article class="protocol-rail__card">
@@ -24,4 +27,3 @@ const { protocols } = Astro.props as Props;
     ))}
   </div>
 </section>
-

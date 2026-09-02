@@ -6,6 +6,7 @@ type Props = {
 };
 
 const { copy } = Astro.props;
+const localeRoot = copy.locale === 'en' ? '/vpn-hub' : `/vpn-hub/${copy.locale}`;
 ---
 
 <footer id="landing-footer" class="landing-footer">
@@ -14,7 +15,7 @@ const { copy } = Astro.props;
     ·
     <a href="https://github.com/rekurt/vpn-hub" target="_blank" rel="noreferrer">GitHub</a>
     ·
-    <a href="/vpn-hub/docs/operations/">{copy.nav.docs}</a>
+    <a href={`${localeRoot}/docs/operations/`}>{copy.nav.docs}</a>
   </p>
   <p>
     © 2026 VPN Hub.

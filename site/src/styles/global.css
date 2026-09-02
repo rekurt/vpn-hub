@@ -34,6 +34,10 @@
   max-width: var(--vpn-prose-width);
 }
 
+.landing-page main {
+  max-width: none;
+}
+
 :where(a, button, input, select, summary, textarea):focus-visible {
   outline: 3px solid var(--vpn-focus-ring);
   outline-offset: 3px;

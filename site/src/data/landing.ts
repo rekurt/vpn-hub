@@ -19,6 +19,7 @@ type UseCase = {
 };
 
 export type LandingCopy = {
+  locale: LandingLocale;
   localeLabel: string;
   htmlLang: string;
   title: string;
@@ -85,6 +86,7 @@ export type LandingCopy = {
 
 export const landingData: Record<LandingLocale, LandingCopy> = {
   en: {
+    locale: 'en',
     localeLabel: 'English',
     htmlLang: 'en',
     title: 'VPN Hub',
@@ -190,6 +192,7 @@ export const landingData: Record<LandingLocale, LandingCopy> = {
     },
   },
   ru: {
+    locale: 'ru',
     localeLabel: 'Русский',
     htmlLang: 'ru',
     title: 'VPN Hub',
@@ -295,6 +298,7 @@ export const landingData: Record<LandingLocale, LandingCopy> = {
     },
   },
   'zh-cn': {
+    locale: 'zh-cn',
     localeLabel: '简体中文',
     htmlLang: 'zh-CN',
     title: 'VPN Hub',

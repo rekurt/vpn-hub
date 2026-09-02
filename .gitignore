@@ -27,3 +27,6 @@ site/node_modules/
 site/dist/
 site/.astro/
 site/.pagefind/
+
+# Local Superdesign canvases and analysis state.
+.superdesign/

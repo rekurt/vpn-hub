@@ -1,49 +1,11 @@
 ---
 import LandingLayout from '../layouts/LandingLayout.astro';
-import RouteMap from '../components/RouteMap.astro';
-import ProtocolRail from '../components/ProtocolRail.astro';
-import UseCaseGrid from '../components/UseCaseGrid.astro';
-import SafetyModel from '../components/SafetyModel.astro';
-import BotPreview from '../components/BotPreview.astro';
-import CookbookPreview from '../components/CookbookPreview.astro';
+import LandingPage from '../components/LandingPage.astro';
 import { getLandingCopy } from '../data/landing';
 
 const copy = getLandingCopy('en');
 ---
 
 <LandingLayout copy={copy}>
-  <section class="landing-hero">
-    <p class="landing-hero__kicker">{copy.hero.kicker}</p>
-    <h1>{copy.hero.title}</h1>
-    <p>{copy.hero.text}</p>
-    <div class="landing-hero__actions">
-      <a href={copy.hero.actions[0].url} class="primary-cta">{copy.hero.actions[0].label}</a>
-      <a href={copy.hero.actions[1].url} class="secondary-cta">{copy.hero.actions[1].label}</a>
-    </div>
-  </section>
-
-  <section class="landing-section" id={copy.architecture.id} aria-labelledby="architecture-title">
-    <h2 id="architecture-title">{copy.architecture.heading}</h2>
-    <p>{copy.architecture.text}</p>
-    <RouteMap steps={copy.architecture.steps} />
-  </section>
-
-  <ProtocolRail protocols={copy.protocols.items} />
-
-  <SafetyModel heading={copy.safety.heading} text={copy.safety.text} checks={copy.safety.checks} />
-
-  <UseCaseGrid items={copy.useCases.items} />
-
-  <BotPreview copy={copy} />
-
-  <CookbookPreview intro={copy.cookbook.intro} links={copy.cookbook.links} />
-
-  <section class="landing-final" id={copy.finalCta.id} aria-labelledby="landing-final-title">
-    <h2 id="landing-final-title">{copy.finalCta.heading}</h2>
-    <p>{copy.finalCta.text}</p>
-    <div class="landing-final__actions">
-      <a href={copy.finalCta.actions[0].url} class="primary-cta">{copy.finalCta.actions[0].label}</a>
-      <a href={copy.finalCta.actions[1].url} class="secondary-cta">{copy.finalCta.actions[1].label}</a>
-    </div>
-  </section>
+  <LandingPage copy={copy} />
 </LandingLayout>

@@ -1,0 +1,65 @@
+---
+import RouteMap from './RouteMap.astro';
+import ProtocolRail from './ProtocolRail.astro';
+import UseCaseGrid from './UseCaseGrid.astro';
+import SafetyModel from './SafetyModel.astro';
+import BotPreview from './BotPreview.astro';
+import CookbookPreview from './CookbookPreview.astro';
+import type { LandingCopy } from '../data/landing';
+
+const { copy } = Astro.props as { copy: LandingCopy };
+---
+
+<section class="landing-hero" aria-labelledby="hero-title">
+  <div class="landing-hero__copy">
+    <p class="landing-hero__kicker"><span></span>{copy.hero.kicker}</p>
+    <h1 id="hero-title">{copy.hero.title}</h1>
+    <p class="landing-hero__text">{copy.hero.text}</p>
+    <div class="landing-hero__actions">
+      <a href={copy.hero.actions[0].url} class="primary-cta">{copy.hero.actions[0].label}<span aria-hidden="true">↗</span></a>
+      <a href={copy.hero.actions[1].url} class="secondary-cta">{copy.hero.actions[1].label}</a>
+    </div>
+    <div class="landing-proof" aria-label="Product guarantees">
+      <span><b>Fail closed</b> by policy</span>
+      <span><b>One gate</b> per deploy</span>
+      <span><b>Zero drift</b> left unseen</span>
+    </div>
+  </div>
+  <div class="control-surface" aria-label="VPN Hub routing control plane preview">
+    <div class="control-surface__bar"><span class="control-surface__brand"><i></i> VPN HUB / CONTROL</span><span class="control-surface__state"><i></i> POLICY ACTIVE</span></div>
+    <div class="control-surface__body">
+      <div class="control-surface__topline"><p>Live route intent</p><span>revision · 4d7c2a</span></div>
+      <div class="route-stage">
+        <div class="route-node route-node--client"><span>CLIENT</span><b>laptop-01</b><small>10.80.0.2</small></div>
+        <div class="route-path"><i></i><i></i><i></i><i></i><em>encrypted</em></div>
+        <div class="route-node route-node--hub"><span>HUB</span><b>policy gate</b><small>verified</small></div>
+        <div class="route-path route-path--out"><i></i><i></i><i></i><i></i><em>selected egress</em></div>
+        <div class="route-node route-node--exit"><span>EGRESS</span><b>wireguard-eu</b><small>healthy · 18ms</small></div>
+      </div>
+      <div class="surface-metrics"><div><span>Namespace</span><b>isolated</b></div><div><span>Fallback</span><b class="surface-metrics__danger">blocked</b></div><div><span>Rollback</span><b>armed</b></div></div>
+    </div>
+    <div class="control-surface__footer"><span><i></i> all routes reconciled</span><span>last check · now</span></div>
+  </div>
+</section>
+
+<section class="landing-section landing-section--intro" id={copy.architecture.id} aria-labelledby="architecture-title">
+  <p class="section-eyebrow">01 / intent becomes enforcement</p>
+  <h2 id="architecture-title">{copy.architecture.heading}</h2>
+  <p>{copy.architecture.text}</p>
+  <RouteMap steps={copy.architecture.steps} />
+</section>
+
+<ProtocolRail id={copy.protocols.id} heading={copy.protocols.heading} protocols={copy.protocols.items} />
+<SafetyModel id={copy.safety.id} heading={copy.safety.heading} text={copy.safety.text} checks={copy.safety.checks} />
+<UseCaseGrid id={copy.useCases.id} heading={copy.useCases.heading} items={copy.useCases.items} />
+<BotPreview copy={copy} />
+<CookbookPreview id={copy.cookbook.id} heading={copy.cookbook.heading} intro={copy.cookbook.intro} links={copy.cookbook.links} />
+
+<section class="landing-final" id={copy.finalCta.id} aria-labelledby="landing-final-title">
+  <h2 id="landing-final-title">{copy.finalCta.heading}</h2>
+  <p>{copy.finalCta.text}</p>
+  <div class="landing-final__actions">
+    <a href={copy.finalCta.actions[0].url} class="primary-cta">{copy.finalCta.actions[0].label}</a>
+    <a href={copy.finalCta.actions[1].url} class="secondary-cta">{copy.finalCta.actions[1].label}</a>
+  </div>
+</section>
