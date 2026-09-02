@@ -9,6 +9,26 @@ type Props = {
 };
 
 const { copy } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+const localizedLanding = (locale: 'en' | 'ru' | 'zh-cn') => new URL(
+  locale === 'en' ? '/vpn-hub/' : `/vpn-hub/${locale}/`,
+  Astro.site,
+);
+const alternateLocales = [
+  { locale: 'en', href: localizedLanding('en') },
+  { locale: 'ru', href: localizedLanding('ru') },
+  { locale: 'zh-CN', href: localizedLanding('zh-cn') },
+];
+const structuredData = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'VPN Hub',
+  applicationCategory: 'SecurityApplication',
+  operatingSystem: 'Linux',
+  description: copy.description,
+  url: canonical.href,
+  isAccessibleForFree: true,
+};
 ---
 
 <!doctype html>
@@ -17,6 +37,20 @@ const { copy } = Astro.props;
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={copy.description} />
+    <meta name="robots" content="index,follow" />
+    <link rel="canonical" href={canonical} />
+    {alternateLocales.map(({ locale, href }) => <link rel="alternate" hreflang={locale} href={href} />)}
+    <link rel="alternate" hreflang="x-default" href={localizedLanding('en')} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="VPN Hub" />
+    <meta property="og:title" content={copy.title} />
+    <meta property="og:description" content={copy.description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:locale" content={copy.htmlLang.replace('-', '_')} />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={copy.title} />
+    <meta name="twitter:description" content={copy.description} />
+    <script type="application/ld+json" set:html={JSON.stringify(structuredData)} />
     <title>{copy.title}</title>
   </head>
   <body>
@@ -28,4 +62,3 @@ const { copy } = Astro.props;
     <SiteFooter copy={copy} />
   </body>
 </html>
-
