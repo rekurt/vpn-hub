@@ -16,7 +16,6 @@ func TestLocaleProductionSourcesContainNoUnexpectedCyrillic(t *testing.T) {
 		"handlers_hub.go":         true,
 		"handlers_subs.go":        true,
 		"handlers_view.go":        true,
-		"ops.go":                  true,
 		"notify.go":               true,
 	}
 
