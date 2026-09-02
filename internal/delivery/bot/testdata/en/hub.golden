@@ -1,0 +1,19 @@
+⚙️ <b>Hub</b>
+
+Endpoint: <code>vpn.example.test:51820</code>
+Client network: <code>10.80.0.0/24</code>
+DNS: <code>10.80.0.1</code>
+Public key: <code>TE5crMJPBmCr…</code>
+
+<b>AmneziaWG parameters:</b>
+ • <code>Jc = 5</code>
+ • <code>Jmin = 50</code>
+
+⚠️ Changing the endpoint, network, or DNS invalidates issued profiles; devices must be reissued.
+--- keyboard ---
+[✏️ Endpoint](hub:e:endpoint) | [✏️ DNS](hub:e:dns_address)
+[✏️ Client network](hub:e:client_cidr) | [➕ AWG parameter](hub:aa)
+[➖ Jc](hub:ad:jc)
+[➖ Jmin](hub:ad:jmin)
+[🔑 Rotate hub key](hub:rk) | [📦 Export config](hub:dl)
+[🏠 Menu](m)

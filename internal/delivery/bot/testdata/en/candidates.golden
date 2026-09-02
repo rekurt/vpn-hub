@@ -1,0 +1,12 @@
+📋 <b>xray-de</b>: 11 candidates in the subscription
+
+The selected candidate is tested in an isolated namespace first; the current upstream changes only after the candidate proves it works.
+
+Page 2 of 2
+
+--- keyboard ---
+[• 10.0.0.9:443 (current)](sub:pick:xray-de:8)
+[10.0.0.10:443](sub:pick:xray-de:9)
+[10.0.0.11:443](sub:pick:xray-de:10)
+[⬅️](sub:cand:xray-de:0)
+[⬅️ To subscription](sub:c:xray-de)

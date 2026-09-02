@@ -1,0 +1,11 @@
+📡 <b>xray-de</b>: selected a new upstream
+
+✅ <code>1.2.3.4:443</code> — proved operational
+
+Rejected (1):
+ • <code>5.6.7.8:443: the candidate did not carry traffic: timeout</code>
+
+The agent will pick up the new upstream on its next pass, usually within a minute.
+agent is inactive
+--- keyboard ---
+[📊 Status](st) | [📡 Subscriptions](sub)

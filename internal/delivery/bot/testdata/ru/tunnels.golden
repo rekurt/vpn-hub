@@ -1,0 +1,10 @@
+🚇 <b>Туннели</b>
+
+🟢 <code>corp-a</code> — private-network, wireguard, вкл
+⏸ <code>xray-de</code> — egress, xray, выкл
+
+--- keyboard ---
+[corp-a](tun:c:corp-a)
+[xray-de](tun:c:xray-de)
+[🩺 Проверить все](tun:ta)
+[🏠 Меню](m)

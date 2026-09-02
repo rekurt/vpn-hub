@@ -1,0 +1,7 @@
+🔀 Which egress should <b>macbook</b> use?
+Current: <code>wg-nl</code>
+--- keyboard ---
+[• wg-nl •](dev:eg:macbook:wg-nl)
+[corp-a](dev:eg:macbook:corp-a)
+[direct](dev:eg:macbook:direct)
+[⬅️ Back](dev:c:macbook)

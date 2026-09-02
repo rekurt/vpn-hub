@@ -1,0 +1,10 @@
+📜 <b>Logs</b>
+
+vpn-hub units on the host:
+• <code>vpn-hub-agent.service</code> — active (running)
+• <code>vpn-hub-proxy-nl.service</code> — active (running)
+
+--- keyboard ---
+[Agent](log:u:vpn-hub-agent.service) | [Bot](log:u:vpn-hub-bot.service)
+[vpn-hub-proxy-nl.service](log:u:vpn-hub-proxy-nl.service)
+[🏠 Menu](m)

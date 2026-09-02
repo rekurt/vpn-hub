@@ -56,8 +56,6 @@ buildinfo.date
 buildinfo.go
 buildinfo.string
 buildinfo.version
-button.devices
-button.status
 ca.crt
 ca.key
 canary.nft
@@ -75,8 +73,7 @@ config-schema.json
 config.go
 config.yaml
 configfield.astro
-confirm.no
-confirm.yes
+confirm.golden
 confirmationstore.arm
 content.config.ts
 context.context
@@ -182,8 +179,6 @@ log.txt
 macbook.conf
 macbook.key
 main.golden
-main.intro
-main.title
 main.version
 missing.sock
 model.go
@@ -244,6 +239,7 @@ resolv.conf
 retired.service
 revoked-devices.json
 robots.txt
+routes.golden
 routemap.astro
 ru.json
 ruleset.nft
@@ -296,6 +292,7 @@ timers.target.wants
 tprovider.example
 tsconfig.json
 tunnel-and-internal.nft
+tunnels.golden
 tunnelconfig.go
 url.parse
 usecasegrid.astro

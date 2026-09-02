@@ -1,0 +1,10 @@
+🚇 <b>Tunnels</b>
+
+🟢 <code>corp-a</code> — private-network, wireguard, on
+⏸ <code>xray-de</code> — egress, xray, off
+
+--- keyboard ---
+[corp-a](tun:c:corp-a)
+[xray-de](tun:c:xray-de)
+[🩺 Test all](tun:ta)
+[🏠 Menu](m)

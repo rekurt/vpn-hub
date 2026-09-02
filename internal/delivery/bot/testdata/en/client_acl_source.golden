@@ -1,0 +1,8 @@
+➕ <b>New rule</b>
+
+Step 1 of 3. Who receives access?
+--- keyboard ---
+[any — any device](acl:src:any)
+[macbook](acl:src:macbook)
+[phone](acl:src:phone)
+[✖️ Cancel](acl:x)

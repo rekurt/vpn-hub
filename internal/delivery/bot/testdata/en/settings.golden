@@ -1,0 +1,15 @@
+🔔 <b>Notification settings</b>
+
+Intervals: health — 5m, drift — 30m, subscriptions — 6h (configured in telegram.yaml).
+
+Categories:
+Tap a category to toggle it; the selection is stored on the hub and survives bot restarts.
+--- keyboard ---
+[🔔 Automatic rollbacks and deploys](set:t:rollback)
+[🔔 Agent errors](set:t:agent-error)
+[🔕 Convergence (info)](set:t:converge)
+[🔔 Tunnel health](set:t:health)
+[🔔 Host drift](set:t:drift)
+[🔔 Subscription refresh results](set:t:subscription)
+[🔔 Changes outside the bot](set:t:oob)
+[🏠 Menu](m)

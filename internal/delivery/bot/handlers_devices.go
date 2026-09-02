@@ -58,7 +58,7 @@ func (b *Bot) buildDevices(ctx context.Context) screen {
 	if err != nil {
 		return renderFailure("конфигурация не читается", err)
 	}
-	return scr(renderDevices(entries))
+	return scr(renderDevices(task2EnglishLocalizer, entries))
 }
 
 func (b *Bot) buildDeviceCard(ctx context.Context, deviceID string) screen {
@@ -68,7 +68,7 @@ func (b *Bot) buildDeviceCard(ctx context.Context, deviceID string) screen {
 	}
 	for _, entry := range entries {
 		if entry.ID == deviceID {
-			return scr(renderDeviceCard(entry))
+			return scr(renderDeviceCard(task2EnglishLocalizer, entry))
 		}
 	}
 	return renderFailure("устройство не найдено", fmt.Errorf("нет устройства %q", deviceID))
@@ -107,7 +107,7 @@ func (b *Bot) routeDevices(ctx context.Context, cb *tg.CallbackQuery, action str
 		if len(args) < 1 {
 			return result{toast: "Не указано устройство"}
 		}
-		return b.show(ctx, cb, scr(renderConfirm(
+		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
 			fmt.Sprintf("Отозвать <b>%s</b>? После деплоя устройство потеряет доступ.", esc(args[0])),
 			"dev:rv!:"+args[0], "dev:c:"+args[0])))
 	case "rv!":
@@ -119,7 +119,7 @@ func (b *Bot) routeDevices(ctx context.Context, cb *tg.CallbackQuery, action str
 		if len(args) < 1 {
 			return result{toast: "Не указано устройство"}
 		}
-		return b.show(ctx, cb, scr(renderConfirm(
+		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
 			fmt.Sprintf("Перевыпустить профиль <b>%s</b>? Будет новый ключ; старый профиль перестанет работать после деплоя.", esc(args[0])),
 			"dev:re!:"+args[0], "dev:c:"+args[0])))
 	case "re!":
@@ -159,7 +159,7 @@ func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args 
 	}
 
 	if len(args) == 1 {
-		return b.show(ctx, cb, scr(renderEgressChoice(deviceID, current, b.egressChoices(cfg))))
+		return b.show(ctx, cb, scr(renderEgressChoice(task2EnglishLocalizer, deviceID, current, b.egressChoices(cfg))))
 	}
 
 	target := args[1]

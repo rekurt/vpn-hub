@@ -348,7 +348,7 @@ func TestDevicesScreenListsDevices(t *testing.T) {
 	if !strings.Contains(last.text, "macbook") || !strings.Contains(last.text, "direct") {
 		t.Fatalf("unexpected devices screen:\n%s", last.text)
 	}
-	findButton(t, last.markup, "Добавить")
+	findButton(t, last.markup, "Add device")
 }
 
 func TestSetEgressFlow(t *testing.T) {
@@ -426,9 +426,9 @@ func TestDeployArmConfirmCycle(t *testing.T) {
 
 	// First deploy: instant, so a previous revision exists for the next one.
 	instance.handleUpdate(ctx, tap(adminID, "dep"))
-	first := findButton(t, api.lastScreen(t).markup, "без страховки")
+	first := findButton(t, api.lastScreen(t).markup, "Apply without protection")
 	instance.handleUpdate(ctx, tap(adminID, first))
-	confirmed := findButton(t, api.lastScreen(t).markup, "Да")
+	confirmed := findButton(t, api.lastScreen(t).markup, "Yes")
 	instance.handleUpdate(ctx, tap(adminID, confirmed))
 	if _, err := instance.Revisions.Load(ctx); err != nil {
 		t.Fatalf("the first revision was not saved: %v", err)
@@ -439,14 +439,14 @@ func TestDeployArmConfirmCycle(t *testing.T) {
 
 	// Armed deploy: pick the deadline, pending confirmation appears, confirm clears it.
 	instance.handleUpdate(ctx, tap(adminID, "dep"))
-	choose := findButton(t, api.lastScreen(t).markup, "Со страховкой")
+	choose := findButton(t, api.lastScreen(t).markup, "With rollback protection")
 	instance.handleUpdate(ctx, tap(adminID, choose))
-	armed := findButton(t, api.lastScreen(t).markup, "5 мин")
+	armed := findButton(t, api.lastScreen(t).markup, "5m")
 	instance.handleUpdate(ctx, tap(adminID, armed))
 	if _, isArmed, _ := instance.Confirmations.Load(); !isArmed {
 		t.Fatal("the deploy was not armed")
 	}
-	if !strings.Contains(api.lastScreen(t).text, "ждёт подтверждения") {
+	if !strings.Contains(api.lastScreen(t).text, "awaits confirmation") {
 		t.Fatalf("expected the countdown message:\n%s", api.lastScreen(t).text)
 	}
 
@@ -784,7 +784,7 @@ func TestCandidatePickPromotesOnlyProven(t *testing.T) {
 
 	instance.handleUpdate(ctx, tap(adminID, "sub:cand:wg-nl"))
 	instance.wg.Wait() // the candidate fetch runs in the background
-	if !strings.Contains(api.lastScreen(t).text, "2 кандидата") {
+	if !strings.Contains(api.lastScreen(t).text, "2 candidates") {
 		t.Fatalf("expected the candidate list:\n%s", api.lastScreen(t).text)
 	}
 
@@ -893,7 +893,7 @@ func TestAccessToggleRefusedWhenItStrandsADevice(t *testing.T) {
 	instance.handleUpdate(ctx, tap(adminID, "dev:eg:macbook:wg-nl"))
 
 	instance.handleUpdate(ctx, tap(adminID, "tun:ac:wg-nl"))
-	if !strings.Contains(api.lastScreen(t).text, "разрешён <b>всем</b>") {
+	if !strings.Contains(api.lastScreen(t).text, "available to <b>all</b>") {
 		t.Fatalf("expected the empty-list explanation:\n%s", api.lastScreen(t).text)
 	}
 
@@ -1160,16 +1160,16 @@ func TestDeployRollback(t *testing.T) {
 	// Deploy once so there is a revision, then arm a second so a rollback has a
 	// target.
 	instance.handleUpdate(ctx, tap(adminID, "dep"))
-	first := findButton(t, api.lastScreen(t).markup, "без страховки")
+	first := findButton(t, api.lastScreen(t).markup, "Apply without protection")
 	instance.handleUpdate(ctx, tap(adminID, first))
-	confirmed := findButton(t, api.lastScreen(t).markup, "Да")
+	confirmed := findButton(t, api.lastScreen(t).markup, "Yes")
 	instance.handleUpdate(ctx, tap(adminID, confirmed))
 
 	instance.handleUpdate(ctx, tap(adminID, "dev:eg:macbook:wg-nl"))
 	instance.handleUpdate(ctx, tap(adminID, "dep"))
-	choose := findButton(t, api.lastScreen(t).markup, "Со страховкой")
+	choose := findButton(t, api.lastScreen(t).markup, "With rollback protection")
 	instance.handleUpdate(ctx, tap(adminID, choose))
-	armed := findButton(t, api.lastScreen(t).markup, "5 мин")
+	armed := findButton(t, api.lastScreen(t).markup, "5m")
 	instance.handleUpdate(ctx, tap(adminID, armed))
 
 	instance.handleUpdate(ctx, tap(adminID, "dep:rb!"))

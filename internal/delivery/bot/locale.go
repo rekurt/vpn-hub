@@ -14,12 +14,12 @@ const (
 type MessageID string
 
 const (
-	MsgMainTitle     MessageID = "main.title"
-	MsgMainIntro     MessageID = "main.intro"
-	MsgButtonStatus  MessageID = "button.status"
-	MsgButtonDevices MessageID = "button.devices"
-	MsgConfirmYes    MessageID = "confirm.yes"
-	MsgConfirmNo     MessageID = "confirm.no"
+	MsgMainTitle     MessageID = "main/title"
+	MsgMainIntro     MessageID = "main/intro"
+	MsgButtonStatus  MessageID = "button/status"
+	MsgButtonDevices MessageID = "button/devices"
+	MsgConfirmYes    MessageID = "confirm/yes"
+	MsgConfirmNo     MessageID = "confirm/no"
 )
 
 // Catalog maps message identifiers to locale-specific format strings.

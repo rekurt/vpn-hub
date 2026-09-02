@@ -1,0 +1,10 @@
+🔐 <b>Access between devices</b>
+
+VPN clients cannot reach one another by default. Only explicit permissions are listed here.
+
+• <code>phone</code> → <code>macbook</code> <code>tcp/22</code>
+
+--- keyboard ---
+[➖ phone → macbook tcp/22](acl:rm:0)
+[➕ Add](acl:add)
+[🏠 Menu](m)

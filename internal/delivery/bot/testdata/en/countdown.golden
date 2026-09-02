@@ -1,0 +1,6 @@
+⏳ Revision <code>feedface00001111</code> was applied and awaits confirmation.
+Time left: <b>3m 20s</b>
+
+Without confirmation, the agent restores the previous revision.
+--- keyboard ---
+[✅ Confirm](dep:ok) | [↩️ Roll back](dep:rb!)
