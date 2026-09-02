@@ -6,14 +6,15 @@ description: Stable command paths and expected outcomes for operator workflows.
 ## Global
 
 - `hubctl --help`
-- `hubctl version`
 - `hubctl validate --config <file>`
 
 ## Core lifecycle
 
+- `hubctl deploy --config <file> --state-dir <dir> --dry-run` — print the desired plan without changing host state.
 - `hubctl deploy --config <file> --state-dir <dir>` — reconcile current desired state.
 - `hubctl status --state-dir <dir>` — print revision, state, pending action, and checks.
-- `hubctl verify --config <file>` — validate structure, IDs, and validation constraints.
+- `hubctl rollback --state-dir <dir>` — restore the prior revision now.
+- `hubctl confirm --state-dir <dir>` — accept a revision protected by a confirmation window.
 
 ## Device workflow
 
@@ -25,16 +26,17 @@ description: Stable command paths and expected outcomes for operator workflows.
 ## Tunnel workflow
 
 - `hubctl tunnel list`
-- `hubctl tunnel add <id> --type wireguard --config /tmp/tunnel.yaml` (or equivalent YAML edit flow)
+- Edit the tunnel YAML, then run `hubctl validate` before deployment.
 - `hubctl tunnel disable <id>` / `hubctl tunnel enable <id>`
 - `hubctl tunnel routes <id> --add 198.51.100.0/24`
 - `hubctl tunnel routes <id> --remove 198.51.100.0/24`
+- `hubctl tunnel zones <id> --add corp.example` / `hubctl tunnel zones <id> --remove corp.example`
 
 ## Health and maintenance
 
 - `hubctl routes` — read routing intent and policy paths.
-- `hubctl subscriptions list`
-- `hubctl subscription refresh <id> --timeout 30m`
+- `hubctl test tunnel <id>` — run configured preflight probes in the tunnel namespace.
+- `hubctl subscription refresh <id>`
 - `hubctl subscription restore <id>`
 
 ## Bot-oriented safety command
@@ -42,4 +44,3 @@ description: Stable command paths and expected outcomes for operator workflows.
 - `hubctl deploy --confirm-within 5m` — requires explicit operator confirmation window.
 
 When uncertain, pair any high-impact change with `--dry-run` and read drift output first.
-

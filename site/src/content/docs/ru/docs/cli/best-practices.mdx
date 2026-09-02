@@ -7,7 +7,7 @@ description: Operational patterns that reduce outage and accidental policy drift
 
 1. Build or edit config.
 2. `hubctl validate --config configs/hub.yaml`
-3. `hubctl verify --config configs/hub.yaml`
+3. `hubctl validate --config configs/hub.yaml`
 4. `hubctl deploy --config configs/hub.yaml --state-dir /var/lib/vpn-hub`
 5. `hubctl status --state-dir /var/lib/vpn-hub`
 
@@ -33,7 +33,6 @@ Run with a user who has only shell-level access before touching SSH credentials:
 
 - `hubctl status --state-dir /var/lib/vpn-hub`
 - `hubctl routes`
-- `hubctl subscriptions list`
+- `hubctl status`
 
 Every read checks path before write operations.
-

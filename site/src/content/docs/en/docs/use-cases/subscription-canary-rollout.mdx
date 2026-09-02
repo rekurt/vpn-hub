@@ -14,8 +14,7 @@ Upstream provider endpoint changed, and traffic must keep passing during evaluat
 3. Compare health status and apply only if candidates stay healthy.
 
 ```sh
-hubctl subscription refresh corp-egress --timeout 20m
+hubctl subscription refresh corp-egress
 hubctl status --state-dir /var/lib/vpn-hub
 hubctl deploy --confirm-within 5m
 ```
-
