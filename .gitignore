@@ -21,3 +21,9 @@ deploy/terraform/*.tfvars
 /backups/
 desired-state.json
 *.tfstate*
+
+# Generated Astro site artifacts are reproducible from site/package-lock.json.
+site/node_modules/
+site/dist/
+site/.astro/
+site/.pagefind/
