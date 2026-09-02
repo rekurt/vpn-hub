@@ -12,6 +12,30 @@ import (
 	"vpn-hub/internal/domain"
 )
 
+const (
+	msgFailureDeployImpossible   MessageID = "failure/deploy_impossible"
+	msgDeployRevisionRequired    MessageID = "deploy/revision_required"
+	msgDeployParametersRequired  MessageID = "deploy/parameters_required"
+	msgDeployTimeoutInvalid      MessageID = "deploy/timeout_invalid"
+	msgDeployImmediateConfirm    MessageID = "deploy/immediate_confirm"
+	msgDeployRollbackConfirm     MessageID = "deploy/rollback_confirm"
+	msgDeployPreviewStale        MessageID = "deploy/preview_stale"
+	msgFailureDeployArm          MessageID = "failure/deploy_arm"
+	msgFailureRevisionSave       MessageID = "failure/revision_save"
+	msgDeployFirstNoRollback     MessageID = "deploy/first_no_rollback"
+	msgDeployAppliedAwaiting     MessageID = "deploy/applied_awaiting"
+	msgDeployImmediateSaved      MessageID = "deploy/immediate_saved"
+	msgDeployNothingToConfirm    MessageID = "deploy/nothing_to_confirm"
+	msgFailureDeployState        MessageID = "failure/deploy_state"
+	msgDeployConfirmed           MessageID = "deploy/confirmed"
+	msgDeployConfirmedToast      MessageID = "deploy/confirmed_toast"
+	msgDeployRolledBack          MessageID = "deploy/rolled_back"
+	msgDeployRolledBackToast     MessageID = "deploy/rolled_back_toast"
+	msgDeployCountdownResumed    MessageID = "deploy/countdown_resumed"
+	msgDeployCountdownConfirmed  MessageID = "deploy/countdown_confirmed"
+	msgDeployCountdownRolledBack MessageID = "deploy/countdown_rolled_back"
+)
+
 // deployment is the shared pipeline `hubctl deploy` drives too; building it here
 // keeps the Bot struct free of one more field.
 func (b *Bot) deployment() application.Deployment {
@@ -31,7 +55,7 @@ func (b *Bot) compileNext(ctx context.Context) (domain.DesiredState, []string, e
 func (b *Bot) buildDeployPreview(ctx context.Context) screen {
 	next, revoked, err := b.compileNext(ctx)
 	if err != nil {
-		return renderFailure(b.L, "деплой невозможен", err)
+		return renderFailure(b.L, b.text(msgFailureDeployImpossible), err)
 	}
 	view := deployView{Next: next, Revoked: revoked}
 	if current, err := b.Revisions.Load(ctx); err == nil {
@@ -47,40 +71,40 @@ func (b *Bot) routeDeploy(ctx context.Context, cb *tg.CallbackQuery, action stri
 		return b.show(ctx, cb, b.buildDeployPreview(ctx))
 	case "arm":
 		if len(args) < 1 {
-			return result{toast: "Нет ревизии"}
+			return result{toast: b.text(msgDeployRevisionRequired)}
 		}
 		return b.show(ctx, cb, scr(renderConfirmWithinChoice(b.L, args[0])))
 	case "go":
 		if len(args) < 2 {
-			return result{toast: "Нет параметров"}
+			return result{toast: b.text(msgDeployParametersRequired)}
 		}
 		seconds, err := strconv.Atoi(args[0])
 		if err != nil || seconds <= 0 {
-			return result{toast: "Кривой таймаут"}
+			return result{toast: b.text(msgDeployTimeoutInvalid)}
 		}
 		return b.applyDeploy(ctx, cb, args[1], time.Duration(seconds)*time.Second)
 	case "now":
 		if len(args) < 1 {
-			return result{toast: "Нет ревизии"}
+			return result{toast: b.text(msgDeployRevisionRequired)}
 		}
 		return b.show(ctx, cb, scr(renderConfirm(b.L,
-			"Применить <b>без страховки</b>? Если ревизия отрежет доступ, чинить придётся руками через консоль провайдера.",
+			b.text(msgDeployImmediateConfirm),
 			"dep:now!:"+args[0], "dep")))
 	case "now!":
 		if len(args) < 1 {
-			return result{toast: "Нет ревизии"}
+			return result{toast: b.text(msgDeployRevisionRequired)}
 		}
 		return b.applyDeploy(ctx, cb, args[0], 0)
 	case "ok":
 		return b.confirmDeploy(ctx, cb)
 	case "rb":
 		return b.show(ctx, cb, scr(renderConfirm(b.L,
-			"Вернуть предыдущую ревизию? Агент применит её на ближайшем проходе.",
+			b.text(msgDeployRollbackConfirm),
 			"dep:rb!", "dep")))
 	case "rb!":
 		return b.rollbackDeploy(ctx, cb)
 	default:
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 }
 
@@ -94,13 +118,13 @@ func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRev
 
 	state, _, err := b.compileNext(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure(b.L, "деплой невозможен", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureDeployImpossible), err))
 	}
 	// The button was rendered against a specific revision; applying whatever the
 	// config says *now* would deploy something the admin never previewed.
 	if state.Revision != expectedRevision {
 		outcome := b.show(ctx, cb, b.buildDeployPreview(ctx))
-		outcome.toast = "Конфигурация изменилась — превью обновлено, посмотрите ещё раз"
+		outcome.toast = b.text(msgDeployPreviewStale)
 		outcome.alert = true
 		return outcome
 	}
@@ -110,9 +134,9 @@ func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRev
 	if err != nil {
 		var stage application.DeployError
 		if errors.As(err, &stage) && stage.Stage == application.DeployStageArm {
-			return b.show(ctx, cb, renderFailure(b.L, "страховка не взвелась", stage.Err))
+			return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureDeployArm), stage.Err))
 		}
-		return b.show(ctx, cb, renderFailure(b.L, "ревизия не сохранилась", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureRevisionSave), err))
 	}
 	armed := applied.Armed
 
@@ -121,7 +145,7 @@ func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRev
 		// Said plainly, as in the CLI: believing a rollback is watching when none is
 		// armed is worse than knowing there is none.
 		return b.show(ctx, cb, screen{
-			text:   "✅ Ревизия <code>" + esc(state.Revision) + "</code> сохранена. Отката не будет: это первый деплой, возвращаться не к чему. Агент применит её на ближайшем проходе.",
+			text:   b.text(msgDeployFirstNoRollback, esc(state.Revision)),
 			markup: keyboard(backRow(b.L)),
 		})
 	case confirmWithin > 0:
@@ -129,11 +153,11 @@ func (b *Bot) applyDeploy(ctx context.Context, cb *tg.CallbackQuery, expectedRev
 		if cb != nil && cb.Message != nil {
 			b.startCountdown(ctx, cb.Message.Chat.ID, cb.Message.ID, state.Revision)
 		}
-		outcome.toast = "Применено, жду подтверждения"
+		outcome.toast = b.text(msgDeployAppliedAwaiting)
 		return outcome
 	default:
 		return b.show(ctx, cb, screen{
-			text:   "⚡ Ревизия <code>" + esc(state.Revision) + "</code> сохранена без страховки. Агент применит её на ближайшем проходе.",
+			text:   b.text(msgDeployImmediateSaved, esc(state.Revision)),
 			markup: keyboard(backRow(b.L)),
 		})
 	}
@@ -151,21 +175,23 @@ func (b *Bot) confirmDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
 
 	pending, armed, err := b.Confirmations.Load()
 	if err != nil {
-		return result{toast: err.Error(), alert: true}
+		b.logf("load deploy confirmation: %v", err)
+		return result{toast: b.text(msgFailureDeployState), alert: true}
 	}
 	if !armed {
-		return result{toast: "Нечего подтверждать", alert: true}
+		return result{toast: b.text(msgDeployNothingToConfirm), alert: true}
 	}
 	b.self.mark(b.Now())
 	if err := b.Confirmations.Confirm(); err != nil {
-		return result{toast: err.Error(), alert: true}
+		b.logf("confirm deploy: %v", err)
+		return result{toast: b.text(msgFailureDeployState), alert: true}
 	}
 	b.deploy.stop()
 	outcome := b.show(ctx, cb, screen{
-		text:   "✅ Ревизия <code>" + esc(pending.Revision) + "</code> подтверждена, страховка снята.",
+		text:   b.text(msgDeployConfirmed, esc(pending.Revision)),
 		markup: keyboard(backRow(b.L)),
 	})
-	outcome.toast = "Подтверждено"
+	outcome.toast = b.text(msgDeployConfirmedToast)
 	return outcome
 }
 
@@ -179,14 +205,15 @@ func (b *Bot) rollbackDeploy(ctx context.Context, cb *tg.CallbackQuery) result {
 	b.self.mark(b.Now())
 	state, err := b.Confirmations.Rollback(ctx)
 	if err != nil {
-		return result{toast: err.Error(), alert: true}
+		b.logf("rollback deploy: %v", err)
+		return result{toast: b.text(msgFailureDeployState), alert: true}
 	}
 	b.deploy.stop()
 	outcome := b.show(ctx, cb, screen{
-		text:   "↩️ Восстановлена ревизия <code>" + esc(state.Revision) + "</code>; агент применит её на ближайшем проходе.",
+		text:   b.text(msgDeployRolledBack, esc(state.Revision)),
 		markup: keyboard(backRow(b.L)),
 	})
-	outcome.toast = "Откатил"
+	outcome.toast = b.text(msgDeployRolledBackToast)
 	return outcome
 }
 
@@ -228,7 +255,7 @@ func (b *Bot) resumePendingDeploy(ctx context.Context) {
 		view = scr(renderCountdownOverdue(b.L, pending.Revision))
 	}
 	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,
-		"↻ Возобновлён отсчёт после перезапуска бота.\n\n"+view.text, view.markup)
+		b.text(msgDeployCountdownResumed)+"\n\n"+view.text, view.markup)
 	if err != nil {
 		b.logf("resume countdown: %v", err)
 		return
@@ -275,9 +302,9 @@ func (b *Bot) startCountdown(ctx context.Context, chatID, messageID int64, revis
 				}
 			default:
 				// Resolved. The revision store says how.
-				text := "✅ Ревизия <code>" + esc(revision) + "</code> подтверждена."
+				text := b.text(msgDeployCountdownConfirmed, esc(revision))
 				if state, err := b.Revisions.Load(watchCtx); err == nil && state.Revision != revision {
-					text = "⛔ Ревизия <code>" + esc(revision) + "</code> не подтверждена: восстановлена <code>" + esc(state.Revision) + "</code>."
+					text = b.text(msgDeployCountdownRolledBack, esc(revision), esc(state.Revision))
 				}
 				if err := b.API.EditMessageText(watchCtx, chatID, messageID, text, keyboard(backRow(b.L))); err != nil {
 					b.logf("countdown edit: %v", err)

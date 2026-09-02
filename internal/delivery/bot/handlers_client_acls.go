@@ -12,6 +12,24 @@ import (
 	"vpn-hub/internal/domain"
 )
 
+const (
+	msgACLSourceRequired    MessageID = "acl/source_required"
+	msgACLTargetRequired    MessageID = "acl/target_required"
+	msgACLRuleRequired      MessageID = "acl/rule_required"
+	msgACLPortStep          MessageID = "acl/port_step"
+	msgACLRuleStale         MessageID = "acl/rule_stale"
+	msgACLRemoveConfirm     MessageID = "acl/remove_confirm"
+	msgACLSpecRetry         MessageID = "acl/spec_retry"
+	msgACLSpecFormatError   MessageID = "acl/spec_format_error"
+	msgACLSpecProtocolError MessageID = "acl/spec_protocol_error"
+	msgACLSpecPortError     MessageID = "acl/spec_port_error"
+	msgFailureACLEdit       MessageID = "failure/acl_edit"
+	msgACLAllowed           MessageID = "acl/allowed"
+	msgACLRemoved           MessageID = "acl/removed"
+	msgACLAfterChange       MessageID = "acl/after_change"
+	msgRevertACLInvalid     MessageID = "revert/acl_invalid"
+)
+
 func (b *Bot) clientACLEntries(ctx context.Context) ([]clientACLEntry, []string, error) {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
@@ -45,7 +63,7 @@ func (b *Bot) clientACLEntries(ctx context.Context) ([]clientACLEntry, []string,
 func (b *Bot) buildClientACLs(ctx context.Context) screen {
 	entries, _, err := b.clientACLEntries(ctx)
 	if err != nil {
-		return renderFailure(b.L, "конфигурация не читается", err)
+		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
 	}
 	return scr(renderClientACLs(b.L, entries))
 }
@@ -60,34 +78,34 @@ func (b *Bot) routeClientACLs(ctx context.Context, cb *tg.CallbackQuery, action 
 	case "add":
 		_, devices, err := b.clientACLEntries(ctx)
 		if err != nil {
-			return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
+			return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 		}
 		return b.show(ctx, cb, scr(renderClientACLSource(b.L, devices)))
 	case "src":
 		if len(args) < 1 {
-			return result{toast: "Нет source"}
+			return result{toast: b.text(msgACLSourceRequired)}
 		}
 		_, devices, err := b.clientACLEntries(ctx)
 		if err != nil {
-			return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
+			return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 		}
 		return b.show(ctx, cb, scr(renderClientACLTarget(b.L, args[0], devices)))
 	case "tgt":
 		if len(args) < 2 {
-			return result{toast: "Нет target"}
+			return result{toast: b.text(msgACLTargetRequired)}
 		}
 		b.dialogs.start(dialogClientACL, map[string]string{"source": args[0], "target": args[1]})
 		return b.show(ctx, cb, screen{
-			text:   fmt.Sprintf("Шаг 3 из 3. Какой порт открыть для <code>%s</code> → <code>%s</code>?\n\nПришлите <code>tcp/22</code> или <code>udp/53</code>.", esc(args[0]), esc(args[1])),
-			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ Отмена", "acl:x")}),
+			text:   b.text(msgACLPortStep, esc(args[0]), esc(args[1])),
+			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ "+b.text(msgButtonCancel), "acl:x")}),
 		})
 	case "rm":
 		if len(args) < 1 {
-			return result{toast: "Нет правила"}
+			return result{toast: b.text(msgACLRuleRequired)}
 		}
 		entries, _, err := b.clientACLEntries(ctx)
 		if err != nil {
-			return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
+			return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 		}
 		var target *domain.ClientACL
 		for _, entry := range entries {
@@ -97,25 +115,25 @@ func (b *Bot) routeClientACLs(ctx context.Context, cb *tg.CallbackQuery, action 
 			}
 		}
 		if target == nil {
-			return result{toast: "Правило уже изменилось", alert: true}
+			return result{toast: b.text(msgACLRuleStale), alert: true}
 		}
 		return b.show(ctx, cb, scr(renderConfirm(b.L,
-			fmt.Sprintf("Удалить доступ <code>%s</code> → <code>%s</code> <code>%s/%d</code>?", esc(target.Source), esc(target.Target), esc(string(target.Protocol)), target.Port),
+			b.text(msgACLRemoveConfirm, esc(target.Source), esc(target.Target), esc(string(target.Protocol)), target.Port),
 			"acl:rm!:"+args[0], "acl")))
 	case "rm!":
 		if len(args) < 1 {
-			return result{toast: "Нет правила"}
+			return result{toast: b.text(msgACLRuleRequired)}
 		}
 		return b.removeClientACL(ctx, cb, args[0])
 	default:
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 }
 
 func (b *Bot) handleClientACLInput(ctx context.Context, dialog *dialog, text string) {
-	protocol, port, err := parseClientACLSpec(text)
-	if err != nil {
-		b.send(ctx, "⚠️ "+err.Error()+"\n\nПришлите, например, <code>tcp/22</code>.", keyboard([]tg.InlineKeyboardButton{btn("✖️ Отмена", "acl:x")}))
+	protocol, port, validation := parseClientACLSpec(text)
+	if validation != "" {
+		b.send(ctx, b.text(msgACLSpecRetry, b.text(validation)), keyboard([]tg.InlineKeyboardButton{btn("✖️ "+b.text(msgButtonCancel), "acl:x")}))
 		return
 	}
 	b.dialogs.clear()
@@ -130,22 +148,23 @@ func (b *Bot) addClientACL(ctx context.Context, cb *tg.CallbackQuery, source, ta
 	defer release()
 	editor := configadapter.Editor{Root: b.ConfigPath}
 	if err := editor.AddClientACL(source, target, string(protocol), port); err != nil {
-		return result{toast: err.Error(), alert: true}
+		b.logf("add client ACL: %v", err)
+		return result{toast: b.text(msgFailureACLEdit), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		view := revertEdit(b.L, "Изменение отменено, конфигурация не проходит проверку", err, func() error {
+		view := revertEdit(b.L, b.text(msgRevertACLInvalid), err, func() error {
 			return editor.RemoveClientACL(source, target, string(protocol), port)
 		})
 		return b.show(ctx, cb, view)
 	}
-	text := fmt.Sprintf("🔐 Разрешён доступ <b>%s</b> → <b>%s</b> <code>%s/%d</code>.", esc(source), esc(target), esc(string(protocol)), port)
-	return b.show(ctx, cb, legacyRussianACLAfterConfigChange(text))
+	text := b.text(msgACLAllowed, esc(source), esc(target), esc(string(protocol)), port)
+	return b.show(ctx, cb, b.afterACLChange(text))
 }
 
 func (b *Bot) removeClientACL(ctx context.Context, cb *tg.CallbackQuery, ordinal string) result {
 	entries, _, err := b.clientACLEntries(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 	}
 	var target *domain.ClientACL
 	for _, entry := range entries {
@@ -155,7 +174,7 @@ func (b *Bot) removeClientACL(ctx context.Context, cb *tg.CallbackQuery, ordinal
 		}
 	}
 	if target == nil {
-		return result{toast: "Правило уже изменилось", alert: true}
+		return result{toast: b.text(msgACLRuleStale), alert: true}
 	}
 	release, busy := b.claim(newOperation(msgOperationClientACLEdit))
 	if busy != nil {
@@ -164,40 +183,39 @@ func (b *Bot) removeClientACL(ctx context.Context, cb *tg.CallbackQuery, ordinal
 	defer release()
 	editor := configadapter.Editor{Root: b.ConfigPath}
 	if err := editor.RemoveClientACL(target.Source, target.Target, string(target.Protocol), target.Port); err != nil {
-		return result{toast: err.Error(), alert: true}
+		b.logf("remove client ACL: %v", err)
+		return result{toast: b.text(msgFailureACLEdit), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		view := revertEdit(b.L, "Изменение отменено, конфигурация не проходит проверку", err, func() error {
+		view := revertEdit(b.L, b.text(msgRevertACLInvalid), err, func() error {
 			return editor.AddClientACL(target.Source, target.Target, string(target.Protocol), target.Port)
 		})
 		return b.show(ctx, cb, view)
 	}
-	return b.show(ctx, cb, legacyRussianACLAfterConfigChange("🔐 Правило удалено."))
+	return b.show(ctx, cb, b.afterACLChange(b.text(msgACLRemoved)))
 }
 
-func legacyRussianACLAfterConfigChange(text string) screen {
+func (b *Bot) afterACLChange(text string) screen {
 	return screen{
-		text: text + "\n\nИзменение вступит в силу после деплоя.",
+		text: text + "\n\n" + b.text(msgACLAfterChange),
 		markup: keyboard(
-			[]tg.InlineKeyboardButton{btn("🚀 Деплой", "dep")},
-			backToACLs,
+			[]tg.InlineKeyboardButton{btn("🚀 "+b.text(msgButtonDeploy), "dep")},
+			[]tg.InlineKeyboardButton{btn("🔐 ACL", "acl"), btn("🏠 "+b.text(msgButtonMenu), "m")},
 		),
 	}
 }
 
-func parseClientACLSpec(value string) (domain.ClientACLProtocol, uint16, error) {
+func parseClientACLSpec(value string) (domain.ClientACLProtocol, uint16, MessageID) {
 	protocol, rawPort, ok := strings.Cut(strings.ToLower(strings.TrimSpace(value)), "/")
 	if !ok || rawPort == "" {
-		return "", 0, fmt.Errorf("порт должен выглядеть как tcp/22 или udp/53")
+		return "", 0, msgACLSpecFormatError
 	}
 	if protocol != string(domain.ClientACLTCP) && protocol != string(domain.ClientACLUDP) {
-		return "", 0, fmt.Errorf("протокол должен быть tcp или udp")
+		return "", 0, msgACLSpecProtocolError
 	}
 	port64, err := strconv.ParseUint(rawPort, 10, 16)
 	if err != nil || port64 == 0 {
-		return "", 0, fmt.Errorf("порт должен быть от 1 до 65535")
+		return "", 0, msgACLSpecPortError
 	}
-	return domain.ClientACLProtocol(protocol), uint16(port64), nil
+	return domain.ClientACLProtocol(protocol), uint16(port64), ""
 }
-
-var backToACLs = []tg.InlineKeyboardButton{btn("🔐 ACL", "acl"), btn("🏠 Меню", "m")}

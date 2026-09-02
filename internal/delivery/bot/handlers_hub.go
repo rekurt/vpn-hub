@@ -15,17 +15,78 @@ import (
 	"vpn-hub/internal/domain"
 )
 
-// hubFieldTitles names the editable hub scalars in the operator's language.
-var hubFieldTitles = map[string]string{
-	"endpoint":    "endpoint (host:port)",
-	"dns_address": "DNS-адрес",
-	"client_cidr": "клиентская сеть (CIDR)",
+const (
+	msgHubFieldEndpoint            MessageID = "hub/field_endpoint"
+	msgHubFieldDNS                 MessageID = "hub/field_dns"
+	msgHubFieldClientNetwork       MessageID = "hub/field_client_network"
+	msgHubFieldUnknown             MessageID = "hub/field_unknown"
+	msgHubEditPrompt               MessageID = "hub/edit_prompt"
+	msgAWGSetPrompt                MessageID = "hub/awg_set_prompt"
+	msgAWGParameterRequired        MessageID = "hub/awg_parameter_required"
+	msgExportConfirm               MessageID = "hub/export_confirm"
+	msgExportReadFailure           MessageID = "hub/export_read_failure"
+	msgExportSendFailure           MessageID = "hub/export_send_failure"
+	msgExportSummary               MessageID = "hub/export_summary"
+	msgExportStarted               MessageID = "hub/export_started"
+	msgValidationEndpoint          MessageID = "validation/hub_endpoint"
+	msgValidationPort              MessageID = "validation/hub_port"
+	msgValidationIPAddress         MessageID = "validation/hub_ip_address"
+	msgValidationCIDR              MessageID = "validation/hub_cidr"
+	msgValidationRetry             MessageID = "validation/retry"
+	msgFailureHubFieldWrite        MessageID = "failure/hub_field_write"
+	msgRevertHubInvalid            MessageID = "revert/hub_invalid"
+	msgHubFieldChanged             MessageID = "hub/field_changed"
+	msgAWGFieldsRequired           MessageID = "hub/awg_fields_required"
+	msgAWGUnknownParameter         MessageID = "hub/awg_unknown_parameter"
+	msgAWGValueNumeric             MessageID = "hub/awg_value_numeric"
+	msgFailureAWGWrite             MessageID = "failure/awg_write"
+	msgAWGParameterSaved           MessageID = "hub/awg_parameter_saved"
+	msgAWGAfterChange              MessageID = "hub/awg_after_change"
+	msgAWGParameterMissing         MessageID = "hub/awg_parameter_missing"
+	msgAWGParameterRemoved         MessageID = "hub/awg_parameter_removed"
+	msgKeyRotationWarning          MessageID = "hub/key_rotation_warning"
+	msgKeyRotationConfirm          MessageID = "hub/key_rotation_confirm"
+	msgKeyRotationStarting         MessageID = "hub/key_rotation_starting"
+	msgFailureKeyRotationStart     MessageID = "failure/key_rotation_start"
+	msgKeyRotationStarted          MessageID = "hub/key_rotation_started"
+	msgKeyRotationConfigUnreadable MessageID = "hub/key_rotation_config_unreadable"
+	msgKeyRotationInterrupted      MessageID = "hub/key_rotation_interrupted"
+	msgRotationOldProfilesInvalid  MessageID = "hub/key_rotation_old_profiles_invalid"
+	msgKeyRotationDelivered        MessageID = "hub/key_rotation_delivered"
+	msgKeyRotationPending          MessageID = "hub/key_rotation_pending"
+	msgKeyRotationPreviousSaved    MessageID = "hub/key_rotation_previous_saved"
+	msgKeyRotationGenerateFailed   MessageID = "hub/key_rotation_generate_failed"
+	msgKeyRotationUpdatingConfig   MessageID = "hub/key_rotation_updating_config"
+	msgKeyRotationConfigMismatch   MessageID = "hub/key_rotation_config_mismatch"
+	msgKeyRotationStageConfigCheck MessageID = "hub/key_rotation_stage_config_check"
+	msgRotationStageDeviceKeygen   MessageID = "hub/key_rotation_stage_device_generate"
+	msgKeyRotationStageDeviceWrite MessageID = "hub/key_rotation_stage_device_write"
+	msgKeyRotationStageProfileSave MessageID = "hub/key_rotation_stage_profile_save"
+	msgKeyRotationStageProfileSend MessageID = "hub/key_rotation_stage_profile_send"
+	msgKeyRotationStageFinalCheck  MessageID = "hub/key_rotation_stage_final_check"
+	msgReasonProfileSendFailed     MessageID = "reason/profile_send_failed"
+	msgKeyRotationComplete         MessageID = "hub/key_rotation_complete"
+	msgKeyRotationDetailsBelow     MessageID = "hub/key_rotation_details_below"
+	msgButtonToDeploy              MessageID = "button/to_deploy"
+	msgProbeKindUnknown            MessageID = "probe/kind_unknown"
+	msgProbePrompt                 MessageID = "probe/prompt"
+	msgProbeInvalidRetry           MessageID = "probe/invalid_retry"
+	msgFailureProbeWrite           MessageID = "failure/probe_write"
+	msgRevertProbeInvalid          MessageID = "revert/probe_invalid"
+	msgRevertProbeRemoveInvalid    MessageID = "revert/probe_remove_invalid"
+	msgProbeRemoved                MessageID = "probe/removed"
+)
+
+var hubFieldTitles = map[string]MessageID{
+	"endpoint":    msgHubFieldEndpoint,
+	"dns_address": msgHubFieldDNS,
+	"client_cidr": msgHubFieldClientNetwork,
 }
 
 func (b *Bot) buildHub(ctx context.Context) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return renderFailure(b.L, "конфигурация не читается", err)
+		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
 	}
 	return scr(renderHub(b.L, cfg.Hub))
 }
@@ -39,37 +100,35 @@ func (b *Bot) routeHub(ctx context.Context, cb *tg.CallbackQuery, action string,
 		return b.show(ctx, cb, b.buildHub(ctx))
 	case "e":
 		if len(args) < 1 || hubFieldTitles[args[0]] == "" {
-			return result{toast: "Не понимаю это поле"}
+			return result{toast: b.text(msgHubFieldUnknown)}
 		}
 		field := args[0]
 		b.dialogs.start(dialogHubEdit, map[string]string{"field": field})
 		return b.show(ctx, cb, screen{
-			text: fmt.Sprintf("✏️ Введите новое значение для <b>%s</b>.\n⚠️ Смена ломает выданные профили: после неё устройства придётся перевыпустить.",
-				esc(hubFieldTitles[field])),
-			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ Отмена", "hub:x")}),
+			text:   b.text(msgHubEditPrompt, esc(b.text(hubFieldTitles[field]))),
+			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ "+b.text(msgButtonCancel), "hub:x")}),
 		})
 	case "aa":
 		b.dialogs.start(dialogAWGSet, nil)
 		return b.show(ctx, cb, screen{
-			text: "➕ Введите AmneziaWG-параметр в виде <code>имя значение</code>, например <code>Jc 5</code>.\n" +
-				"Допустимы известные параметры (Jc, Jmin, Jmax, S1, S2, H1–H4) с числовым значением.",
-			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ Отмена", "hub:x")}),
+			text:   b.text(msgAWGSetPrompt),
+			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ "+b.text(msgButtonCancel), "hub:x")}),
 		})
 	case "ad":
 		if len(args) < 1 {
-			return result{toast: "Не указан параметр"}
+			return result{toast: b.text(msgAWGParameterRequired)}
 		}
 		return b.removeAWGParameter(ctx, cb, args[0])
 	case "rk":
 		return b.routeKeyRotation(ctx, cb, args)
 	case "dl":
 		return b.show(ctx, cb, scr(renderConfirm(b.L,
-			"Выгрузить YAML-конфигурацию в чат? Файлы содержат подписочные URL с токенами — это секреты. Файлы провайдеров и ключи не выгружаются.",
+			b.text(msgExportConfirm),
 			"hub:dl!", "hub")))
 	case "dl!":
 		return b.exportConfig(ctx)
 	default:
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 }
 
@@ -94,41 +153,46 @@ func (b *Bot) exportConfig(ctx context.Context) result {
 		for _, path := range paths {
 			content, err := os.ReadFile(path)
 			if err != nil {
-				b.send(ctx, "⚠️ <code>"+esc(path)+"</code> не прочитался: <code>"+esc(err.Error())+"</code>", nil)
+				b.send(ctx, b.text(msgExportReadFailure, esc(path), esc(err.Error())), nil)
 				continue
 			}
 			if _, err := b.API.SendDocument(ctx, b.Cfg.AdminID, filepath.Base(path), content,
 				"📦 <code>"+esc(path)+"</code>"); err != nil {
-				b.send(ctx, "⚠️ <code>"+esc(path)+"</code> не отправился: <code>"+esc(err.Error())+"</code>", nil)
+				b.send(ctx, b.text(msgExportSendFailure, esc(path), esc(err.Error())), nil)
 				continue
 			}
 			sent++
 		}
-		b.send(ctx, fmt.Sprintf("📦 Выгружено файлов: %d из %d. Удалите их из чата, когда заберёте.", sent, len(paths)),
-			keyboard([]tg.InlineKeyboardButton{btn("⚙️ Хаб", "hub")}))
+		b.send(ctx, b.text(msgExportSummary, sent, len(paths)),
+			keyboard([]tg.InlineKeyboardButton{btn("⚙️ "+b.text(msgButtonHub), "hub")}))
 	})
-	return result{toast: "Выгружаю…"}
+	return result{toast: b.text(msgExportStarted)}
 }
 
 // validateHubField pre-checks a value so the dialog can complain precisely; the
 // authoritative check is still LoadAndValidate after the write.
-func validateHubField(field, value string) error {
+type hubValidation struct {
+	id   MessageID
+	args []any
+}
+
+func validateHubField(field, value string) *hubValidation {
 	switch field {
 	case "endpoint":
 		host, port, err := net.SplitHostPort(value)
 		if err != nil || host == "" {
-			return fmt.Errorf("endpoint должен быть host:port, например vpn.example.com:51820")
+			return &hubValidation{id: msgValidationEndpoint}
 		}
 		if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
-			return fmt.Errorf("порт %q не похож на порт", port)
+			return &hubValidation{id: msgValidationPort, args: []any{esc(port)}}
 		}
 	case "dns_address":
 		if _, err := netip.ParseAddr(value); err != nil {
-			return fmt.Errorf("%q не IP-адрес", value)
+			return &hubValidation{id: msgValidationIPAddress, args: []any{esc(value)}}
 		}
 	case "client_cidr":
 		if _, err := netip.ParsePrefix(value); err != nil {
-			return fmt.Errorf("%q не CIDR, например 10.80.0.0/24", value)
+			return &hubValidation{id: msgValidationCIDR, args: []any{esc(value)}}
 		}
 	}
 	return nil
@@ -136,8 +200,8 @@ func validateHubField(field, value string) error {
 
 func (b *Bot) handleHubEditInput(ctx context.Context, dialog *dialog, text string) {
 	field := dialog.data["field"]
-	if err := validateHubField(field, text); err != nil {
-		b.send(ctx, "⚠️ "+esc(err.Error())+". Попробуйте ещё раз или /cancel.", nil)
+	if validation := validateHubField(field, text); validation != nil {
+		b.send(ctx, b.text(msgValidationRetry, b.text(validation.id, validation.args...)), nil)
 		return
 	}
 	b.dialogs.clear()
@@ -150,7 +214,7 @@ func (b *Bot) handleHubEditInput(ctx context.Context, dialog *dialog, text strin
 
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		b.sendScreen(ctx, renderFailure(b.L, "конфигурация не читается", err))
+		b.sendScreen(ctx, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 		return
 	}
 	previous := map[string]string{
@@ -160,22 +224,20 @@ func (b *Bot) handleHubEditInput(ctx context.Context, dialog *dialog, text strin
 	}[field]
 
 	if err := b.Editor.SetHubField(field, text); err != nil {
-		b.sendScreen(ctx, renderFailure(b.L, "значение не записалось", err))
+		b.sendScreen(ctx, renderFailure(b.L, b.text(msgFailureHubFieldWrite), err))
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		b.sendScreen(ctx, revertEdit(b.L, "отменено: конфигурация не проходит проверку", err, func() error {
+		b.sendScreen(ctx, revertEdit(b.L, b.text(msgRevertHubInvalid), err, func() error {
 			return b.Editor.SetHubField(field, previous)
 		}))
 		return
 	}
 	b.sendScreen(ctx, screen{
-		text: fmt.Sprintf("✅ <b>%s</b>: <code>%s</code> → <code>%s</code>\n\n"+
-			"Профили устройств теперь указывают на старое значение — перевыпустите их и задеплойте.",
-			esc(hubFieldTitles[field]), esc(previous), esc(text)),
+		text: b.text(msgHubFieldChanged, esc(b.text(hubFieldTitles[field])), esc(previous), esc(text)),
 		markup: keyboard(
-			[]tg.InlineKeyboardButton{btn("📱 Устройства", "dev"), btn("🚀 Деплой", "dep")},
-			[]tg.InlineKeyboardButton{btn("⚙️ Хаб", "hub")},
+			[]tg.InlineKeyboardButton{btn("📱 "+b.text(MsgButtonDevices), "dev"), btn("🚀 "+b.text(msgButtonDeploy), "dep")},
+			[]tg.InlineKeyboardButton{btn("⚙️ "+b.text(msgButtonHub), "hub")},
 		),
 	})
 }
@@ -183,17 +245,17 @@ func (b *Bot) handleHubEditInput(ctx context.Context, dialog *dialog, text strin
 func (b *Bot) handleAWGSetInput(ctx context.Context, _ *dialog, text string) {
 	fields := strings.FieldsFunc(text, func(r rune) bool { return r == ' ' || r == '=' })
 	if len(fields) != 2 {
-		b.send(ctx, "⚠️ Нужно два слова: <code>имя значение</code>. Попробуйте ещё раз или /cancel.", nil)
+		b.send(ctx, b.text(msgAWGFieldsRequired), nil)
 		return
 	}
 	name, value := fields[0], fields[1]
 	canonical, known := domain.CanonicalAWGParameter(name)
 	if !known {
-		b.send(ctx, "⚠️ Параметр <code>"+esc(name)+"</code> неизвестен. Допустимы Jc, Jmin, Jmax, S1, S2, H1–H4. Ещё раз или /cancel.", nil)
+		b.send(ctx, b.text(msgAWGUnknownParameter, esc(name)), nil)
 		return
 	}
 	if _, err := strconv.Atoi(value); err != nil {
-		b.send(ctx, "⚠️ Значение должно быть числом. Ещё раз или /cancel.", nil)
+		b.send(ctx, b.text(msgAWGValueNumeric), nil)
 		return
 	}
 	b.dialogs.clear()
@@ -206,7 +268,7 @@ func (b *Bot) handleAWGSetInput(ctx context.Context, _ *dialog, text string) {
 
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		b.sendScreen(ctx, renderFailure(b.L, "конфигурация не читается", err))
+		b.sendScreen(ctx, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 		return
 	}
 	// The config decodes keys lower-cased; write the same shape it already holds.
@@ -214,11 +276,11 @@ func (b *Bot) handleAWGSetInput(ctx context.Context, _ *dialog, text string) {
 	previous, existed := cfg.Hub.AWGInterface[key]
 
 	if err := b.Editor.SetHubMapField("awg_interface", key, value); err != nil {
-		b.sendScreen(ctx, renderFailure(b.L, "параметр не записался", err))
+		b.sendScreen(ctx, renderFailure(b.L, b.text(msgFailureAWGWrite), err))
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		b.sendScreen(ctx, revertEdit(b.L, "отменено: конфигурация не проходит проверку", err, func() error {
+		b.sendScreen(ctx, revertEdit(b.L, b.text(msgRevertHubInvalid), err, func() error {
 			if existed {
 				return b.Editor.SetHubMapField("awg_interface", key, previous)
 			}
@@ -226,16 +288,16 @@ func (b *Bot) handleAWGSetInput(ctx context.Context, _ *dialog, text string) {
 		}))
 		return
 	}
-	b.sendScreen(ctx, b.afterHubChange(fmt.Sprintf("✅ <code>%s = %s</code> записан.", esc(canonical), esc(value))))
+	b.sendScreen(ctx, b.afterHubChange(b.text(msgAWGParameterSaved, esc(canonical), esc(value))))
 }
 
 // afterHubChange reminds that obfuscation parameters live in client profiles too.
 func (b *Bot) afterHubChange(text string) screen {
 	return screen{
-		text: text + "\n\nAWG-параметры входят в профили устройств: перевыпустите их и задеплойте.",
+		text: text + "\n\n" + b.text(msgAWGAfterChange),
 		markup: keyboard(
-			[]tg.InlineKeyboardButton{btn("📱 Устройства", "dev"), btn("🚀 Деплой", "dep")},
-			[]tg.InlineKeyboardButton{btn("⚙️ Хаб", "hub")},
+			[]tg.InlineKeyboardButton{btn("📱 "+b.text(MsgButtonDevices), "dev"), btn("🚀 "+b.text(msgButtonDeploy), "dep")},
+			[]tg.InlineKeyboardButton{btn("⚙️ "+b.text(msgButtonHub), "hub")},
 		),
 	}
 }
@@ -249,24 +311,25 @@ func (b *Bot) removeAWGParameter(ctx context.Context, cb *tg.CallbackQuery, key 
 
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 	}
 	previous, existed := cfg.Hub.AWGInterface[key]
 	if !existed {
-		return result{toast: "Такого параметра уже нет", alert: true}
+		return result{toast: b.text(msgAWGParameterMissing), alert: true}
 	}
 
 	if err := b.Editor.RemoveHubMapField("awg_interface", key); err != nil {
-		return result{toast: err.Error(), alert: true}
+		b.logf("remove AWG parameter %s: %v", key, err)
+		return result{toast: b.text(msgFailureAWGWrite), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		return b.show(ctx, cb, revertEdit(b.L, "отменено: конфигурация не проходит проверку", err, func() error {
+		return b.show(ctx, cb, revertEdit(b.L, b.text(msgRevertHubInvalid), err, func() error {
 			return b.Editor.SetHubMapField("awg_interface", key, previous)
 		}))
 	}
 	outcome := b.show(ctx, cb, b.buildHub(ctx))
 	name, _ := domain.CanonicalAWGParameter(key)
-	outcome.toast = "Удалён параметр " + name
+	outcome.toast = b.text(msgAWGParameterRemoved, name)
 	return outcome
 }
 
@@ -275,18 +338,14 @@ func (b *Bot) removeAWGParameter(ctx context.Context, cb *tg.CallbackQuery, key 
 func (b *Bot) routeKeyRotation(ctx context.Context, cb *tg.CallbackQuery, args []string) result {
 	if len(args) == 0 {
 		return b.show(ctx, cb, screen{
-			text: "🔑 <b>Ротация ключа хаба</b>\n\n" +
-				"Будет сгенерирован новый серверный ключ, перевыпущены профили <b>всех</b> устройств (файлы и QR придут в этот чат), обновлена конфигурация.\n\n" +
-				"⚠️ <b>Все устройства теряют связь</b>, пока на них не установят новые профили и не пройдёт деплой.\n" +
-				"⚠️ Откат ревизии <b>не вернёт</b> старый ключ — он останется в <code>server.key.previous</code> на хабе.\n" +
-				"⚠️ Не запускайте это с устройства, чей интернет идёт через этот хаб: связь оборвётся на середине.",
+			text: b.text(msgKeyRotationWarning),
 			markup: keyboard(
-				[]tg.InlineKeyboardButton{btn("Да, ротировать", "hub:rk:go"), btn("Нет", "hub")},
+				[]tg.InlineKeyboardButton{btn(b.text(msgKeyRotationConfirm), "hub:rk:go"), btn(b.text(MsgConfirmNo), "hub")},
 			),
 		})
 	}
 	if args[0] != "go" {
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 
 	release, busy := b.claim(newOperation(msgOperationHubKeyRotation))
@@ -294,17 +353,18 @@ func (b *Bot) routeKeyRotation(ctx context.Context, cb *tg.CallbackQuery, args [
 		return *busy
 	}
 
-	progress, err := b.API.SendMessage(ctx, b.Cfg.AdminID, "🔑 Ротация: генерирую новый ключ…", nil)
+	progress, err := b.API.SendMessage(ctx, b.Cfg.AdminID, b.text(msgKeyRotationStarting), nil)
 	if err != nil {
 		release()
-		return result{toast: "Не удалось начать: " + err.Error(), alert: true}
+		b.logf("start key rotation: %v", err)
+		return result{toast: b.text(msgFailureKeyRotationStart), alert: true}
 	}
 
 	b.spawn("key-rotation", func() {
 		defer release()
 		b.rotateHubKey(ctx, progress.Chat.ID, progress.ID)
 	})
-	return result{toast: "Начал"}
+	return result{toast: b.text(msgKeyRotationStarted)}
 }
 
 // rotateHubKey is the one flow where half-done is the dangerous state, so every
@@ -318,7 +378,7 @@ func (b *Bot) rotateHubKey(ctx context.Context, chatID, messageID int64) {
 
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		edit("⛔ Ротация не начата: конфигурация не читается.\n<code>" + esc(err.Error()) + "</code>")
+		edit(b.text(msgKeyRotationConfigUnreadable, esc(err.Error())))
 		return
 	}
 	allDevices := make([]string, 0, len(cfg.Devices))
@@ -332,34 +392,32 @@ func (b *Bot) rotateHubKey(ctx context.Context, chatID, messageID int64) {
 	// wrong here means a device silently offline.
 	fail := func(stage string, cause error, delivered []string) {
 		var b2 strings.Builder
-		fmt.Fprintf(&b2, "⛔ Ротация прервана на шаге «%s»:\n<code>%s</code>\n\n", esc(stage), esc(cause.Error()))
-		b2.WriteString("Ключ хаба уже заменён — старые профили <b>всех</b> устройств больше не работают.\n")
+		b2.WriteString(b.text(msgKeyRotationInterrupted, esc(stage), esc(cause.Error())))
+		b2.WriteString(b.text(msgRotationOldProfilesInvalid))
 		if len(delivered) > 0 {
-			fmt.Fprintf(&b2, "✅ Новые профили доставлены: <code>%s</code>\n", esc(strings.Join(delivered, ", ")))
+			b2.WriteString(b.text(msgKeyRotationDelivered, esc(strings.Join(delivered, ", "))))
 		}
 		pending := subtract(allDevices, delivered)
 		if len(pending) > 0 {
-			fmt.Fprintf(&b2, "⚠️ Требуют перевыпуска вручную (📱 Устройства → Перевыпустить): <code>%s</code>\n", esc(strings.Join(pending, ", ")))
+			b2.WriteString(b.text(msgKeyRotationPending, esc(strings.Join(pending, ", "))))
 		}
-		b2.WriteString("\nСтарый ключ сохранён в <code>server.key.previous</code>.")
+		b2.WriteString(b.text(msgKeyRotationPreviousSaved))
 		b.sendScreen(ctx, screen{text: b2.String(), markup: keyboard(
-			[]tg.InlineKeyboardButton{btn("📱 Устройства", "dev"), btn("📊 Статус", "st")},
+			[]tg.InlineKeyboardButton{btn("📱 "+b.text(MsgButtonDevices), "dev"), btn("📊 "+b.text(MsgButtonStatus), "st")},
 		)})
 	}
 
 	publicKey, err := b.Keys.Rotate()
 	if err != nil {
-		edit("⛔ Ротация не начата: новый ключ не сгенерирован.\n<code>" + esc(err.Error()) + "</code>")
+		edit(b.text(msgKeyRotationGenerateFailed, esc(err.Error())))
 		return
 	}
-	edit("🔑 Ключ заменён. Обновляю конфигурацию…")
+	edit(b.text(msgKeyRotationUpdatingConfig))
 
 	if err := b.Editor.SetHubField("server_public_key", publicKey); err != nil {
 		// The one irrecoverable-by-bot spot: the on-disk key is new but the config
 		// still names the old public key, so nothing matches until they do.
-		edit("⛔ Ключ заменён на диске, но не записан в конфиг:\n<code>" + esc(err.Error()) + "</code>\n\n" +
-			"Конфиг и server.key рассинхронизированы. Восстановите прежний ключ на хосте:\n" +
-			"<code>mv /etc/vpn-hub/server.key.previous /etc/vpn-hub/server.key</code>")
+		edit(b.text(msgKeyRotationConfigMismatch, esc(err.Error())))
 		return
 	}
 
@@ -368,7 +426,7 @@ func (b *Bot) rotateHubKey(ctx context.Context, chatID, messageID int64) {
 	// validation accepts -- it does not cross-check them against the hub key.
 	withNewKey, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		fail("проверка конфигурации после смены ключа хаба", err, nil)
+		fail(b.text(msgKeyRotationStageConfigCheck), err, nil)
 		return
 	}
 
@@ -378,39 +436,37 @@ func (b *Bot) rotateHubKey(ctx context.Context, chatID, messageID int64) {
 	for _, device := range cfg.Devices {
 		privateKey, devicePublic, err := domain.GenerateX25519KeyPair()
 		if err != nil {
-			fail("генерация ключа устройства "+device.ID, err, delivered)
+			fail(b.text(msgRotationStageDeviceKeygen, device.ID), err, delivered)
 			return
 		}
 		if err := b.Editor.SetDeviceField(device.ID, "public_key", devicePublic); err != nil {
-			fail("запись ключа устройства "+device.ID, err, delivered)
+			fail(b.text(msgKeyRotationStageDeviceWrite, device.ID), err, delivered)
 			return
 		}
 		if err := b.saveProfileKey(ctx, device.ID, privateKey); err != nil {
-			fail("сохранение профиля устройства "+device.ID, err, delivered)
+			fail(b.text(msgKeyRotationStageProfileSave, device.ID), err, delivered)
 			return
 		}
 		if outcome := b.sendProfile(ctx, withNewKey.Hub, device.ID, device.Address, privateKey); outcome != nil {
-			fail("доставка профиля "+device.ID, fmt.Errorf("сообщение не отправилось"), delivered)
+			fail(b.text(msgKeyRotationStageProfileSend, device.ID), fmt.Errorf("%s", b.text(msgReasonProfileSendFailed)), delivered)
 			return
 		}
 		delivered = append(delivered, device.ID)
 	}
 
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		fail("итоговая проверка конфигурации", err, delivered)
+		fail(b.text(msgKeyRotationStageFinalCheck), err, delivered)
 		return
 	}
 
 	b.sendScreen(ctx, screen{
-		text: "🔑 <b>Ротация завершена.</b>\n\n" +
-			"Профили всех устройств выше — установите их и удалите из чата.\n" +
-			"Остался деплой. Страховка тут не поможет: откат ревизии не вернёт старый ключ, поэтому деплойте сразу.",
+		text: b.text(msgKeyRotationComplete),
 		markup: keyboard(
-			[]tg.InlineKeyboardButton{btn("🚀 К деплою", "dep")},
+			[]tg.InlineKeyboardButton{btn("🚀 "+b.text(msgButtonToDeploy), "dep")},
 			backRow(b.L),
 		),
 	})
-	edit("🔑 Ротация выполнена, детали ниже.")
+	edit(b.text(msgKeyRotationDetailsBelow))
 }
 
 // subtract returns the elements of all that are not in the removed set, order
@@ -457,26 +513,25 @@ func probeValue(h domain.HealthCheck, kindKey string) string {
 func (b *Bot) buildProbes(ctx context.Context, tunnelID string) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return renderFailure(b.L, "конфигурация не читается", err)
+		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
 	}
 	for _, tunnel := range cfg.Tunnels {
 		if tunnel.ID == tunnelID {
 			return scr(renderProbes(b.L, tunnelID, tunnel.Health))
 		}
 	}
-	return renderFailure(b.L, "туннель не найден", fmt.Errorf("нет туннеля %q", tunnelID))
+	return renderFailure(b.L, b.text(msgFailureTunnelNotFound), fmt.Errorf("%s", b.text(msgReasonTunnelNotFound, tunnelID)))
 }
 
 func (b *Bot) startProbeDialog(ctx context.Context, cb *tg.CallbackQuery, tunnelID, kindKey string) result {
 	_, title, example, ok := probeKind(kindKey)
 	if !ok {
-		return result{toast: "Не понимаю вид пробы"}
+		return result{toast: b.text(msgProbeKindUnknown)}
 	}
 	b.dialogs.start(dialogProbeSet, map[string]string{"tunnel": tunnelID, "kind": kindKey})
 	return b.show(ctx, cb, screen{
-		text: fmt.Sprintf("🩺 %s-проба для <b>%s</b>: пришлите значение, например <code>%s</code>.",
-			esc(title), esc(tunnelID), esc(example)),
-		markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ Отмена", "tun:pr:"+tunnelID)}),
+		text:   b.text(msgProbePrompt, esc(title), esc(tunnelID), esc(example)),
+		markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ "+b.text(msgButtonCancel), "tun:pr:"+tunnelID)}),
 	})
 }
 
@@ -499,7 +554,8 @@ func (b *Bot) handleProbeSetInput(ctx context.Context, dialog *dialog, text stri
 		trial.DNSName = text
 	}
 	if err := trial.Validate(); err != nil {
-		b.send(ctx, "⚠️ "+esc(err.Error())+". Попробуйте ещё раз или /cancel.", nil)
+		b.logf("validate %s probe for %s: %v", kindKey, tunnelID, err)
+		b.send(ctx, b.text(msgProbeInvalidRetry), nil)
 		return
 	}
 	b.dialogs.clear()
@@ -511,11 +567,11 @@ func (b *Bot) handleProbeSetInput(ctx context.Context, dialog *dialog, text stri
 	defer release()
 
 	if err := b.Editor.SetTunnelMapField(tunnelID, "health", field, text); err != nil {
-		b.sendScreen(ctx, renderFailure(b.L, "проба не записалась", err))
+		b.sendScreen(ctx, renderFailure(b.L, b.text(msgFailureProbeWrite), err))
 		return
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		b.sendScreen(ctx, revertEdit(b.L, "отменено: конфигурация не проходит проверку", err, func() error {
+		b.sendScreen(ctx, revertEdit(b.L, b.text(msgRevertProbeInvalid), err, func() error {
 			return b.Editor.RemoveTunnelMapField(tunnelID, "health", field)
 		}))
 		return
@@ -526,7 +582,7 @@ func (b *Bot) handleProbeSetInput(ctx context.Context, dialog *dialog, text stri
 func (b *Bot) removeProbe(ctx context.Context, cb *tg.CallbackQuery, tunnelID, kindKey string) result {
 	field, title, _, ok := probeKind(kindKey)
 	if !ok {
-		return result{toast: "Не понимаю вид пробы"}
+		return result{toast: b.text(msgProbeKindUnknown)}
 	}
 	release, busy := b.claim(newOperation(msgOperationProbeRemove, kindKey, tunnelID))
 	if busy != nil {
@@ -548,10 +604,11 @@ func (b *Bot) removeProbe(ctx context.Context, cb *tg.CallbackQuery, tunnelID, k
 	}
 
 	if err := b.Editor.RemoveTunnelMapField(tunnelID, "health", field); err != nil {
-		return result{toast: err.Error(), alert: true}
+		b.logf("remove %s probe for %s: %v", kindKey, tunnelID, err)
+		return result{toast: b.text(msgFailureProbeWrite), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		return b.show(ctx, cb, revertEdit(b.L, "отменено: удаление пробы сделало конфигурацию невалидной", err, func() error {
+		return b.show(ctx, cb, revertEdit(b.L, b.text(msgRevertProbeRemoveInvalid), err, func() error {
 			if previous == "" {
 				// Nothing to put back: the probe had no value to begin with.
 				return nil
@@ -560,6 +617,6 @@ func (b *Bot) removeProbe(ctx context.Context, cb *tg.CallbackQuery, tunnelID, k
 		}))
 	}
 	outcome := b.show(ctx, cb, b.buildProbes(ctx, tunnelID))
-	outcome.toast = "Удалена " + title + "-проба"
+	outcome.toast = b.text(msgProbeRemoved, title)
 	return outcome
 }

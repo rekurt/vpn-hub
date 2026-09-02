@@ -11,12 +11,7 @@ import (
 func TestLocaleProductionSourcesContainNoUnexpectedCyrillic(t *testing.T) {
 	t.Parallel()
 	allowedUntilLaterTasks := map[string]bool{
-		"handlers_client_acls.go": true,
-		"handlers_deploy.go":      true,
-		"handlers_hub.go":         true,
-		"handlers_subs.go":        true,
-		"handlers_view.go":        true,
-		"notify.go":               true,
+		"notify.go": true,
 	}
 
 	entries, err := os.ReadDir(".")

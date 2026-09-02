@@ -16,6 +16,40 @@ import (
 	"vpn-hub/internal/domain"
 )
 
+const (
+	msgFailureSubscriptionNotFound MessageID = "failure/subscription_not_found"
+	msgReasonSubscriptionNotBacked MessageID = "reason/subscription_not_backed"
+	msgSubscriptionRequired        MessageID = "subscription/required"
+	msgCandidateRequired           MessageID = "subscription/candidate_required"
+	msgCandidateIndexInvalid       MessageID = "subscription/candidate_index_invalid"
+	msgLastGoodConfirm             MessageID = "subscription/last_good_confirm"
+	msgFailureLastGoodRestore      MessageID = "failure/last_good_restore"
+	msgLastGoodRestored            MessageID = "subscription/last_good_restored"
+	msgLastGoodRestoredToast       MessageID = "subscription/last_good_restored_toast"
+	msgCandidatesLoading           MessageID = "subscription/candidates_loading"
+	msgFailureSubscriptionDownload MessageID = "failure/subscription_download"
+	msgFailureSubscriptionParse    MessageID = "failure/subscription_parse"
+	msgFailureSubscriptionEmpty    MessageID = "failure/subscription_empty"
+	msgReasonSubscriptionEmpty     MessageID = "reason/subscription_empty"
+	msgCandidateListStale          MessageID = "subscription/candidate_list_stale"
+	msgCandidateChecking           MessageID = "subscription/candidate_checking"
+	msgFailureCandidateStart       MessageID = "failure/candidate_start"
+	msgFailureCandidatePublic      MessageID = "failure/candidate_public"
+	msgFailureUplink               MessageID = "failure/uplink"
+	msgCandidateRejected           MessageID = "subscription/candidate_rejected"
+	msgButtonToCandidates          MessageID = "button/to_candidates"
+	msgFailureCandidateWrite       MessageID = "failure/candidate_write"
+	msgCandidateCheckingToast      MessageID = "subscription/candidate_checking_toast"
+	msgSubscriptionTunnelRequired  MessageID = "subscription/tunnel_required"
+	msgSubscriptionFetching        MessageID = "subscription/fetching"
+	msgFailureSubscriptionStart    MessageID = "failure/subscription_start"
+	msgSubscriptionStarted         MessageID = "subscription/started"
+	msgAgentInactiveWarning        MessageID = "subscription/agent_inactive_warning"
+	msgSubscriptionProgress        MessageID = "subscription/progress"
+	msgNoCandidatePassed           MessageID = "subscription/no_candidate_passed"
+	msgScheduledRefresh            MessageID = "subscription/scheduled_refresh"
+)
+
 func (b *Bot) subscriptionTunnels(cfg domain.Config) []domain.Tunnel {
 	var tunnels []domain.Tunnel
 	for _, tunnel := range cfg.Tunnels {
@@ -41,7 +75,7 @@ func (b *Bot) subEntryFor(tunnel domain.Tunnel) subEntry {
 func (b *Bot) buildSubs(ctx context.Context) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return renderFailure(b.L, "конфигурация не читается", err)
+		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
 	}
 	var entries []subEntry
 	for _, tunnel := range b.subscriptionTunnels(cfg) {
@@ -53,7 +87,7 @@ func (b *Bot) buildSubs(ctx context.Context) screen {
 func (b *Bot) buildSubCard(ctx context.Context, tunnelID string) screen {
 	tunnel, err := b.subscriptionTunnel(ctx, tunnelID)
 	if err != nil {
-		return renderFailure(b.L, "подписка не найдена", err)
+		return renderFailure(b.L, b.text(msgFailureSubscriptionNotFound), err)
 	}
 	return scr(renderSubCard(b.L, b.subEntryFor(tunnel)))
 }
@@ -68,12 +102,12 @@ func (b *Bot) subscriptionTunnel(ctx context.Context, tunnelID string) (domain.T
 			return tunnel, nil
 		}
 	}
-	return domain.Tunnel{}, fmt.Errorf("туннель %q не подписочный", tunnelID)
+	return domain.Tunnel{}, fmt.Errorf("%s", b.text(msgReasonSubscriptionNotBacked, tunnelID))
 }
 
 func (b *Bot) routeSubs(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {
 	if action != "" && len(args) < 1 {
-		return result{toast: "Не указан туннель"}
+		return result{toast: b.text(msgSubscriptionRequired)}
 	}
 	switch action {
 	case "":
@@ -90,21 +124,21 @@ func (b *Bot) routeSubs(ctx context.Context, cb *tg.CallbackQuery, action string
 		return b.showCandidates(ctx, cb, args[0], page)
 	case "pick":
 		if len(args) < 2 {
-			return result{toast: "Нет кандидата"}
+			return result{toast: b.text(msgCandidateRequired)}
 		}
 		index, err := strconv.Atoi(args[1])
 		if err != nil {
-			return result{toast: "Кривой индекс"}
+			return result{toast: b.text(msgCandidateIndexInvalid)}
 		}
 		return b.pickCandidate(ctx, cb, args[0], index)
 	case "lkg":
 		return b.show(ctx, cb, scr(renderConfirm(b.L,
-			fmt.Sprintf("Вернуть предыдущий upstream для <b>%s</b>? Текущий станет last-known-good.", esc(args[0])),
+			b.text(msgLastGoodConfirm, esc(args[0])),
 			"sub:lkg!:"+args[0], "sub:c:"+args[0])))
 	case "lkg!":
 		return b.restoreLastGood(ctx, cb, args[0])
 	default:
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 }
 
@@ -119,18 +153,18 @@ func (b *Bot) restoreLastGood(ctx context.Context, cb *tg.CallbackQuery, tunnelI
 
 	restored, err := b.Upstreams.Restore(tunnelID)
 	if err != nil {
-		return result{toast: err.Error(), alert: true}
+		b.logf("restore last-known-good for %s: %v", tunnelID, err)
+		return result{toast: b.text(msgFailureLastGoodRestore), alert: true}
 	}
 	warning := b.agentInactiveWarning(ctx)
-	text := fmt.Sprintf("↩️ <b>%s</b>: восстановлен upstream <code>%s:%d</code>.\nАгент подхватит его на ближайшем проходе; прежний сохранён как last-known-good.",
-		esc(tunnelID), esc(restored.Server), restored.Port)
+	text := b.text(msgLastGoodRestored, esc(tunnelID), esc(restored.Server), restored.Port)
 	if warning != "" {
 		text += "\n" + warning
 	}
 	outcome := b.show(ctx, cb, screen{text: text, markup: keyboard(
-		[]tg.InlineKeyboardButton{btn("📡 К подписке", "sub:c:"+tunnelID), btn("📊 Статус", "st")},
+		[]tg.InlineKeyboardButton{btn("📡 "+b.text(msgButtonToSubscription), "sub:c:"+tunnelID), btn("📊 "+b.text(MsgButtonStatus), "st")},
 	)})
-	outcome.toast = "Восстановлен"
+	outcome.toast = b.text(msgLastGoodRestoredToast)
 	return outcome
 }
 
@@ -165,14 +199,15 @@ func (c *candidateCache) get(tunnelID string) []domain.ProxyTunnel {
 func (b *Bot) showCandidates(ctx context.Context, cb *tg.CallbackQuery, tunnelID string, page int) result {
 	tunnel, err := b.subscriptionTunnel(ctx, tunnelID)
 	if err != nil {
-		return result{toast: err.Error(), alert: true}
+		b.logf("load subscription tunnel %s: %v", tunnelID, err)
+		return result{toast: b.text(msgFailureSubscriptionNotFound), alert: true}
 	}
 
 	if candidates := b.candidates.get(tunnelID); page > 0 && len(candidates) > 0 {
 		return b.show(ctx, cb, b.candidatesScreen(tunnelID, candidates, page))
 	}
 
-	b.show(ctx, cb, screen{text: "📋 Загружаю список кандидатов…"})
+	b.show(ctx, cb, screen{text: b.text(msgCandidatesLoading)})
 	b.spawn("candidates-"+tunnelID, func() {
 		edit := func(view screen) {
 			if cb == nil || cb.Message == nil {
@@ -186,16 +221,16 @@ func (b *Bot) showCandidates(ctx context.Context, cb *tg.CallbackQuery, tunnelID
 
 		payload, err := b.Fetch(ctx, tunnel.Source.Value)
 		if err != nil {
-			edit(renderFailure(b.L, "подписка не скачалась", err))
+			edit(renderFailure(b.L, b.text(msgFailureSubscriptionDownload), err))
 			return
 		}
 		candidates, err := b.Parse(payload)
 		if err != nil {
-			edit(renderFailure(b.L, "подписка не разобралась", err))
+			edit(renderFailure(b.L, b.text(msgFailureSubscriptionParse), err))
 			return
 		}
 		if len(candidates) == 0 {
-			edit(renderFailure(b.L, "в подписке пусто", fmt.Errorf("провайдер не отдал ни одного пригодного кандидата")))
+			edit(renderFailure(b.L, b.text(msgFailureSubscriptionEmpty), fmt.Errorf("%s", b.text(msgReasonSubscriptionEmpty))))
 			return
 		}
 		b.candidates.put(tunnelID, candidates)
@@ -218,11 +253,12 @@ func (b *Bot) candidatesScreen(tunnelID string, candidates []domain.ProxyTunnel,
 func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID string, index int) result {
 	tunnel, err := b.subscriptionTunnel(ctx, tunnelID)
 	if err != nil {
-		return result{toast: err.Error(), alert: true}
+		b.logf("load subscription tunnel %s: %v", tunnelID, err)
+		return result{toast: b.text(msgFailureSubscriptionNotFound), alert: true}
 	}
 	candidates := b.candidates.get(tunnelID)
 	if index < 0 || index >= len(candidates) {
-		return result{toast: "Список устарел — откройте кандидатов заново", alert: true}
+		return result{toast: b.text(msgCandidateListStale), alert: true}
 	}
 	candidate := candidates[index]
 
@@ -232,10 +268,11 @@ func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID 
 	}
 
 	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,
-		fmt.Sprintf("🧪 Проверяю <code>%s:%d</code> в изолированном namespace…", esc(candidate.Server), candidate.Port), nil)
+		b.text(msgCandidateChecking, esc(candidate.Server), candidate.Port), nil)
 	if err != nil {
 		release()
-		return result{toast: "Не удалось начать: " + err.Error(), alert: true}
+		b.logf("start candidate check: %v", err)
+		return result{toast: b.text(msgFailureCandidateStart), alert: true}
 	}
 
 	b.spawn("pick-"+tunnelID, func() {
@@ -248,29 +285,28 @@ func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID 
 
 		candidate, err := health.PinPublicEndpoint(ctx, b.Resolver, candidate)
 		if err != nil {
-			edit(renderFailure(b.L, "кандидат указывает не на публичный endpoint", err))
+			edit(renderFailure(b.L, b.text(msgFailureCandidatePublic), err))
 			return
 		}
 		uplink, err := b.Uplink(ctx)
 		if err != nil {
-			edit(renderFailure(b.L, "не определился uplink", err))
+			edit(renderFailure(b.L, b.text(msgFailureUplink), err))
 			return
 		}
 		if err := b.Prove(ctx, candidate, uplink); err != nil {
 			edit(screen{
-				text: fmt.Sprintf("❌ <code>%s:%d</code> не пропустил трафик:\n<code>%s</code>\n\nДействующий upstream не тронут.",
-					esc(candidate.Server), candidate.Port, esc(err.Error())),
-				markup: keyboard([]tg.InlineKeyboardButton{btn("📋 К кандидатам", "sub:cand:"+tunnelID), btn("📡 К подписке", "sub:c:"+tunnelID)}),
+				text:   b.text(msgCandidateRejected, esc(candidate.Server), candidate.Port, esc(err.Error())),
+				markup: keyboard([]tg.InlineKeyboardButton{btn("📋 "+b.text(msgButtonToCandidates), "sub:cand:"+tunnelID), btn("📡 "+b.text(msgButtonToSubscription), "sub:c:"+tunnelID)}),
 			})
 			return
 		}
 		if err := b.Upstreams.Write(ctx, tunnel, candidate); err != nil {
-			edit(renderFailure(b.L, "кандидат прошёл проверку, но не записался", err))
+			edit(renderFailure(b.L, b.text(msgFailureCandidateWrite), err))
 			return
 		}
 		edit(scr(renderRefreshResult(b.L, tunnelID, candidate, nil, b.agentInactiveWarning(ctx))))
 	})
-	return result{toast: "Проверяю"}
+	return result{toast: b.text(msgCandidateCheckingToast)}
 }
 
 // startManualRefresh launches the prove-and-promote flow in the background: the
@@ -279,7 +315,7 @@ func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID 
 func (b *Bot) startManualRefresh(ctx context.Context, cb *tg.CallbackQuery, tunnelID string) result {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 	}
 	var subject domain.Tunnel
 	for _, tunnel := range b.subscriptionTunnels(cfg) {
@@ -288,7 +324,7 @@ func (b *Bot) startManualRefresh(ctx context.Context, cb *tg.CallbackQuery, tunn
 		}
 	}
 	if subject.ID == "" {
-		return result{toast: "Это не подписочный туннель", alert: true}
+		return result{toast: b.text(msgSubscriptionTunnelRequired), alert: true}
 	}
 
 	release, busy := b.claim(newOperation(msgOperationSubRefresh, tunnelID))
@@ -297,10 +333,11 @@ func (b *Bot) startManualRefresh(ctx context.Context, cb *tg.CallbackQuery, tunn
 	}
 
 	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,
-		"📡 <b>"+esc(tunnelID)+"</b>: получаю подписку…", nil)
+		b.text(msgSubscriptionFetching, esc(tunnelID)), nil)
 	if err != nil {
 		release()
-		return result{toast: "Не удалось начать: " + err.Error(), alert: true}
+		b.logf("start subscription refresh: %v", err)
+		return result{toast: b.text(msgFailureSubscriptionStart), alert: true}
 	}
 
 	b.spawn("refresh-"+tunnelID, func() {
@@ -316,7 +353,7 @@ func (b *Bot) startManualRefresh(ctx context.Context, cb *tg.CallbackQuery, tunn
 			b.logf("refresh edit: %v", err)
 		}
 	})
-	return result{toast: "Запустил"}
+	return result{toast: b.text(msgSubscriptionStarted)}
 }
 
 // agentInactiveWarning names the one situation where "the agent picks it up" is a
@@ -326,7 +363,7 @@ func (b *Bot) agentInactiveWarning(ctx context.Context) string {
 	if err != nil || unit.Active == "active" {
 		return ""
 	}
-	return "⚠️ Агент сейчас не работает (" + esc(unit.Active) + ") — изменение не применится, пока он не запустится."
+	return b.text(msgAgentInactiveWarning, esc(unit.Active))
 }
 
 // progressEditor edits the progress message as candidates are tried, coalescing to
@@ -342,8 +379,8 @@ func (b *Bot) progressEditor(ctx context.Context, chatID, messageID int64, tunne
 		lastEdit = now
 
 		var text strings.Builder
-		fmt.Fprintf(&text, "📡 <b>%s</b>: проверяю кандидата %d из %d в изолированном namespace…\n", esc(tunnelID), tried, total)
-		appendRejections(task2LegacyRussianLocalizer, &text, rejected)
+		text.WriteString(b.text(msgSubscriptionProgress, esc(tunnelID), tried, total))
+		appendRejections(b.L, &text, rejected)
 		if err := b.API.EditMessageText(ctx, chatID, messageID, text.String(), nil); err != nil {
 			b.logf("progress edit: %v", err)
 		}
@@ -370,7 +407,7 @@ func (b *Bot) canaryRefresh(ctx context.Context, tunnel domain.Tunnel, progress 
 					if err != nil {
 						// SelectCandidate's aggregate error repeats every rejection, and the
 						// screen renders the rejection list itself -- keep the one-line verdict.
-						err = fmt.Errorf("ни один кандидат не пропустил трафик")
+						err = fmt.Errorf("%s", b.text(msgNoCandidatePassed))
 					}
 					return chosen, reasons, err
 				})
@@ -431,9 +468,9 @@ func (b *Bot) refreshScheduled(ctx context.Context, tunnel domain.Tunnel) {
 	chosen, rejected, err := b.Refresh(ctx, tunnel, nil)
 	if err != nil {
 		view := scr(renderRefreshFailure(b.L, tunnel.ID, rejected, err.Error()))
-		b.emit(event{category: "subscription", text: "🕕 Плановое обновление:\n\n" + view.text, markup: view.markup})
+		b.emit(event{category: "subscription", text: b.text(msgScheduledRefresh) + "\n\n" + view.text, markup: view.markup})
 		return
 	}
 	view := scr(renderRefreshResult(b.L, tunnel.ID, chosen, rejected, b.agentInactiveWarning(ctx)))
-	b.emit(event{category: "subscription", text: "🕕 Плановое обновление:\n\n" + view.text, markup: view.markup})
+	b.emit(event{category: "subscription", text: b.text(msgScheduledRefresh) + "\n\n" + view.text, markup: view.markup})
 }
