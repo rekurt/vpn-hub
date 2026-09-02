@@ -1,6 +1,7 @@
 package application
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -100,6 +101,21 @@ func TestBuildFirewallPlanIsDeterministic(t *testing.T) {
 	}
 	if mustJSON(t, first) != mustJSON(t, second) {
 		t.Fatal("two builds of the same state disagreed")
+	}
+}
+
+func TestDNSDestinationsFollowEgressLayout(t *testing.T) {
+	t.Parallel()
+	plan, err := BuildFirewallPlan(planState(), "eth0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.DNSDestination{
+		{ClientAddresses: []string{"10.80.0.3"}, ResolverAddress: "10.90.0.1"},
+		{ClientAddresses: []string{"10.80.0.2"}, ResolverAddress: "10.80.0.1"},
+	}
+	if !reflect.DeepEqual(plan.DNSDestinations, want) {
+		t.Fatalf("DNSDestinations = %#v, want %#v", plan.DNSDestinations, want)
 	}
 }
 

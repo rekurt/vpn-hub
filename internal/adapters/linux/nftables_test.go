@@ -49,6 +49,9 @@ func directOnlyPlan() domain.FirewallPlan {
 		ManagementPort:   22,
 		ClientCIDR:       "10.80.0.0/24",
 		DNSAddress:       "10.80.0.1",
+		DNSDestinations: []domain.DNSDestination{{
+			ClientAddresses: []string{"10.80.0.2", "10.80.0.3"}, ResolverAddress: "10.80.0.1",
+		}},
 		Egresses: []domain.EgressGroup{{
 			ID:        domain.EgressDirect,
 			Mark:      0x100,
@@ -72,6 +75,11 @@ func TestRenderWithTunnelAndInternalRoutes(t *testing.T) {
 		Interface: "vh-provider-nl",
 		Addresses: []string{"10.80.0.4"},
 	})
+	plan.Egresses[0].Addresses = []string{"10.80.0.2", "10.80.0.3"}
+	plan.DNSDestinations = []domain.DNSDestination{
+		{ClientAddresses: []string{"10.80.0.2", "10.80.0.3"}, ResolverAddress: "10.80.0.1"},
+		{ClientAddresses: []string{"10.80.0.4"}, ResolverAddress: "10.90.0.1"},
+	}
 	plan.Internals = []domain.InternalNetwork{{
 		TunnelID:  "corp-a",
 		Mark:      0x102,
@@ -85,9 +93,48 @@ func TestRenderWithTunnelAndInternalRoutes(t *testing.T) {
 	goldenTest(t, "tunnel-and-internal", plan)
 }
 
+func TestDNSQueriesDNATToEachDevicesResolver(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.Egresses[0].Addresses = []string{"10.80.0.2"}
+	plan.Egresses = append(plan.Egresses, domain.EgressGroup{
+		ID: "wg-nl", Mark: 0x101, Interface: "vh-wg-nl", Addresses: []string{"10.80.0.3"},
+	})
+	plan.DNSDestinations = []domain.DNSDestination{
+		{ClientAddresses: []string{"10.80.0.2"}, ResolverAddress: "10.80.0.1"},
+		{ClientAddresses: []string{"10.80.0.3"}, ResolverAddress: "10.90.0.1"},
+	}
+
+	rendered := RenderRuleset(plan)
+	for _, wanted := range []string{
+		"set dns_clients_direct {",
+		"set dns_clients_wg_nl {",
+		"set dns_clients_admitted {",
+		`iifname "awg0" ip saddr @dns_clients_direct udp dport 53 dnat ip to 10.80.0.1:53`,
+		`iifname "awg0" ip saddr @dns_clients_direct tcp dport 53 dnat ip to 10.80.0.1:53`,
+		`iifname "awg0" ip saddr @dns_clients_wg_nl udp dport 53 dnat ip to 10.90.0.1:53`,
+		`iifname "awg0" ip saddr @dns_clients_wg_nl tcp dport 53 dnat ip to 10.90.0.1:53`,
+		`iifname "awg0" ip saddr @dns_clients_admitted ip daddr 10.90.0.1 udp dport 53 accept`,
+		`iifname "awg0" ip saddr @dns_clients_admitted ip daddr 10.90.0.1 tcp dport 53 accept`,
+	} {
+		if !strings.Contains(rendered, wanted) {
+			t.Errorf("missing %q:\n%s", wanted, rendered)
+		}
+	}
+	chain := rendered[strings.Index(rendered, "chain prerouting_nat {"):]
+	catchAll := `iifname "awg0" ip saddr @dns_clients_admitted udp dport 53 dnat ip to 10.80.0.1:53`
+	if !strings.Contains(chain, catchAll) {
+		t.Fatalf("the admitted-client fallback is missing:\n%s", chain)
+	}
+	if strings.Index(chain, catchAll) < strings.Index(chain, "@dns_clients_wg_nl") {
+		t.Errorf("the catch-all shadows source-aware DNS routing:\n%s", chain)
+	}
+}
+
 func TestRenderIngressFallback(t *testing.T) {
 	t.Parallel()
 	plan := directOnlyPlan()
+	plan.DNSDestinations = nil
 	plan.AltUDP443 = true
 	plan.RealityPort = domain.RealityPort
 	// A tunnel egress as well as direct: the fallback listener opens hub-originated
@@ -409,6 +456,7 @@ func TestRulesetReplacesOnlyItsOwnTable(t *testing.T) {
 func TestRenderSocksEndpoint(t *testing.T) {
 	t.Parallel()
 	plan := directOnlyPlan()
+	plan.DNSDestinations = nil
 	plan.Socks = []domain.SocksEndpoint{
 		{TunnelID: "corp", Address: "10.90.0.1", Interface: "vh-corp", Port: 11080},
 	}

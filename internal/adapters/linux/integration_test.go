@@ -229,6 +229,230 @@ func TestTrafficReachesTheInternetThroughTheHub(t *testing.T) {
 	t.Log("client egress: " + newBed(t).waitForTraffic(t))
 }
 
+func TestDNSFollowsEachDevicesEgress(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("DNS integration configures real namespaces and needs root")
+	}
+	for _, binary := range []string{"ip", "nft", "dnsmasq", "dig", "systemctl", "systemd-run"} {
+		if _, err := exec.LookPath(binary); err != nil {
+			t.Skipf("%s is not installed", binary)
+		}
+	}
+
+	const (
+		clientNamespace = "vhdnsclient"
+		clientHostVeth  = "vdnsh"
+		clientPeerVeth  = "vdnsc"
+		clientGateway   = "10.180.0.1"
+		clientA         = "10.180.0.2"
+		clientB         = "10.180.0.3"
+		publicName      = "same.public.test"
+		privateName     = "app.private.test"
+		privateMarker   = "10.183.0.80"
+	)
+	type fakeEgress struct {
+		id               string
+		namespace        string
+		hostVeth         string
+		peerVeth         string
+		hostAddress      string
+		namespaceAddress string
+		authorityAddress string
+		clientAddress    string
+		markerAddress    string
+		markerText       string
+	}
+	egresses := []fakeEgress{
+		{
+			id: "egress-a", namespace: "vhdnsa", hostVeth: "vdnsa", peerVeth: "uplink0",
+			hostAddress: "10.181.0.1", namespaceAddress: "10.181.0.2",
+			authorityAddress: "10.182.0.53", clientAddress: clientA,
+			markerAddress: "192.0.2.10", markerText: "egress-a",
+		},
+		{
+			id: "egress-b", namespace: "vhdnsb", hostVeth: "vdnsb", peerVeth: "uplink0",
+			hostAddress: "10.181.0.5", namespaceAddress: "10.181.0.6",
+			authorityAddress: "10.182.1.53", clientAddress: clientB,
+			markerAddress: "198.51.100.20", markerText: "egress-b",
+		},
+	}
+	private := fakeEgress{
+		id: "private", namespace: "vhdnsp", hostVeth: "vdnsp", peerVeth: "uplink0",
+		hostAddress: "10.181.0.9", namespaceAddress: "10.181.0.10",
+		authorityAddress: "10.182.2.53",
+	}
+	units := []string{
+		"vpn-hub-dns", "vpn-hub-resolver-public",
+		"vpn-hub-resolver-client-egress-a", "vpn-hub-resolver-client-egress-b",
+		"vpn-hub-resolver-public-egress-a", "vpn-hub-resolver-public-egress-b",
+		"vpn-hub-resolver-net-private",
+	}
+	cleanup := func() {
+		for _, unit := range units {
+			try("systemctl stop %s.service", unit)
+		}
+		try("nft delete table inet vpn_hub")
+		try("ip netns del %s", clientNamespace)
+		try("ip link del %s", clientHostVeth)
+		for _, egress := range append(append([]fakeEgress(nil), egresses...), private) {
+			try("ip netns del %s", egress.namespace)
+			try("ip link del %s", egress.hostVeth)
+		}
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	sh(t, "ip netns add %s", clientNamespace)
+	sh(t, "ip link add %s type veth peer name %s", clientHostVeth, clientPeerVeth)
+	sh(t, "ip link set %s netns %s", clientPeerVeth, clientNamespace)
+	sh(t, "ip addr add %s/24 dev %s && ip link set %s up", clientGateway, clientHostVeth, clientHostVeth)
+	sh(t, "ip -n %s addr add %s/24 dev %s", clientNamespace, clientA, clientPeerVeth)
+	sh(t, "ip -n %s addr add %s/24 dev %s", clientNamespace, clientB, clientPeerVeth)
+	sh(t, "ip -n %s link set %s up && ip -n %s link set lo up", clientNamespace, clientPeerVeth, clientNamespace)
+	sh(t, "ip -n %s route add default via %s", clientNamespace, clientGateway)
+
+	buildNamespace := func(item fakeEgress) {
+		t.Helper()
+		sh(t, "ip netns add %s", item.namespace)
+		sh(t, "ip link add %s type veth peer name %s", item.hostVeth, item.peerVeth)
+		sh(t, "ip link set %s netns %s", item.peerVeth, item.namespace)
+		sh(t, "ip addr add %s/30 dev %s && ip link set %s up", item.hostAddress, item.hostVeth, item.hostVeth)
+		sh(t, "ip -n %s addr add %s/30 dev %s", item.namespace, item.namespaceAddress, item.peerVeth)
+		sh(t, "ip -n %s link set %s up && ip -n %s link set lo up", item.namespace, item.peerVeth, item.namespace)
+		sh(t, "ip -n %s addr add %s/32 dev lo", item.namespace, item.authorityAddress)
+	}
+	for _, egress := range egresses {
+		buildNamespace(egress)
+	}
+	buildNamespace(private)
+
+	startAuthority := func(namespace, address string, records ...string) {
+		t.Helper()
+		args := []string{
+			"netns", "exec", namespace, "dnsmasq", "--keep-in-foreground", "--no-resolv",
+			"--no-hosts", "--bind-interfaces", "--pid-file=/run/" + namespace + "-authority.pid",
+			"--listen-address=" + address,
+		}
+		args = append(args, records...)
+		command := exec.Command("ip", args...)
+		var output bytes.Buffer
+		command.Stdout = &output
+		command.Stderr = &output
+		if err := command.Start(); err != nil {
+			t.Fatalf("start fake DNS authority in %s: %v", namespace, err)
+		}
+		t.Cleanup(func() {
+			_ = command.Process.Kill()
+			_, _ = command.Process.Wait()
+		})
+		for range 30 {
+			response, err := exec.Command("ip", "netns", "exec", namespace, "dig", "+short", "+time=1", "+tries=1", "@"+address, recordsName(records)).Output()
+			if err == nil && strings.TrimSpace(string(response)) != "" {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Fatalf("fake DNS authority in %s did not start:\n%s", namespace, output.String())
+	}
+	for _, egress := range egresses {
+		startAuthority(egress.namespace, egress.authorityAddress,
+			"--address=/"+publicName+"/"+egress.markerAddress,
+			"--txt-record="+publicName+","+egress.markerText)
+	}
+	startAuthority(private.namespace, private.authorityAddress,
+		"--address=/"+privateName+"/"+privateMarker,
+		"--txt-record="+privateName+",private")
+
+	firewallPlan := domain.FirewallPlan{
+		IngressInterface: clientHostVeth,
+		UplinkInterface:  "lo",
+		ListenPort:       listenPort,
+		ManagementPort:   22,
+		ClientCIDR:       "10.180.0.0/24",
+		DNSAddress:       clientGateway,
+		Egresses: []domain.EgressGroup{
+			{ID: egresses[0].id, Mark: 0x101, Interface: egresses[0].hostVeth, Addresses: []string{clientA}},
+			{ID: egresses[1].id, Mark: 0x102, Interface: egresses[1].hostVeth, Addresses: []string{clientB}},
+		},
+		DNSDestinations: []domain.DNSDestination{
+			{ClientAddresses: []string{clientA}, ResolverAddress: egresses[0].hostAddress},
+			{ClientAddresses: []string{clientB}, ResolverAddress: egresses[1].hostAddress},
+		},
+		Internals: []domain.InternalNetwork{{
+			TunnelID: private.id, Mark: 0x103, Interface: private.hostVeth,
+			Clients: []string{clientA, clientB},
+		}},
+	}
+	if _, err := (linux.NFTables{RuntimeDir: t.TempDir()}).Apply(context.Background(), firewallPlan); err != nil {
+		t.Fatalf("apply DNS firewall: %v", err)
+	}
+
+	dnsPlan := domain.DNSPlan{
+		ClientCIDR: "10.180.0.0/24",
+		Zones: []domain.DNSZoneRoute{{
+			Zone: privateName, Resolvers: []string{private.authorityAddress},
+			ForwardAddress: private.namespaceAddress, Set: "internal_private",
+		}},
+		PrivateResolvers: []domain.DNSPrivateResolver{{
+			TunnelID: private.id, Namespace: private.namespace, Address: private.namespaceAddress,
+			Resolvers: []string{private.authorityAddress},
+		}},
+	}
+	for _, egress := range egresses {
+		dnsPlan.EgressResolvers = append(dnsPlan.EgressResolvers, domain.DNSEgressResolver{
+			EgressID: egress.id, ClientAddresses: []string{egress.clientAddress},
+			HubAddress: egress.hostAddress, Namespace: egress.namespace,
+			NamespaceAddress: egress.namespaceAddress, PublicResolvers: []string{egress.authorityAddress},
+		})
+	}
+	if err := (linux.Dnsmasq{ConfigDir: t.TempDir()}).Apply(context.Background(), dnsPlan, false); err != nil {
+		t.Fatalf("apply DNS resolvers: %v", err)
+	}
+
+	query := func(source, name, queryType string, tcp bool) string {
+		t.Helper()
+		args := []string{"netns", "exec", clientNamespace, "dig", "+short", "+time=1", "+tries=1"}
+		if tcp {
+			args = append(args, "+tcp")
+		}
+		args = append(args, "-b", source, "@203.0.113.53", name, queryType)
+		output, _ := exec.Command("ip", args...).Output()
+		return strings.TrimSpace(string(output))
+	}
+	for _, egress := range egresses {
+		for _, tcp := range []bool{false, true} {
+			var address string
+			for range 30 {
+				address = query(egress.clientAddress, publicName, "A", tcp)
+				if address == egress.markerAddress {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if address != egress.markerAddress {
+				t.Fatalf("%s public DNS over TCP=%t returned %q, want %s", egress.id, tcp, address, egress.markerAddress)
+			}
+		}
+		if text := query(egress.clientAddress, publicName, "TXT", false); !strings.Contains(text, egress.markerText) {
+			t.Errorf("%s TXT marker = %q, want %q", egress.id, text, egress.markerText)
+		}
+		if address := query(egress.clientAddress, privateName, "A", false); address != privateMarker {
+			t.Errorf("%s private DNS returned %q, want %s", egress.id, address, privateMarker)
+		}
+	}
+}
+
+func recordsName(records []string) string {
+	for _, record := range records {
+		if value, found := strings.CutPrefix(record, "--address=/"); found {
+			if index := strings.IndexByte(value, '/'); index >= 0 {
+				return value[:index]
+			}
+		}
+	}
+	return "."
+}
+
 // The kill switch is the forward chain's drop policy: a client that is not in an
 // egress set must be dropped, not fall through to the uplink.
 func TestKillSwitchBlocksAnUnlistedClient(t *testing.T) {

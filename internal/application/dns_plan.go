@@ -7,9 +7,7 @@ import (
 	"vpn-hub/internal/domain"
 )
 
-// DefaultPublicResolvers are used when the configuration names none. They are only
-// ever queried from inside the default egress namespace, so the provider sees them
-// rather than the hub.
+// DefaultPublicResolvers are queried from the device's selected egress.
 var DefaultPublicResolvers = []string{"1.1.1.1", "9.9.9.9"}
 
 // BuildDNSPlan derives the resolver policy from a revision.
@@ -22,11 +20,7 @@ func BuildDNSPlan(state domain.DesiredState, plan domain.FirewallPlan, specs []d
 		return domain.DNSPlan{}, fmt.Errorf("hub dns_address is required to serve DNS")
 	}
 
-	result := domain.DNSPlan{
-		ListenAddress:   state.Hub.DNSAddress,
-		ClientCIDR:      state.Hub.ClientCIDR,
-		PublicResolvers: DefaultPublicResolvers,
-	}
+	result := domain.DNSPlan{ClientCIDR: state.Hub.ClientCIDR}
 
 	for _, network := range plan.Internals {
 		if len(network.Zones) == 0 {
@@ -60,23 +54,41 @@ func BuildDNSPlan(state domain.DesiredState, plan domain.FirewallPlan, specs []d
 	sort.Slice(result.Zones, func(i, j int) bool { return result.Zones[i].Zone < result.Zones[j].Zone })
 	sort.Slice(result.PrivateResolvers, func(i, j int) bool { return result.PrivateResolvers[i].TunnelID < result.PrivateResolvers[j].TunnelID })
 
-	// Public queries follow whichever tunnel carries the internet for most devices.
-	// With everyone on `direct` there is no namespace to hide in and the hub resolves
-	// for itself, which is the honest outcome rather than a pretence of privacy.
-	if egress := busiestEgress(state.Devices); egress != domain.EgressDirect && egress != "" {
-		for _, spec := range specs {
-			if spec.TunnelID == egress {
-				result.UpstreamNamespace = spec.Namespace
-				result.UpstreamAddress = hostOf(spec.PeerAddress)
-				break
-			}
+	specByID := make(map[string]domain.EgressSpec, len(specs))
+	for _, spec := range specs {
+		if _, exists := specByID[spec.TunnelID]; !exists {
+			specByID[spec.TunnelID] = spec
 		}
 	}
+	for _, group := range plan.Egresses {
+		if len(group.Addresses) == 0 {
+			continue
+		}
+		resolver := domain.DNSEgressResolver{
+			EgressID:        group.ID,
+			ClientAddresses: append([]string(nil), group.Addresses...),
+			PublicResolvers: append([]string(nil), DefaultPublicResolvers...),
+		}
+		sort.Strings(resolver.ClientAddresses)
+		if group.ID == domain.EgressDirect {
+			resolver.HubAddress = state.Hub.DNSAddress
+		} else {
+			spec, known := specByID[group.ID]
+			if !known {
+				return domain.DNSPlan{}, fmt.Errorf("egress %q has assigned clients but no matching spec", group.ID)
+			}
+			resolver.HubAddress = hostOf(spec.HostAddress)
+			resolver.Namespace = spec.Namespace
+			resolver.NamespaceAddress = hostOf(spec.PeerAddress)
+		}
+		result.EgressResolvers = append(result.EgressResolvers, resolver)
+	}
+	sort.Slice(result.EgressResolvers, func(i, j int) bool {
+		return result.EgressResolvers[i].EgressID < result.EgressResolvers[j].EgressID
+	})
 	return result, nil
 }
 
-// busiestEgress picks the egress most devices use, so the resolver sits where most
-// traffic already goes. Ties break by name to stay reproducible.
 func privateResolverPlacement(tunnelID string, specs []domain.EgressSpec) (address, namespace string) {
 	for _, spec := range specs {
 		if spec.TunnelID == tunnelID {
@@ -84,27 +96,6 @@ func privateResolverPlacement(tunnelID string, specs []domain.EgressSpec) (addre
 		}
 	}
 	return "", ""
-}
-
-func busiestEgress(devices []domain.DeployedDevice) string {
-	counts := map[string]int{}
-	for _, device := range devices {
-		counts[device.Egress]++
-	}
-
-	names := make([]string, 0, len(counts))
-	for name := range counts {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	best, bestCount := "", 0
-	for _, name := range names {
-		if counts[name] > bestCount {
-			best, bestCount = name, counts[name]
-		}
-	}
-	return best
 }
 
 func safeIdentifier(value string) string {

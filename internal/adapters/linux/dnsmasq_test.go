@@ -13,14 +13,21 @@ import (
 
 func dnsPlan() domain.DNSPlan {
 	return domain.DNSPlan{
-		ListenAddress: "10.80.0.1",
-		ClientCIDR:    "10.80.0.0/24",
+		ClientCIDR: "10.80.0.0/24",
 		Zones: []domain.DNSZoneRoute{{
 			Zone: "corp.internal", Resolvers: []string{"10.20.0.53"}, Set: "internal_corp_a",
 		}},
-		UpstreamNamespace: "vpn-hub-provider-nl",
-		UpstreamAddress:   "10.90.0.2",
-		PublicResolvers:   []string{"1.1.1.1"},
+		EgressResolvers: []domain.DNSEgressResolver{
+			{
+				EgressID: domain.EgressDirect, ClientAddresses: []string{"10.80.0.2"},
+				HubAddress: "10.80.0.1", PublicResolvers: []string{"1.1.1.1"},
+			},
+			{
+				EgressID: "provider-nl", ClientAddresses: []string{"10.80.0.3"},
+				HubAddress: "10.90.0.1", Namespace: "vpn-hub-provider-nl", NamespaceAddress: "10.90.0.2",
+				PublicResolvers: []string{"1.1.1.1"},
+			},
+		},
 	}
 }
 
@@ -28,13 +35,16 @@ func dnsPlan() domain.DNSPlan {
 // resolves and then routes out of the internet path.
 func TestPrivateZonesAreSentToTheirResolverAndSet(t *testing.T) {
 	t.Parallel()
-	rendered := RenderHubResolver(dnsPlan())
-	for _, wanted := range []string{
-		"server=/corp.internal/10.20.0.53",
-		"nftset=/corp.internal/inet#vpn_hub#internal_corp_a",
-	} {
-		if !strings.Contains(rendered, wanted) {
-			t.Errorf("missing %q:\n%s", wanted, rendered)
+	plan := dnsPlan()
+	for _, resolver := range plan.EgressResolvers {
+		rendered := RenderClientResolver(plan, resolver)
+		for _, wanted := range []string{
+			"server=/corp.internal/10.20.0.53",
+			"nftset=/corp.internal/inet#vpn_hub#internal_corp_a",
+		} {
+			if !strings.Contains(rendered, wanted) {
+				t.Errorf("%s missing %q:\n%s", resolver.EgressID, wanted, rendered)
+			}
 		}
 	}
 }
@@ -43,7 +53,8 @@ func TestPrivateZonesAreSentToTheirResolverAndSet(t *testing.T) {
 // of the hub, or the provider carries the traffic while DNS still names the hub.
 func TestPublicQueriesGoToTheNamespaceResolver(t *testing.T) {
 	t.Parallel()
-	rendered := RenderHubResolver(dnsPlan())
+	plan := dnsPlan()
+	rendered := RenderClientResolver(plan, plan.EgressResolvers[1])
 	if !strings.Contains(rendered, "server=10.90.0.2") {
 		t.Errorf("expected forwarding to the namespace resolver:\n%s", rendered)
 	}
@@ -55,10 +66,7 @@ func TestPublicQueriesGoToTheNamespaceResolver(t *testing.T) {
 func TestWithoutANamespaceTheHubQueriesPublicServers(t *testing.T) {
 	t.Parallel()
 	plan := dnsPlan()
-	plan.UpstreamNamespace = ""
-	plan.UpstreamAddress = ""
-
-	rendered := RenderHubResolver(plan)
+	rendered := RenderClientResolver(plan, plan.EgressResolvers[0])
 	if !strings.Contains(rendered, "server=1.1.1.1") {
 		t.Errorf("expected direct public resolvers:\n%s", rendered)
 	}
@@ -66,7 +74,8 @@ func TestWithoutANamespaceTheHubQueriesPublicServers(t *testing.T) {
 
 func TestUpstreamResolverOnlyForwards(t *testing.T) {
 	t.Parallel()
-	rendered := RenderUpstreamResolver(dnsPlan())
+	plan := dnsPlan()
+	rendered := RenderPublicResolver(plan.EgressResolvers[1])
 	if !strings.Contains(rendered, "listen-address=10.90.0.2") {
 		t.Errorf("expected it to listen inside the namespace:\n%s", rendered)
 	}
@@ -78,7 +87,8 @@ func TestUpstreamResolverOnlyForwards(t *testing.T) {
 // The resolver answers clients, not the internet.
 func TestResolverIsNotOpenToTheWorld(t *testing.T) {
 	t.Parallel()
-	rendered := RenderHubResolver(dnsPlan())
+	plan := dnsPlan()
+	rendered := RenderClientResolver(plan, plan.EgressResolvers[0])
 	for _, wanted := range []string{"bind-interfaces", "local-service", "listen-address=10.80.0.1"} {
 		if !strings.Contains(rendered, wanted) {
 			t.Errorf("missing %q:\n%s", wanted, rendered)
@@ -100,11 +110,13 @@ func privateDNSPlan() domain.DNSPlan {
 	return plan
 }
 
-// The stale sweep enumerates two spaces: the one this build generates into, and the
-// one the older build did.
 const (
-	listCurrentUnits = "systemctl list-units --all --plain --no-legend " +
-		resolverUnitPrefix + "*.service"
+	listPrivateUnits = "systemctl list-units --all --plain --no-legend " +
+		privateResolverPrefix + "*.service"
+	listPublicUnits = "systemctl list-units --all --plain --no-legend " +
+		publicResolverPrefix + "*.service"
+	listClientUnits = "systemctl list-units --all --plain --no-legend " +
+		clientResolverPrefix + "*.service"
 	listLegacyUnits = "systemctl list-units --all --plain --no-legend " +
 		legacyResolverPrefix + "*.service"
 )
@@ -124,6 +136,48 @@ func TestPrivateResolverRunsInsideItsOwnNamespace(t *testing.T) {
 	}
 }
 
+func TestEachEgressGetsItsOwnResolverLifecycle(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	host := &fakeHost{}
+	plan := dnsPlan()
+	dns := Dnsmasq{Run: host.run, ConfigDir: directory}
+
+	if err := dns.Apply(context.Background(), plan, false); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	for _, resolver := range plan.EgressResolvers {
+		config := filepath.Join(directory, clientResolverConfig(resolver.EgressID))
+		content, err := os.ReadFile(config)
+		if err != nil {
+			t.Fatalf("read %s: %v", config, err)
+		}
+		if !strings.Contains(string(content), "listen-address="+resolver.HubAddress) {
+			t.Errorf("%s does not bind its own address:\n%s", resolver.EgressID, content)
+		}
+		if !host.ran("--unit=" + clientResolverUnit(resolver.EgressID) + " ") {
+			t.Errorf("%s main resolver was not started; commands: %v", resolver.EgressID, host.commands)
+		}
+	}
+	publicUnit := publicResolverUnit("provider-nl")
+	if !host.ran("--unit=" + publicUnit + " --property=Restart=on-failure ip netns exec vpn-hub-provider-nl") {
+		t.Fatalf("the tunneled egress has no namespace forwarder; commands: %v", host.commands)
+	}
+
+	public, firstClient := -1, -1
+	for index, command := range host.commands {
+		if public < 0 && strings.Contains(command, "--unit="+publicUnit+" ") {
+			public = index
+		}
+		if firstClient < 0 && strings.Contains(command, "--unit="+clientResolverPrefix) {
+			firstClient = index
+		}
+	}
+	if public < 0 || firstClient < 0 || public > firstClient {
+		t.Errorf("namespace forwarders must start before main resolvers; commands: %v", host.commands)
+	}
+}
+
 // Only "direct" is a reserved tunnel id, so a network may legitimately be called
 // "upstream". Named without the "private-" segment its forwarder would claim the unit
 // the public resolver already uses, and the two would evict each other from it on
@@ -140,8 +194,8 @@ func TestAPrivateResolverCannotEvictTheUpstreamOne(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	// One pass starts three resolvers -- this network's forwarder, the public one and
-	// the hub's -- and each needs a transient unit of its own. Asserting that both
+	// One pass starts four resolvers -- this network's forwarder, one public and two
+	// client resolvers -- and each needs a transient unit of its own. Asserting that both
 	// commands ran would prove nothing: under a shared name both do run, and the
 	// second simply replaces the first. A name claimed twice is the defect itself.
 	started := map[string]string{}
@@ -161,8 +215,8 @@ func TestAPrivateResolverCannotEvictTheUpstreamOne(t *testing.T) {
 			started[unit] = command
 		}
 	}
-	if len(started) != 3 {
-		t.Errorf("expected this network's, the public and the hub's resolvers to start, got %d: %v",
+	if len(started) != 4 {
+		t.Errorf("expected this network's, public and client resolvers to start, got %d: %v",
 			len(started), host.commands)
 	}
 }
@@ -176,7 +230,7 @@ func TestAWithdrawnNetworksResolverIsReaped(t *testing.T) {
 	// The withdrawn unit is printed with the leading bullet systemd gives a failed
 	// one, which shifts every column right by one.
 	host := &fakeHost{replies: map[string]string{
-		listCurrentUnits: "  " + privateResolverUnit("corp-a") + ".service loaded active running dnsmasq\n" +
+		listPrivateUnits: "  " + privateResolverUnit("corp-a") + ".service loaded active running dnsmasq\n" +
 			"\u25cf " + privateResolverUnit("gone") + ".service loaded failed failed dnsmasq\n",
 	}}
 	stale := filepath.Join(directory, privateResolverConfig("gone"))
@@ -204,6 +258,41 @@ func TestAWithdrawnNetworksResolverIsReaped(t *testing.T) {
 	}
 }
 
+func TestWithdrawnClientAndPublicResolversAreReaped(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	clientUnit := clientResolverUnit("gone")
+	publicUnit := publicResolverUnit("gone")
+	host := &fakeHost{replies: map[string]string{
+		listClientUnits: "  " + clientUnit + ".service loaded active running dnsmasq\n",
+		listPublicUnits: "  " + publicUnit + ".service loaded active running dnsmasq\n",
+	}}
+	for name := range map[string]struct{}{
+		clientResolverConfig("gone"): {},
+		publicResolverConfig("gone"): {},
+	} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("stale\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dns := Dnsmasq{Run: host.run, ConfigDir: directory}
+	if err := dns.Apply(context.Background(), dnsPlan(), false); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	for unit, config := range map[string]string{
+		clientUnit: clientResolverConfig("gone"),
+		publicUnit: publicResolverConfig("gone"),
+	} {
+		if !host.ran("systemctl stop " + unit + ".service") {
+			t.Errorf("%s was not stopped; commands: %v", unit, host.commands)
+		}
+		if _, err := os.Stat(filepath.Join(directory, config)); !os.IsNotExist(err) {
+			t.Errorf("%s outlived its unit: %v", config, err)
+		}
+	}
+}
+
 // Enumerating is housekeeping. Returning on its failure would leave every client
 // without DNS because one bookkeeping command failed -- but swallowing it would let a
 // leaked resolver go unreported, since each later pass would conclude afresh that
@@ -211,7 +300,7 @@ func TestAWithdrawnNetworksResolverIsReaped(t *testing.T) {
 func TestFailingToEnumerateIsReportedWithoutCostingClientsDNS(t *testing.T) {
 	t.Parallel()
 	host := &fakeHost{failures: map[string]error{
-		listCurrentUnits: errors.New("Failed to connect to bus"),
+		listClientUnits: errors.New("Failed to connect to bus"),
 	}}
 	dns := Dnsmasq{Run: host.run, ConfigDir: t.TempDir()}
 
@@ -219,7 +308,7 @@ func TestFailingToEnumerateIsReportedWithoutCostingClientsDNS(t *testing.T) {
 	if err == nil {
 		t.Fatal("the failure to enumerate was swallowed, so a leaked resolver would never be reported")
 	}
-	if !host.ran("--unit=" + hubResolverUnit + " --property=") {
+	if !host.ran("--unit=" + clientResolverUnit(domain.EgressDirect) + " --property=") {
 		t.Errorf("clients lost their resolver over housekeeping; commands: %v", host.commands)
 	}
 }
@@ -268,8 +357,9 @@ func TestAForwarderFromThePreviousBuildIsReapedButKeepsItsFile(t *testing.T) {
 // same pass that started it, in the arrangement where it is wanted.
 func TestTheSweepLeavesThePublicForwarderAlone(t *testing.T) {
 	t.Parallel()
+	unit := publicResolverUnit("provider-nl")
 	host := &fakeHost{replies: map[string]string{
-		listCurrentUnits: "  " + upstreamResolverUnit + ".service loaded active running dnsmasq\n",
+		listPublicUnits: "  " + unit + ".service loaded active running dnsmasq\n",
 	}}
 	dns := Dnsmasq{Run: host.run, ConfigDir: t.TempDir()}
 
@@ -279,11 +369,11 @@ func TestTheSweepLeavesThePublicForwarderAlone(t *testing.T) {
 
 	// It is replaced, not reaped: the stop belongs to the restart that follows it.
 	for index, command := range host.commands {
-		if command != "systemctl stop "+upstreamResolverUnit+".service" {
+		if command != "systemctl stop "+unit+".service" {
 			continue
 		}
 		if index+1 >= len(host.commands) ||
-			!strings.Contains(host.commands[index+1], "--unit="+upstreamResolverUnit+" ") {
+			!strings.Contains(host.commands[index+1], "--unit="+unit+" ") {
 			t.Fatalf("the public forwarder was stopped and not restarted; commands: %v", host.commands)
 		}
 	}
@@ -312,10 +402,12 @@ func TestNoNameFromTheOlderBuildIsExempted(t *testing.T) {
 			// Every configuration already on disk exactly as it renders, so nothing
 			// is "changed" and Apply may skip a unit it believes is running.
 			directory := t.TempDir()
+			provider := plan.EgressResolvers[1]
 			for name, content := range map[string]string{
-				privateResolverConfig(tunnelID): RenderPrivateResolver(plan.PrivateResolvers[0]),
-				"dnsmasq-upstream.conf":         RenderUpstreamResolver(plan),
-				"dnsmasq-hub.conf":              RenderHubResolver(plan),
+				privateResolverConfig(tunnelID):           RenderPrivateResolver(plan.PrivateResolvers[0]),
+				publicResolverConfig(provider.EgressID):   RenderPublicResolver(provider),
+				clientResolverConfig(provider.EgressID):   RenderClientResolver(plan, provider),
+				clientResolverConfig(domain.EgressDirect): RenderClientResolver(plan, plan.EgressResolvers[0]),
 			} {
 				if err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0o600); err != nil {
 					t.Fatalf("seed %s: %v", name, err)
@@ -332,8 +424,8 @@ func TestNoNameFromTheOlderBuildIsExempted(t *testing.T) {
 				// through the names rather than assumed: the collided unit and the
 				// hub's own resolver are up, and nothing this build generates is.
 				failures: map[string]error{
-					"systemctl is-active --quiet " + upstreamResolverUnit + ".service":          errors.New("inactive"),
-					"systemctl is-active --quiet " + privateResolverUnit(tunnelID) + ".service": errors.New("inactive"),
+					"systemctl is-active --quiet " + publicResolverUnit(provider.EgressID) + ".service": errors.New("inactive"),
+					"systemctl is-active --quiet " + privateResolverUnit(tunnelID) + ".service":         errors.New("inactive"),
 				},
 			}
 
@@ -349,7 +441,7 @@ func TestNoNameFromTheOlderBuildIsExempted(t *testing.T) {
 					reaped = index
 				case private < 0 && strings.Contains(command, "--unit="+privateResolverUnit(tunnelID)+" "):
 					private = index
-				case public < 0 && strings.Contains(command, "--unit="+upstreamResolverUnit+" "):
+				case public < 0 && strings.Contains(command, "--unit="+publicResolverUnit(provider.EgressID)+" "):
 					public = index
 				}
 			}
@@ -368,7 +460,7 @@ func TestNoNameFromTheOlderBuildIsExempted(t *testing.T) {
 					reaped, private)
 			}
 			// The public forwarder must reach the public namespace, not this one.
-			if !host.ran("--unit=" + upstreamResolverUnit + " --property=Restart=on-failure ip netns exec vpn-hub-provider-nl") {
+			if !host.ran("--unit=" + publicResolverUnit(provider.EgressID) + " --property=Restart=on-failure ip netns exec vpn-hub-provider-nl") {
 				t.Errorf("public queries were not sent to the public namespace; commands: %v", host.commands)
 			}
 		})
@@ -386,16 +478,20 @@ func TestNoNameThisBuildGeneratesCanBeMistakenForAnother(t *testing.T) {
 	// each named a public forwarder at some point, and the last two probe the
 	// segments that separate the private units.
 	for _, tunnelID := range []string{"corp-a", "a", "upstream", "public", "private-abc", "net-abc"} {
-		unit := privateResolverUnit(tunnelID)
-		if strings.HasPrefix(unit, legacyResolverPrefix) {
-			t.Errorf("the forwarder for %q is called %q, inside the space the older build generated into",
-				tunnelID, unit)
+		units := []string{
+			privateResolverUnit(tunnelID),
+			publicResolverUnit(tunnelID),
+			clientResolverUnit(tunnelID),
 		}
-		if unit == upstreamResolverUnit {
-			t.Errorf("the forwarder for %q claims the public unit %q", tunnelID, unit)
+		seen := map[string]bool{}
+		for _, unit := range units {
+			if strings.HasPrefix(unit, legacyResolverPrefix) {
+				t.Errorf("the resolver for %q is called %q, inside the legacy space", tunnelID, unit)
+			}
+			if seen[unit] {
+				t.Errorf("two resolvers for %q claim %q", tunnelID, unit)
+			}
+			seen[unit] = true
 		}
-	}
-	if strings.HasPrefix(upstreamResolverUnit, legacyResolverPrefix) {
-		t.Errorf("the public unit %q is inside the space the older build generated into", upstreamResolverUnit)
 	}
 }
