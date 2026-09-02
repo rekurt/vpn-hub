@@ -37,6 +37,14 @@ publication-check:
 	sh scripts/check-publication.sh
 	sh scripts/check-publication_test.sh
 
+## site: install, verify content, and build the static documentation site
+site:
+	cd site && npm ci && npm run verify:content && npm run build
+
+## site-check: install and run all static documentation checks
+site-check:
+	cd site && npm ci && npm run test:verify-content && npm run verify:content && npm run check && npm run build
+
 ## bot-docs: regenerate tested Telegram UI examples for the website
 bot-docs:
 	go test ./internal/delivery/bot -run TestDocumentationExamples -update-docs
@@ -130,4 +138,4 @@ logs:
 logs-bot:
 	$(SSH) 'journalctl -u vpn-hub-bot -f'
 
-.PHONY: help fmt lint test test-integration test-integration-box ci golangci terraform-check build build-linux $(STAND_TARGETS) deploy-lab ssh logs logs-bot bot-docs bot-docs-check
+.PHONY: help fmt lint test test-integration test-integration-box ci golangci terraform-check build build-linux $(STAND_TARGETS) deploy-lab ssh logs logs-bot bot-docs bot-docs-check site site-check
