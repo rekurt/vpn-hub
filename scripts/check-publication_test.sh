@@ -12,6 +12,7 @@ new_repo() {
 	repo="$tmp_dir/$name"
 	mkdir -p "$repo/scripts"
 	cp "$script_dir/check-publication.sh" "$repo/scripts/check-publication.sh" || exit 1
+	cp "$script_dir/validate-package-lock.mjs" "$repo/scripts/validate-package-lock.mjs" || exit 1
 	cp "$script_dir/publication-allowlist.txt" "$repo/scripts/publication-allowlist.txt" || exit 1
 	git -C "$repo" init -q
 	git -C "$repo" config user.name PublicationTest
@@ -61,6 +62,36 @@ expect_fail_path() {
 	fi
 }
 
+expect_package_lock_pass() {
+	name=$1
+	shift
+	new_repo "$name"
+	mkdir -p "$repo/site"
+	"$@" >"$repo/site/package-lock.json"
+	commit_fixture site/package-lock.json
+	if ! (cd "$repo" && sh scripts/check-publication.sh); then
+		echo "$name: expected package-lock check to pass" >&2
+		failed=1
+	fi
+	if git -C "$repo" check-attr binary -- site/package-lock.json | grep -q ': set'; then
+		echo "$name: package-lock must not be marked binary" >&2
+		failed=1
+	fi
+}
+
+expect_package_lock_fail() {
+	name=$1
+	shift
+	new_repo "$name"
+	mkdir -p "$repo/site"
+	"$@" >"$repo/site/package-lock.json"
+	commit_fixture site/package-lock.json
+	if (cd "$repo" && sh scripts/check-publication.sh); then
+		echo "$name: expected package-lock check to fail" >&2
+		failed=1
+	fi
+}
+
 expect_pass clean printf '%s\n' 'endpoint: vpn.example.com:51820'
 expect_fail awg-private printf '%s\n' 'private_key = BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB='
 expect_fail telegram-token printf '%s\n' 'token: 123456789:AAExampleSecretValueThatMustFail'
@@ -85,6 +116,17 @@ expect_fail_path unknown-go-block-comment fixture.go printf '%s\n' 'package fixt
 expect_fail_path unknown-go-multiline-raw-string fixture.go printf '%s\n' 'package fixture' '' 'var endpoint = `' 'raw-string.personal-domain.cloud 93.184.216.36' '`'
 expect_pass documentation-host printf '%s\n' 'endpoint: vpn.example.com:51820'
 expect_pass uppercase-documentation-host printf '%s\n' 'endpoint: VPN.EXAMPLE.COM:51820'
+expect_package_lock_pass npm-registry-lock printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://registry.npmjs.org/example/-/example-1.0.0.tgz"}}}'
+expect_package_lock_fail evil-registry-lock printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://evil.registry.example.dev/example.tgz"}}}'
+expect_package_lock_fail credentialed-lock printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://token@registry.npmjs.org/example.tgz"}}}'
+expect_package_lock_fail query-lock printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://registry.npmjs.org/example.tgz?token=secret"}}}'
+expect_package_lock_fail fragment-lock printf '%s\n' '{"packages":{"node_modules/example":{"resolved":"https://registry.npmjs.org/example.tgz#fragment"}}}'
+expect_package_lock_fail malformed-lock printf '%s\n' '{invalid'
+
+if [ -e "$script_dir/../site/.gitattributes" ]; then
+	echo "package-lock must not use a binary attribute workaround" >&2
+	failed=1
+fi
 
 new_repo history-secret
 printf '%s\n' 'private_key = BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=' >"$repo/fixture.txt"

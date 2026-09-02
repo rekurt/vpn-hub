@@ -6,9 +6,19 @@
   --vpn-coral: #f66b5b;
   --vpn-muted-text: #536273;
   --vpn-grid-line: color-mix(in srgb, var(--vpn-navy) 12%, transparent);
-  --vpn-focus-ring: #005fcc;
   --vpn-prose-width: 72ch;
   --vpn-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+:root,
+:root[data-theme='light'] {
+  --vpn-focus-ring: #005fcc;
+  --vpn-focus-surface: #fffaf0;
+}
+
+:root[data-theme='dark'] {
+  --vpn-focus-ring: #71f6ff;
+  --vpn-focus-surface: #071b32;
 }
 
 :where(html) {
@@ -27,12 +37,6 @@
 :where(a, button, input, select, summary, textarea):focus-visible {
   outline: 3px solid var(--vpn-focus-ring);
   outline-offset: 3px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --vpn-focus-ring: #71f6ff;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
