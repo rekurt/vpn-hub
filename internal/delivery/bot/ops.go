@@ -7,8 +7,8 @@ import (
 
 // busyResult is the standard answer to a tap that arrives while a mutation is
 // running: name what holds the gate so the admin knows what to wait for.
-func busyResult(busyWith string) result {
-	return result{toast: "⏳ Занято: " + busyWith, alert: true}
+func busyResult(l Localizer, busyWith string) result {
+	return result{toast: l.Text(msgBusyToast, busyWith), alert: true}
 }
 
 // opsGate serializes every mutation the bot performs: config edits, deploys,
@@ -39,7 +39,7 @@ type opsGate struct {
 func (b *Bot) claim(name string) (release func(), busy *result) {
 	release, busyWith, ok := b.gate.Acquire(name)
 	if !ok {
-		refusal := busyResult(busyWith)
+		refusal := busyResult(b.L, busyWith)
 		return nil, &refusal
 	}
 	return release, nil
@@ -51,7 +51,7 @@ func (b *Bot) claim(name string) (release func(), busy *result) {
 func (b *Bot) claimForDialog(ctx context.Context, name string) (release func()) {
 	release, busyWith, ok := b.gate.Acquire(name)
 	if !ok {
-		b.send(ctx, "⏳ Занято: "+esc(busyWith)+". Повторите позже.", nil)
+		b.send(ctx, b.text(msgBusyDialog, esc(busyWith)), nil)
 		return nil
 	}
 	return release

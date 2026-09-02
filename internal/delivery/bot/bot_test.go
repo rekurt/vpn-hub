@@ -42,6 +42,7 @@ type fakeAPI struct {
 	docs        []string
 	photos      []string
 	toasts      []string
+	commands    []tg.BotCommand
 	commandSets int
 	nextID      int64
 	// failDocumentsAfter, when > 0, makes SendDocument fail once that many have
@@ -92,10 +93,11 @@ func (f *fakeAPI) SendPhoto(_ context.Context, _ int64, filename string, _ []byt
 	return tg.Message{}, nil
 }
 
-func (f *fakeAPI) SetMyCommands(context.Context, []tg.BotCommand) error {
+func (f *fakeAPI) SetMyCommands(_ context.Context, commands []tg.BotCommand) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.commandSets++
+	f.commands = append([]tg.BotCommand(nil), commands...)
 	return nil
 }
 
@@ -153,6 +155,10 @@ func (f fakeReconciler) Apply(context.Context, domain.DesiredState) ([]domain.Op
 // hubFixture writes a valid single-file config with one egress tunnel and returns
 // the bot wired against it and the fake API.
 func hubFixture(t *testing.T) (*Bot, *fakeAPI) {
+	return hubFixtureLocale(t, "")
+}
+
+func hubFixtureLocale(t *testing.T, locale Locale) (*Bot, *fakeAPI) {
 	t.Helper()
 	devicePrivateKey, devicePublicKey, err := domain.GenerateX25519KeyPair()
 	if err != nil {
@@ -195,7 +201,7 @@ tunnels:
 	api := &fakeAPI{}
 	instance := &Bot{
 		API:           api,
-		Cfg:           Config{AdminID: adminID, Notifications: Notifications{HealthInterval: time.Minute, DriftInterval: time.Minute, SubscriptionRefresh: time.Hour}},
+		Cfg:           Config{AdminID: adminID, Locale: locale, Notifications: Notifications{HealthInterval: time.Minute, DriftInterval: time.Minute, SubscriptionRefresh: time.Hour}},
 		ConfigPath:    configPath,
 		StateDir:      stateDir,
 		ConfigDir:     configDir,
@@ -252,6 +258,9 @@ func TestBotInitNormalizesLocale(t *testing.T) {
 			if got := instance.Cfg.Locale; got != tt.want {
 				t.Fatalf("Locale = %q, want %q", got, tt.want)
 			}
+			if got := instance.L.Locale(); got != tt.want {
+				t.Fatalf("localizer locale = %q, want %q", got, tt.want)
+			}
 		})
 	}
 }
@@ -280,6 +289,199 @@ func TestBotRunRejectsUnsupportedLocaleBeforeAPICalls(t *testing.T) {
 	if len(api.sent) != 0 || len(api.edits) != 0 || api.commandSets != 0 {
 		t.Fatalf("Run made API calls: sent=%d edits=%d commandSets=%d", len(api.sent), len(api.edits), api.commandSets)
 	}
+}
+
+func TestEnglishAndRussianDeviceTunnelWorkflows(t *testing.T) {
+	for _, tt := range localeBehaviors() {
+		t.Run(string(tt.locale), func(t *testing.T) {
+			instance, api := hubFixtureLocale(t, tt.locale)
+			ctx := context.Background()
+
+			instance.handleUpdate(ctx, message(adminID, "/start"))
+			if got := api.lastScreen(t).text; got != tt.start {
+				t.Fatalf("/start text = %q, want %q", got, tt.start)
+			}
+			instance.handleUpdate(ctx, message(adminID, "/does-not-exist"))
+			if got := api.lastScreen(t).text; got != tt.unknownCommand {
+				t.Fatalf("unknown command text = %q, want %q", got, tt.unknownCommand)
+			}
+
+			instance.handleUpdate(ctx, message(adminID, "/cancel"))
+			if got := api.lastScreen(t).text; got != tt.cancelEmpty {
+				t.Fatalf("empty /cancel text = %q, want %q", got, tt.cancelEmpty)
+			}
+
+			instance.handleUpdate(ctx, tap(adminID, "dev:add"))
+			if got := api.lastScreen(t).text; got != tt.deviceAddPrompt {
+				t.Fatalf("device prompt = %q, want %q", got, tt.deviceAddPrompt)
+			}
+			instance.handleUpdate(ctx, message(adminID, "/cancel"))
+			if got := api.lastScreen(t).text; got != tt.cancelled {
+				t.Fatalf("active /cancel text = %q, want %q", got, tt.cancelled)
+			}
+
+			instance.handleUpdate(ctx, tap(adminID, "dev:add"))
+			instance.handleUpdate(ctx, message(adminID, "phone"))
+			address := api.lastScreen(t)
+			if address.text != tt.deviceAddressPrompt {
+				t.Fatalf("address prompt = %q, want %q", address.text, tt.deviceAddressPrompt)
+			}
+			if got := findButton(t, address.markup, tt.useAddress); got != "dev:add:addr:10.80.0.3/32" {
+				t.Fatalf("address callback = %q", got)
+			}
+			instance.handleUpdate(ctx, tap(adminID, "dev:add:addr:10.80.0.3/32"))
+			if got := api.lastScreen(t).text; got != tt.deviceEgressPrompt {
+				t.Fatalf("egress prompt = %q, want %q", got, tt.deviceEgressPrompt)
+			}
+
+			instance.handleUpdate(ctx, tap(adminID, "dev:rv:macbook"))
+			revoke := api.lastScreen(t)
+			if got := revoke.text; got != "❓ "+tt.revokeConfirm {
+				t.Fatalf("revoke confirmation = %q, want %q", got, "❓ "+tt.revokeConfirm)
+			}
+			if got := screenCallbackData(revoke.markup); !equalStrings(got, []string{"dev:rv!:macbook", "dev:c:macbook"}) {
+				t.Fatalf("revoke callbacks = %v", got)
+			}
+
+			instance.handleUpdate(ctx, tap(adminID, "dev:re:macbook"))
+			reissue := api.lastScreen(t)
+			if got := reissue.text; got != "❓ "+tt.reissueConfirm {
+				t.Fatalf("reissue confirmation = %q, want %q", got, "❓ "+tt.reissueConfirm)
+			}
+			if got := screenCallbackData(reissue.markup); !equalStrings(got, []string{"dev:re!:macbook", "dev:c:macbook"}) {
+				t.Fatalf("reissue callbacks = %v", got)
+			}
+
+			instance.handleUpdate(ctx, tap(adminID, "tun:off:wg-nl"))
+			disable := api.lastScreen(t)
+			if got := disable.text; got != "❓ "+tt.tunnelDisableConfirm {
+				t.Fatalf("disable confirmation = %q, want %q", got, "❓ "+tt.tunnelDisableConfirm)
+			}
+			if got := screenCallbackData(disable.markup); !equalStrings(got, []string{"tun:off!:wg-nl", "tun:c:wg-nl"}) {
+				t.Fatalf("disable callbacks = %v", got)
+			}
+
+			instance.handleUpdate(ctx, tap(adminID, "tun:off!:wg-nl"))
+			if got := api.lastScreen(t).text; got != tt.tunnelDisabled {
+				t.Fatalf("disabled result = %q, want %q", got, tt.tunnelDisabled)
+			}
+			instance.handleUpdate(ctx, tap(adminID, "tun:on!:wg-nl"))
+			if got := api.lastScreen(t).text; got != tt.tunnelEnabled {
+				t.Fatalf("enabled result = %q, want %q", got, tt.tunnelEnabled)
+			}
+			instance.handleUpdate(ctx, tap(adminID, "dev:eg:macbook:wg-nl"))
+			instance.handleUpdate(ctx, tap(adminID, "tun:off!:wg-nl"))
+			if got := api.lastScreen(t).text; !strings.HasPrefix(got, tt.revertInvalid) {
+				t.Fatalf("localized revert = %q, want prefix %q", got, tt.revertInvalid)
+			}
+
+			instance.handleUpdate(ctx, tap(adminID, "tun:ra:wg-nl"))
+			if got := api.lastScreen(t).text; got != tt.routePrompt {
+				t.Fatalf("route prompt = %q, want %q", got, tt.routePrompt)
+			}
+			instance.handleUpdate(ctx, tap(adminID, "tun:za:wg-nl"))
+			if got := api.lastScreen(t).text; got != tt.zonePrompt {
+				t.Fatalf("zone prompt = %q, want %q", got, tt.zonePrompt)
+			}
+
+			instance.handleUpdate(ctx, tap(adminID, "tun:at:wg-nl:macbook"))
+			if got := lastToast(t, api); got != tt.accessChanged {
+				t.Fatalf("access toast = %q, want %q", got, tt.accessChanged)
+			}
+
+			instance.dialogs.clear()
+			instance.handleUpdate(ctx, tap(adminID, "dev:add:addr:10.80.0.3/32"))
+			if got := lastToast(t, api); got != tt.staleDialog {
+				t.Fatalf("stale dialog toast = %q, want %q", got, tt.staleDialog)
+			}
+
+			release, _, ok := instance.gate.Acquire("background task")
+			if !ok {
+				t.Fatal("gate is unexpectedly busy")
+			}
+			instance.handleUpdate(ctx, tap(adminID, "dev:rv!:macbook"))
+			if got := lastToast(t, api); got != tt.busy {
+				t.Fatalf("busy toast = %q, want %q", got, tt.busy)
+			}
+			release()
+
+			instance.handleUpdate(ctx, tap(adminID, "unknown"))
+			if got := lastToast(t, api); got != tt.unknownButton {
+				t.Fatalf("unknown-button toast = %q, want %q", got, tt.unknownButton)
+			}
+		})
+	}
+}
+
+func TestLocaleCommandDescriptionsAndStartup(t *testing.T) {
+	wantCommands := []string{"start", "status", "devices", "tunnels", "deploy", "subs", "routes", "client_acls", "logs", "host", "hub", "settings", "cancel"}
+	for _, tt := range localeBehaviors() {
+		t.Run(string(tt.locale), func(t *testing.T) {
+			instance, api := hubFixtureLocale(t, tt.locale)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if err := instance.Run(ctx); err != context.Canceled {
+				t.Fatalf("Run error = %v, want context canceled", err)
+			}
+
+			api.mu.Lock()
+			commands := append([]tg.BotCommand(nil), api.commands...)
+			api.mu.Unlock()
+			if len(commands) != len(wantCommands) {
+				t.Fatalf("registered %d commands, want %d", len(commands), len(wantCommands))
+			}
+			for index, command := range commands {
+				if command.Command != wantCommands[index] || command.Description != tt.commandDescriptions[index] {
+					t.Errorf("command[%d] = %+v, want /%s %q", index, command, wantCommands[index], tt.commandDescriptions[index])
+				}
+			}
+			if got := api.lastScreen(t).text; got != tt.startupPrefix+"\n\n"+tt.start {
+				t.Fatalf("startup text = %q, want %q", got, tt.startupPrefix+"\n\n"+tt.start)
+			}
+		})
+	}
+}
+
+func TestLocaleCallbacksStayByteIdentical(t *testing.T) {
+	collect := func(t *testing.T, locale Locale) [][]string {
+		t.Helper()
+		instance, api := hubFixtureLocale(t, locale)
+		ctx := context.Background()
+		var got [][]string
+		for _, data := range []string{"m", "dev:add", "dev:rv:macbook", "dev:re:macbook", "tun:off:wg-nl", "tun:ra:wg-nl", "tun:za:wg-nl", "tun:ac:wg-nl"} {
+			instance.handleUpdate(ctx, tap(adminID, data))
+			got = append(got, screenCallbackData(api.lastScreen(t).markup))
+		}
+		return got
+	}
+
+	english := collect(t, LocaleEnglish)
+	russian := collect(t, LocaleRussian)
+	if fmt.Sprint(english) != fmt.Sprint(russian) {
+		t.Fatalf("callbacks differ by locale:\nEnglish: %v\nRussian: %v", english, russian)
+	}
+}
+
+func TestLocaleSelectionIsImmutableAfterInitialization(t *testing.T) {
+	instance, api := hubFixtureLocale(t, LocaleRussian)
+	instance.Cfg.Locale = LocaleEnglish
+	instance.init()
+	instance.handleUpdate(context.Background(), message(adminID, "/start"))
+	if got := api.lastScreen(t).text; got != "Центр управления\nВыберите действие." {
+		t.Fatalf("locale changed after initialization: %q", got)
+	}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // testWriter surfaces the bot's own diagnostics -- including recovered panics --
@@ -317,6 +519,116 @@ func findButton(t *testing.T, markup *tg.InlineKeyboardMarkup, want string) stri
 	}
 	t.Fatalf("no button %q in %+v", want, markup.InlineKeyboard)
 	return ""
+}
+
+func lastToast(t *testing.T, api *fakeAPI) string {
+	t.Helper()
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if len(api.toasts) == 0 {
+		t.Fatal("no callback answer was sent")
+	}
+	return api.toasts[len(api.toasts)-1]
+}
+
+func screenCallbackData(markup *tg.InlineKeyboardMarkup) []string {
+	if markup == nil {
+		return nil
+	}
+	var values []string
+	for _, row := range markup.InlineKeyboard {
+		for _, button := range row {
+			values = append(values, button.CallbackData)
+		}
+	}
+	return values
+}
+
+type localeBehavior struct {
+	locale               Locale
+	start                string
+	cancelEmpty          string
+	cancelled            string
+	unknownCommand       string
+	unknownButton        string
+	deviceAddPrompt      string
+	deviceAddressPrompt  string
+	useAddress           string
+	deviceEgressPrompt   string
+	revokeConfirm        string
+	reissueConfirm       string
+	tunnelDisableConfirm string
+	tunnelDisabled       string
+	tunnelEnabled        string
+	revertInvalid        string
+	routePrompt          string
+	zonePrompt           string
+	accessChanged        string
+	staleDialog          string
+	busy                 string
+	startupPrefix        string
+	commandDescriptions  []string
+}
+
+func localeBehaviors() []localeBehavior {
+	return []localeBehavior{
+		{
+			locale:               LocaleEnglish,
+			start:                "Management hub\nChoose an action.",
+			cancelEmpty:          "Nothing to cancel.",
+			cancelled:            "✖️ Dialog canceled.",
+			unknownCommand:       "Unknown command.\n\nManagement hub\nChoose an action.",
+			unknownButton:        "I don't understand this button",
+			deviceAddPrompt:      "➕ <b>New device</b>\n\nStep 1 of 3. Enter an ID: lowercase Latin letters, digits, and hyphens (for example <code>phone-anna</code>).",
+			deviceAddressPrompt:  "Step 2 of 3. Device address. <code>10.80.0.3/32</code> is available — use it or send your own.",
+			useAddress:           "Use 10.80.0.3/32",
+			deviceEgressPrompt:   "Step 3 of 3. Which egress should the device use for internet access?",
+			revokeConfirm:        "Revoke <b>macbook</b>? The device will lose access after deployment.",
+			reissueConfirm:       "Reissue the profile for <b>macbook</b>? It will receive a new key; the old profile will stop working after deployment.",
+			tunnelDisableConfirm: "Disable tunnel <b>wg-nl</b>?",
+			tunnelDisabled:       "Tunnel <b>wg-nl</b> is disabled.\n\nThe change will take effect after deployment.",
+			tunnelEnabled:        "Tunnel <b>wg-nl</b> is enabled.\n\nThe change will take effect after deployment.",
+			revertInvalid:        "⚠️ Change canceled: configuration does not pass validation:",
+			routePrompt:          "➕ Which route should be added to <b>wg-nl</b>? Send a subnet, for example <code>10.20.0.0/16</code>.",
+			zonePrompt:           "➕ Which DNS zone should be added to <b>wg-nl</b>? Send a domain, for example <code>corp.internal</code>.",
+			accessChanged:        "The change will take effect after deployment.",
+			staleDialog:          "This dialog has already ended",
+			busy:                 "⏳ Busy: background task",
+			startupPrefix:        "🤖 Bot started.",
+			commandDescriptions: []string{
+				"Main menu", "Hub status", "Devices", "Tunnels", "Deploy configuration", "Subscriptions", "Routes",
+				"Device-to-device access", "Logs", "Host and units", "Hub settings", "Notifications", "Cancel dialog",
+			},
+		},
+		{
+			locale:               LocaleRussian,
+			start:                "Центр управления\nВыберите действие.",
+			cancelEmpty:          "Нечего отменять.",
+			cancelled:            "✖️ Диалог отменён.",
+			unknownCommand:       "Неизвестная команда.\n\nЦентр управления\nВыберите действие.",
+			unknownButton:        "Не понимаю эту кнопку",
+			deviceAddPrompt:      "➕ <b>Новое устройство</b>\n\nШаг 1 из 3. Введите id: латиница в нижнем регистре, цифры, дефис (например <code>phone-anna</code>).",
+			deviceAddressPrompt:  "Шаг 2 из 3. Адрес устройства. Свободен <code>10.80.0.3/32</code> — можно взять его или прислать свой.",
+			useAddress:           "Использовать 10.80.0.3/32",
+			deviceEgressPrompt:   "Шаг 3 из 3. Через что выпускать устройство в интернет?",
+			revokeConfirm:        "Отозвать <b>macbook</b>? После деплоя устройство потеряет доступ.",
+			reissueConfirm:       "Перевыпустить профиль <b>macbook</b>? Будет новый ключ; старый профиль перестанет работать после деплоя.",
+			tunnelDisableConfirm: "Выключить туннель <b>wg-nl</b>?",
+			tunnelDisabled:       "Туннель <b>wg-nl</b> выключен.\n\nИзменение вступит в силу после деплоя.",
+			tunnelEnabled:        "Туннель <b>wg-nl</b> включён.\n\nИзменение вступит в силу после деплоя.",
+			revertInvalid:        "⚠️ Изменение отменено, конфигурация не проходит проверку:",
+			routePrompt:          "➕ Какой маршрут добавить в <b>wg-nl</b>? Пришлите подсеть, например <code>10.20.0.0/16</code>.",
+			zonePrompt:           "➕ Какую DNS-зону добавить в <b>wg-nl</b>? Пришлите домен, например <code>corp.internal</code>.",
+			accessChanged:        "Изменение вступит в силу после деплоя.",
+			staleDialog:          "Диалог уже завершён",
+			busy:                 "⏳ Занято: background task",
+			startupPrefix:        "🤖 Бот запущен.",
+			commandDescriptions: []string{
+				"Главное меню", "Статус хаба", "Устройства", "Туннели", "Деплой конфигурации", "Подписки", "Маршруты",
+				"Доступ между устройствами", "Логи", "Хост и юниты", "Параметры хаба", "Уведомления", "Прервать диалог",
+			},
+		},
+	}
 }
 
 // --- tests -----------------------------------------------------------------
@@ -361,7 +673,7 @@ func TestSetEgressFlow(t *testing.T) {
 
 	instance.handleUpdate(ctx, tap(adminID, choice))
 	last := api.lastScreen(t)
-	if !strings.Contains(last.text, "wg-nl") || !strings.Contains(last.text, "деплоя") {
+	if !strings.Contains(last.text, "wg-nl") || !strings.Contains(last.text, "deployment") {
 		t.Fatalf("unexpected confirmation:\n%s", last.text)
 	}
 
@@ -385,7 +697,7 @@ func TestDisableRefusedWhenADeviceDependsOnIt(t *testing.T) {
 	instance.handleUpdate(ctx, tap(adminID, "tun:off!:wg-nl"))
 
 	last := api.lastScreen(t)
-	if !strings.Contains(last.text, "Отменено") {
+	if !strings.Contains(last.text, "Change canceled") {
 		t.Fatalf("expected the revert message, got:\n%s", last.text)
 	}
 	cfg, err := instance.Service.LoadAndValidate(ctx)
@@ -408,7 +720,7 @@ func TestRevokeNeedsTwoTaps(t *testing.T) {
 	if revoked, _ := instance.Revocations.Load(ctx); len(revoked) != 0 {
 		t.Fatal("one tap was enough to revoke")
 	}
-	if !strings.Contains(api.lastScreen(t).text, "Отозвать") {
+	if !strings.Contains(api.lastScreen(t).text, "Revoke") {
 		t.Fatalf("expected a confirmation question:\n%s", api.lastScreen(t).text)
 	}
 
@@ -502,7 +814,7 @@ func TestDeviceAddDialogDeliversProfileAndQR(t *testing.T) {
 	instance.handleUpdate(ctx, message(adminID, "phone"))
 
 	// The address step suggests the first free address.
-	suggestion := findButton(t, api.lastScreen(t).markup, "Использовать")
+	suggestion := findButton(t, api.lastScreen(t).markup, "Use")
 	if !strings.Contains(suggestion, "10.80.0.3/32") {
 		t.Fatalf("expected 10.80.0.3/32 to be suggested, got %q", suggestion)
 	}
@@ -558,7 +870,7 @@ func TestDeviceAddDeliversTheFallbackProfiles(t *testing.T) {
 
 	instance.handleUpdate(ctx, tap(adminID, "dev:add"))
 	instance.handleUpdate(ctx, message(adminID, "phone"))
-	suggestion := findButton(t, api.lastScreen(t).markup, "Использовать")
+	suggestion := findButton(t, api.lastScreen(t).markup, "Use")
 	instance.handleUpdate(ctx, tap(adminID, suggestion))
 	egress := findButton(t, api.lastScreen(t).markup, "direct")
 	instance.handleUpdate(ctx, tap(adminID, egress))
@@ -638,7 +950,7 @@ func TestDeviceAddSurvivesAMissingRealityKey(t *testing.T) {
 
 	instance.handleUpdate(ctx, tap(adminID, "dev:add"))
 	instance.handleUpdate(ctx, message(adminID, "phone"))
-	suggestion := findButton(t, api.lastScreen(t).markup, "Использовать")
+	suggestion := findButton(t, api.lastScreen(t).markup, "Use")
 	instance.handleUpdate(ctx, tap(adminID, suggestion))
 	egress := findButton(t, api.lastScreen(t).markup, "direct")
 	instance.handleUpdate(ctx, tap(adminID, egress))
@@ -655,7 +967,7 @@ func TestDeviceAddSurvivesAMissingRealityKey(t *testing.T) {
 	// it could also come in on 443.
 	warned := false
 	for _, message := range messages {
-		if strings.Contains(message.text, "Запасной вход") && strings.Contains(message.text, "keygen --reality") {
+		if strings.Contains(message.text, "fallback") && strings.Contains(message.text, "keygen --reality") {
 			warned = true
 		}
 	}
@@ -900,7 +1212,7 @@ func TestAccessToggleRefusedWhenItStrandsADevice(t *testing.T) {
 	// Add a second device that will hold the only allow slot.
 	instance.handleUpdate(ctx, tap(adminID, "dev:add"))
 	instance.handleUpdate(ctx, message(adminID, "phone"))
-	suggestion := findButton(t, api.lastScreen(t).markup, "Использовать")
+	suggestion := findButton(t, api.lastScreen(t).markup, "Use")
 	instance.handleUpdate(ctx, tap(adminID, suggestion))
 	egress := findButton(t, api.lastScreen(t).markup, "direct")
 	instance.handleUpdate(ctx, tap(adminID, egress))
@@ -908,7 +1220,7 @@ func TestAccessToggleRefusedWhenItStrandsADevice(t *testing.T) {
 	// Allowing only phone excludes macbook, which uses this egress → refused.
 	instance.handleUpdate(ctx, tap(adminID, "tun:at:wg-nl:phone"))
 	last := api.lastScreen(t)
-	if !strings.Contains(last.text, "Отменено") {
+	if !strings.Contains(last.text, "Change canceled") {
 		t.Fatalf("expected the revert, got:\n%s", last.text)
 	}
 	cfg, err := instance.Service.LoadAndValidate(ctx)
@@ -1009,7 +1321,7 @@ func TestKeyRotationPartialFailureIsHonest(t *testing.T) {
 	// Add a second device so the rotation has more than one to walk.
 	instance.handleUpdate(ctx, tap(adminID, "dev:add"))
 	instance.handleUpdate(ctx, message(adminID, "phone"))
-	suggestion := findButton(t, api.lastScreen(t).markup, "Использовать")
+	suggestion := findButton(t, api.lastScreen(t).markup, "Use")
 	instance.handleUpdate(ctx, tap(adminID, suggestion))
 	egress := findButton(t, api.lastScreen(t).markup, "direct")
 	instance.handleUpdate(ctx, tap(adminID, egress))

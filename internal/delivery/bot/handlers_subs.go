@@ -41,21 +41,21 @@ func (b *Bot) subEntryFor(tunnel domain.Tunnel) subEntry {
 func (b *Bot) buildSubs(ctx context.Context) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return renderFailure("конфигурация не читается", err)
+		return renderFailure(b.L, "конфигурация не читается", err)
 	}
 	var entries []subEntry
 	for _, tunnel := range b.subscriptionTunnels(cfg) {
 		entries = append(entries, b.subEntryFor(tunnel))
 	}
-	return scr(renderSubs(task2EnglishLocalizer, entries, b.Cfg.Notifications.SubscriptionRefresh))
+	return scr(renderSubs(b.L, entries, b.Cfg.Notifications.SubscriptionRefresh))
 }
 
 func (b *Bot) buildSubCard(ctx context.Context, tunnelID string) screen {
 	tunnel, err := b.subscriptionTunnel(ctx, tunnelID)
 	if err != nil {
-		return renderFailure("подписка не найдена", err)
+		return renderFailure(b.L, "подписка не найдена", err)
 	}
-	return scr(renderSubCard(task2EnglishLocalizer, b.subEntryFor(tunnel)))
+	return scr(renderSubCard(b.L, b.subEntryFor(tunnel)))
 }
 
 func (b *Bot) subscriptionTunnel(ctx context.Context, tunnelID string) (domain.Tunnel, error) {
@@ -98,7 +98,7 @@ func (b *Bot) routeSubs(ctx context.Context, cb *tg.CallbackQuery, action string
 		}
 		return b.pickCandidate(ctx, cb, args[0], index)
 	case "lkg":
-		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
+		return b.show(ctx, cb, scr(renderConfirm(b.L,
 			fmt.Sprintf("Вернуть предыдущий upstream для <b>%s</b>? Текущий станет last-known-good.", esc(args[0])),
 			"sub:lkg!:"+args[0], "sub:c:"+args[0])))
 	case "lkg!":
@@ -186,16 +186,16 @@ func (b *Bot) showCandidates(ctx context.Context, cb *tg.CallbackQuery, tunnelID
 
 		payload, err := b.Fetch(ctx, tunnel.Source.Value)
 		if err != nil {
-			edit(renderFailure("подписка не скачалась", err))
+			edit(renderFailure(b.L, "подписка не скачалась", err))
 			return
 		}
 		candidates, err := b.Parse(payload)
 		if err != nil {
-			edit(renderFailure("подписка не разобралась", err))
+			edit(renderFailure(b.L, "подписка не разобралась", err))
 			return
 		}
 		if len(candidates) == 0 {
-			edit(renderFailure("в подписке пусто", fmt.Errorf("провайдер не отдал ни одного пригодного кандидата")))
+			edit(renderFailure(b.L, "в подписке пусто", fmt.Errorf("провайдер не отдал ни одного пригодного кандидата")))
 			return
 		}
 		b.candidates.put(tunnelID, candidates)
@@ -209,7 +209,7 @@ func (b *Bot) candidatesScreen(tunnelID string, candidates []domain.ProxyTunnel,
 	if active, hasCurrent, _ := b.Upstreams.Current(tunnelID); hasCurrent {
 		current = fmt.Sprintf("%s:%d", active.Server, active.Port)
 	}
-	return scr(renderCandidates(task2EnglishLocalizer, tunnelID, candidates, page, current))
+	return scr(renderCandidates(b.L, tunnelID, candidates, page, current))
 }
 
 // pickCandidate proves one chosen candidate and promotes it only when it carried
@@ -248,12 +248,12 @@ func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID 
 
 		candidate, err := health.PinPublicEndpoint(ctx, b.Resolver, candidate)
 		if err != nil {
-			edit(renderFailure("кандидат указывает не на публичный endpoint", err))
+			edit(renderFailure(b.L, "кандидат указывает не на публичный endpoint", err))
 			return
 		}
 		uplink, err := b.Uplink(ctx)
 		if err != nil {
-			edit(renderFailure("не определился uplink", err))
+			edit(renderFailure(b.L, "не определился uplink", err))
 			return
 		}
 		if err := b.Prove(ctx, candidate, uplink); err != nil {
@@ -265,10 +265,10 @@ func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID 
 			return
 		}
 		if err := b.Upstreams.Write(ctx, tunnel, candidate); err != nil {
-			edit(renderFailure("кандидат прошёл проверку, но не записался", err))
+			edit(renderFailure(b.L, "кандидат прошёл проверку, но не записался", err))
 			return
 		}
-		edit(scr(renderRefreshResult(task2EnglishLocalizer, tunnelID, candidate, nil, b.agentInactiveWarning(ctx))))
+		edit(scr(renderRefreshResult(b.L, tunnelID, candidate, nil, b.agentInactiveWarning(ctx))))
 	})
 	return result{toast: "Проверяю"}
 }
@@ -279,7 +279,7 @@ func (b *Bot) pickCandidate(ctx context.Context, cb *tg.CallbackQuery, tunnelID 
 func (b *Bot) startManualRefresh(ctx context.Context, cb *tg.CallbackQuery, tunnelID string) result {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+		return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
 	}
 	var subject domain.Tunnel
 	for _, tunnel := range b.subscriptionTunnels(cfg) {
@@ -308,9 +308,9 @@ func (b *Bot) startManualRefresh(ctx context.Context, cb *tg.CallbackQuery, tunn
 		chosen, rejected, err := b.Refresh(ctx, subject, b.progressEditor(ctx, message.Chat.ID, message.ID, tunnelID))
 		var view screen
 		if err != nil {
-			view = scr(renderRefreshFailure(task2EnglishLocalizer, tunnelID, rejected, err.Error()))
+			view = scr(renderRefreshFailure(b.L, tunnelID, rejected, err.Error()))
 		} else {
-			view = scr(renderRefreshResult(task2EnglishLocalizer, tunnelID, chosen, rejected, b.agentInactiveWarning(ctx)))
+			view = scr(renderRefreshResult(b.L, tunnelID, chosen, rejected, b.agentInactiveWarning(ctx)))
 		}
 		if err := b.API.EditMessageText(ctx, message.Chat.ID, message.ID, view.text, view.markup); err != nil {
 			b.logf("refresh edit: %v", err)
@@ -430,10 +430,10 @@ func (b *Bot) refreshScheduled(ctx context.Context, tunnel domain.Tunnel) {
 
 	chosen, rejected, err := b.Refresh(ctx, tunnel, nil)
 	if err != nil {
-		view := scr(renderRefreshFailure(task2EnglishLocalizer, tunnel.ID, rejected, err.Error()))
+		view := scr(renderRefreshFailure(b.L, tunnel.ID, rejected, err.Error()))
 		b.emit(event{category: "subscription", text: "🕕 Плановое обновление:\n\n" + view.text, markup: view.markup})
 		return
 	}
-	view := scr(renderRefreshResult(task2EnglishLocalizer, tunnel.ID, chosen, rejected, b.agentInactiveWarning(ctx)))
+	view := scr(renderRefreshResult(b.L, tunnel.ID, chosen, rejected, b.agentInactiveWarning(ctx)))
 	b.emit(event{category: "subscription", text: "🕕 Плановое обновление:\n\n" + view.text, markup: view.markup})
 }

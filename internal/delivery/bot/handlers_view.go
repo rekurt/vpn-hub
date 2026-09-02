@@ -14,10 +14,15 @@ import (
 	"vpn-hub/internal/domain"
 )
 
-func renderFailure(what string, err error) screen {
+const (
+	msgFailureUndoFailed  MessageID = "failure/undo_failed"
+	msgFailureUndoDetails MessageID = "failure/undo_details"
+)
+
+func renderFailure(l Localizer, what string, err error) screen {
 	return screen{
 		text:   "⚠️ " + what + ":\n<code>" + esc(err.Error()) + "</code>",
-		markup: keyboard(backRow(task2EnglishLocalizer)),
+		markup: keyboard(backRow(l)),
 	}
 }
 
@@ -29,13 +34,12 @@ func renderFailure(what string, err error) screen {
 // fails validation, and nothing said so -- while the screen claimed the change
 // had been taken back. Reverting is also the only reason the bot survives a bad
 // edit at all, since an unloadable configuration takes the whole UI with it.
-func revertEdit(cancelled string, invalid error, undo func() error) screen {
+func revertEdit(l Localizer, cancelled string, invalid error, undo func() error) screen {
 	if err := undo(); err != nil {
-		return renderFailure(
-			"конфигурация осталась сломанной: откат не удался, почините файл вручную",
-			fmt.Errorf("%w; откат: %w", invalid, err))
+		return renderFailure(l, l.Text(msgFailureUndoFailed),
+			errors.New(l.Text(msgFailureUndoDetails, invalid, err)))
 	}
-	return renderFailure(cancelled, invalid)
+	return renderFailure(l, cancelled, invalid)
 }
 
 // --- Status ----------------------------------------------------------------
@@ -89,7 +93,7 @@ func (b *Bot) buildStatus(ctx context.Context) screen {
 	} else {
 		view.Agent = &unit
 	}
-	return scr(renderStatus(task2EnglishLocalizer, view))
+	return scr(renderStatus(b.L, view))
 }
 
 // --- Routes ----------------------------------------------------------------
@@ -97,11 +101,11 @@ func (b *Bot) buildStatus(ctx context.Context) screen {
 func (b *Bot) buildRoutes(ctx context.Context) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return renderFailure("конфигурация не читается", err)
+		return renderFailure(b.L, "конфигурация не читается", err)
 	}
 	state, err := b.Service.BuildDesiredState(cfg)
 	if err != nil {
-		return renderFailure("ревизия не собирается", err)
+		return renderFailure(b.L, "ревизия не собирается", err)
 	}
 
 	var lines []routeLine
@@ -147,7 +151,7 @@ func (b *Bot) buildRoutes(ctx context.Context) screen {
 			}
 		}
 	}
-	return scr(renderRoutes(task2EnglishLocalizer, lines))
+	return scr(renderRoutes(b.L, lines))
 }
 
 // placeholderUpstreams supplies layout-only upstreams: which ports exist does not
@@ -173,9 +177,9 @@ func hostOf(address string) string {
 func (b *Bot) buildLogsMenu(ctx context.Context) screen {
 	units, err := b.Units.ListMatching(ctx, "vpn-hub-*")
 	if err != nil {
-		return renderFailure("список юнитов недоступен", err)
+		return renderFailure(b.L, "список юнитов недоступен", err)
 	}
-	return scr(renderLogsMenu(task2EnglishLocalizer, units))
+	return scr(renderLogsMenu(b.L, units))
 }
 
 func (b *Bot) routeLogs(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {
@@ -189,9 +193,9 @@ func (b *Bot) routeLogs(ctx context.Context, cb *tg.CallbackQuery, action string
 		unit := args[0]
 		tail, err := b.Journal.Tail(ctx, unit, 50)
 		if err != nil {
-			return b.show(ctx, cb, renderFailure("журнал недоступен", err))
+			return b.show(ctx, cb, renderFailure(b.L, "журнал недоступен", err))
 		}
-		return b.show(ctx, cb, scr(renderLogTail(task2EnglishLocalizer, unit, tail)))
+		return b.show(ctx, cb, scr(renderLogTail(b.L, unit, tail)))
 	case "f":
 		if len(args) < 1 {
 			return result{toast: "Не указан юнит"}
@@ -237,7 +241,7 @@ func (b *Bot) buildHost(ctx context.Context) screen {
 	if transient, err := b.Units.ListMatching(ctx, "vpn-hub-socks-*"); err == nil {
 		view.Units = append(view.Units, transient...)
 	}
-	return scr(renderHost(task2EnglishLocalizer, view))
+	return scr(renderHost(b.L, view))
 }
 
 func (b *Bot) routeHost(ctx context.Context, cb *tg.CallbackQuery, action string) result {
@@ -245,7 +249,7 @@ func (b *Bot) routeHost(ctx context.Context, cb *tg.CallbackQuery, action string
 	case "":
 		return b.show(ctx, cb, b.buildHost(ctx))
 	case "ra":
-		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
+		return b.show(ctx, cb, scr(renderConfirm(b.L,
 			"Перезапустить агента? На время рестарта хост перестаёт сходиться (туннели продолжают работать).",
 			"host:ra!", "host")))
 	case "ra!":
@@ -263,7 +267,7 @@ func (b *Bot) routeHost(ctx context.Context, cb *tg.CallbackQuery, action string
 // --- Settings --------------------------------------------------------------
 
 func (b *Bot) buildSettings() screen {
-	return scr(renderSettings(task2EnglishLocalizer, b.alerts.snapshot(), b.Cfg.Notifications))
+	return scr(renderSettings(b.L, b.alerts.snapshot(), b.Cfg.Notifications))
 }
 
 func (b *Bot) routeSettings(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {

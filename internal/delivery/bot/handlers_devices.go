@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/netip"
 	"regexp"
 	"sort"
@@ -12,6 +11,71 @@ import (
 	tg "vpn-hub/internal/adapters/telegram"
 	"vpn-hub/internal/application"
 	"vpn-hub/internal/domain"
+)
+
+const (
+	msgFailureConfigUnreadable     MessageID = "failure/config_unreadable"
+	msgFailureDeviceNotFound       MessageID = "failure/device_not_found"
+	msgReasonDeviceNotFound        MessageID = "reason/device_not_found"
+	msgDeviceRequired              MessageID = "device/required"
+	msgDeviceRevokeConfirm         MessageID = "device/revoke_confirm"
+	msgDeviceReissueConfirm        MessageID = "device/reissue_confirm"
+	msgDeviceAlreadySelected       MessageID = "device/already_selected"
+	msgToastDone                   MessageID = "toast/done"
+	msgOperationEgressChange       MessageID = "operation/egress_change"
+	msgRevertInvalidConfig         MessageID = "revert/invalid_config"
+	msgButtonToDevice              MessageID = "button/to_device"
+	msgDeviceEgressChanged         MessageID = "device/egress_changed"
+	msgChangeAfterDeploy           MessageID = "change/after_deploy"
+	msgDeviceNewPrompt             MessageID = "device/new_prompt"
+	msgDialogStale                 MessageID = "dialog/stale"
+	msgAddressRequired             MessageID = "device/address_required"
+	msgEgressRequired              MessageID = "device/egress_required"
+	msgDeviceEgressStep            MessageID = "device/egress_step"
+	msgDeviceIDInvalid             MessageID = "device/id_invalid"
+	msgDeviceAddressStep           MessageID = "device/address_step"
+	msgDeviceAddressSuggestion     MessageID = "device/address_suggestion"
+	msgButtonUseAddress            MessageID = "button/use_address"
+	msgRetryOrCancel               MessageID = "dialog/retry_or_cancel"
+	msgDeviceChooseEgress          MessageID = "device/choose_egress"
+	msgHostRouteExampleError       MessageID = "device/host_route_example_error"
+	msgHostRouteBitsError          MessageID = "device/host_route_bits_error"
+	msgOperationDeviceAdd          MessageID = "operation/device_add"
+	msgFailureGenerateKey          MessageID = "failure/generate_key"
+	msgFailureDeviceAdd            MessageID = "failure/device_add"
+	msgRevertNewDeviceInvalid      MessageID = "revert/new_device_invalid"
+	msgRevertProfileKeySaveAdd     MessageID = "revert/profile_key_save_add"
+	msgDeviceAdded                 MessageID = "device/added"
+	msgToastDeviceAdded            MessageID = "toast/device_added"
+	msgProfileStoreNotConfigured   MessageID = "profile/store_not_configured"
+	msgOperationProfileSend        MessageID = "operation/profile_send"
+	msgFailureRevocationCheck      MessageID = "failure/revocation_check"
+	msgRevokedNeedsReissue         MessageID = "profile/revoked_needs_reissue"
+	msgProfileStoreUnavailable     MessageID = "profile/store_unavailable"
+	msgOldProfileMissing           MessageID = "profile/old_missing"
+	msgFailureStoredProfileRead    MessageID = "failure/stored_profile_read"
+	msgFailureStoredProfileCorrupt MessageID = "failure/stored_profile_corrupt"
+	msgProfileKeyChanged           MessageID = "profile/key_changed"
+	msgToastProfileSent            MessageID = "toast/profile_sent"
+	msgFailureProfileRender        MessageID = "failure/profile_render"
+	msgToastError                  MessageID = "toast/error"
+	msgProfileCaption              MessageID = "profile/caption"
+	msgFailureProfileSend          MessageID = "failure/profile_send"
+	msgProfileQRFailed             MessageID = "profile/qr_failed"
+	msgProfileQRCaption            MessageID = "profile/qr_caption"
+	msgFallbackFailed              MessageID = "profile/fallback_failed"
+	msgFallbackUDP443Caption       MessageID = "profile/fallback_udp443_caption"
+	msgFallbackReality             MessageID = "profile/fallback_reality"
+	msgFallbackRealityCaption      MessageID = "profile/fallback_reality_caption"
+	msgOperationProfileReissue     MessageID = "operation/profile_reissue"
+	msgFailureKeyWrite             MessageID = "failure/key_write"
+	msgRevertProfileKeySaveReissue MessageID = "revert/profile_key_save_reissue"
+	msgRevocationRemoveFailed      MessageID = "profile/revocation_remove_failed"
+	msgDeviceReissued              MessageID = "device/reissued"
+	msgToastProfileReissued        MessageID = "toast/profile_reissued"
+	msgOperationDeviceRevoke       MessageID = "operation/device_revoke"
+	msgDeviceRevokedSuccess        MessageID = "device/revoked_success"
+	msgToastDeviceRevoked          MessageID = "toast/device_revoked"
 )
 
 func (b *Bot) deviceEntries(ctx context.Context) ([]deviceEntry, error) {
@@ -56,22 +120,22 @@ func (b *Bot) deviceEntries(ctx context.Context) ([]deviceEntry, error) {
 func (b *Bot) buildDevices(ctx context.Context) screen {
 	entries, err := b.deviceEntries(ctx)
 	if err != nil {
-		return renderFailure("конфигурация не читается", err)
+		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
 	}
-	return scr(renderDevices(task2EnglishLocalizer, entries))
+	return scr(renderDevices(b.L, entries))
 }
 
 func (b *Bot) buildDeviceCard(ctx context.Context, deviceID string) screen {
 	entries, err := b.deviceEntries(ctx)
 	if err != nil {
-		return renderFailure("конфигурация не читается", err)
+		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
 	}
 	for _, entry := range entries {
 		if entry.ID == deviceID {
-			return scr(renderDeviceCard(task2EnglishLocalizer, entry))
+			return scr(renderDeviceCard(b.L, entry))
 		}
 	}
-	return renderFailure("устройство не найдено", fmt.Errorf("нет устройства %q", deviceID))
+	return renderFailure(b.L, b.text(msgFailureDeviceNotFound), errors.New(b.text(msgReasonDeviceNotFound, deviceID)))
 }
 
 // egressChoices lists what a device may leave through: enabled egress tunnels and
@@ -96,7 +160,7 @@ func (b *Bot) routeDevices(ctx context.Context, cb *tg.CallbackQuery, action str
 		return b.show(ctx, cb, b.buildDevices(ctx))
 	case "c":
 		if len(args) < 1 {
-			return result{toast: "Не указано устройство"}
+			return result{toast: b.text(msgDeviceRequired)}
 		}
 		return b.show(ctx, cb, b.buildDeviceCard(ctx, args[0]))
 	case "eg":
@@ -105,35 +169,35 @@ func (b *Bot) routeDevices(ctx context.Context, cb *tg.CallbackQuery, action str
 		return b.routeDeviceAdd(ctx, cb, args)
 	case "rv":
 		if len(args) < 1 {
-			return result{toast: "Не указано устройство"}
+			return result{toast: b.text(msgDeviceRequired)}
 		}
-		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
-			fmt.Sprintf("Отозвать <b>%s</b>? После деплоя устройство потеряет доступ.", esc(args[0])),
+		return b.show(ctx, cb, scr(renderConfirm(b.L,
+			b.text(msgDeviceRevokeConfirm, esc(args[0])),
 			"dev:rv!:"+args[0], "dev:c:"+args[0])))
 	case "rv!":
 		if len(args) < 1 {
-			return result{toast: "Не указано устройство"}
+			return result{toast: b.text(msgDeviceRequired)}
 		}
 		return b.revokeDevice(ctx, cb, args[0])
 	case "re":
 		if len(args) < 1 {
-			return result{toast: "Не указано устройство"}
+			return result{toast: b.text(msgDeviceRequired)}
 		}
-		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
-			fmt.Sprintf("Перевыпустить профиль <b>%s</b>? Будет новый ключ; старый профиль перестанет работать после деплоя.", esc(args[0])),
+		return b.show(ctx, cb, scr(renderConfirm(b.L,
+			b.text(msgDeviceReissueConfirm, esc(args[0])),
 			"dev:re!:"+args[0], "dev:c:"+args[0])))
 	case "re!":
 		if len(args) < 1 {
-			return result{toast: "Не указано устройство"}
+			return result{toast: b.text(msgDeviceRequired)}
 		}
 		return b.reissueDevice(ctx, cb, args[0])
 	case "pr":
 		if len(args) < 1 {
-			return result{toast: "Не указано устройство"}
+			return result{toast: b.text(msgDeviceRequired)}
 		}
 		return b.sendCurrentProfile(ctx, cb, args[0])
 	default:
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 }
 
@@ -141,12 +205,12 @@ func (b *Bot) routeDevices(ctx context.Context, cb *tg.CallbackQuery, action str
 
 func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args []string) result {
 	if len(args) < 1 {
-		return result{toast: "Не указано устройство"}
+		return result{toast: b.text(msgDeviceRequired)}
 	}
 	deviceID := args[0]
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 	}
 	current := ""
 	for _, device := range cfg.Devices {
@@ -155,18 +219,18 @@ func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args 
 		}
 	}
 	if current == "" {
-		return result{toast: "Устройство не найдено", alert: true}
+		return result{toast: b.text(msgFailureDeviceNotFound), alert: true}
 	}
 
 	if len(args) == 1 {
-		return b.show(ctx, cb, scr(renderEgressChoice(task2EnglishLocalizer, deviceID, current, b.egressChoices(cfg))))
+		return b.show(ctx, cb, scr(renderEgressChoice(b.L, deviceID, current, b.egressChoices(cfg))))
 	}
 
 	target := args[1]
 	if target == current {
-		return result{toast: "Уже так"}
+		return result{toast: b.text(msgDeviceAlreadySelected)}
 	}
-	release, busy := b.claim("смена egress " + deviceID)
+	release, busy := b.claim(b.text(msgOperationEgressChange, deviceID))
 	if busy != nil {
 		return *busy
 	}
@@ -175,19 +239,19 @@ func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args 
 	// The same write-validate-revert dance as `hubctl device set-egress`: the
 	// operator hears about a config that stopped validating now, not at deploy.
 	if err := b.Editor.SetDeviceField(deviceID, "egress", target); err != nil {
-		return result{toast: err.Error(), alert: true}
+		return result{toast: b.text(msgOperationFailed, err.Error()), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		view := revertEdit("Изменение отменено, конфигурация не проходит проверку", err, func() error {
+		view := revertEdit(b.L, b.text(msgRevertInvalidConfig), err, func() error {
 			return b.Editor.SetDeviceField(deviceID, "egress", current)
 		})
 		return b.show(ctx, cb, screen{
 			text:   view.text,
-			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ К устройству", "dev:c:"+deviceID)}),
+			markup: keyboard([]tg.InlineKeyboardButton{btn("⬅️ "+b.text(msgButtonToDevice), "dev:c:"+deviceID)}),
 		})
 	}
-	outcome := b.show(ctx, cb, b.afterConfigChange(fmt.Sprintf("🔀 <b>%s</b> теперь выходит через <b>%s</b>.", esc(deviceID), esc(target)), backToDevices))
-	outcome.toast = "Готово"
+	outcome := b.show(ctx, cb, b.afterConfigChange(b.text(msgDeviceEgressChanged, esc(deviceID), esc(target)), b.backToDevices()))
+	outcome.toast = b.text(msgToastDone)
 	return outcome
 }
 
@@ -196,17 +260,21 @@ func (b *Bot) routeDeviceEgress(ctx context.Context, cb *tg.CallbackQuery, args 
 // made in, so the operator returns where they were rather than always to devices.
 func (b *Bot) afterConfigChange(text string, back []tg.InlineKeyboardButton) screen {
 	return screen{
-		text: text + "\n\nИзменение вступит в силу после деплоя.",
+		text: text + "\n\n" + b.text(msgChangeAfterDeploy),
 		markup: keyboard(
-			[]tg.InlineKeyboardButton{btn("🚀 Деплой", "dep")},
+			[]tg.InlineKeyboardButton{btn("🚀 "+b.text(msgButtonDeploy), "dep")},
 			back,
 		),
 	}
 }
 
-// backToDevices and backToTunnels are the two return rows config edits use.
-var backToDevices = []tg.InlineKeyboardButton{btn("📱 Устройства", "dev"), btn("🏠 Меню", "m")}
-var backToTunnels = []tg.InlineKeyboardButton{btn("🚇 Туннели", "tun"), btn("🏠 Меню", "m")}
+func (b *Bot) backToDevices() []tg.InlineKeyboardButton {
+	return []tg.InlineKeyboardButton{btn("📱 "+b.text(MsgButtonDevices), "dev"), btn("🏠 "+b.text(msgButtonMenu), "m")}
+}
+
+func (b *Bot) backToTunnels() []tg.InlineKeyboardButton {
+	return []tg.InlineKeyboardButton{btn("🚇 "+b.text(msgButtonTunnels), "tun"), btn("🏠 "+b.text(msgButtonMenu), "m")}
+}
 
 // --- add -------------------------------------------------------------------
 
@@ -216,30 +284,30 @@ func (b *Bot) routeDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, args []s
 	if len(args) == 0 {
 		b.dialogs.start(dialogDeviceAdd, nil)
 		return b.show(ctx, cb, screen{
-			text:   "➕ <b>Новое устройство</b>\n\nШаг 1 из 3. Введите id: латиница в нижнем регистре, цифры, дефис (например <code>phone-anna</code>).",
-			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ Отмена", "dev:x")}),
+			text:   b.text(msgDeviceNewPrompt),
+			markup: keyboard([]tg.InlineKeyboardButton{btn("✖️ "+b.text(msgButtonCancel), "dev:x")}),
 		})
 	}
 
 	dialog := b.dialogs.current()
 	if dialog == nil || dialog.kind != dialogDeviceAdd {
-		return result{toast: "Диалог уже завершён", alert: true}
+		return result{toast: b.text(msgDialogStale), alert: true}
 	}
 	switch args[0] {
 	case "addr":
 		if len(args) < 2 {
-			return result{toast: "Нет адреса"}
+			return result{toast: b.text(msgAddressRequired)}
 		}
 		dialog.data["address"] = args[1]
 		dialog.step = 2
 		return b.show(ctx, cb, b.deviceAddEgressStep(ctx))
 	case "eg":
 		if len(args) < 2 {
-			return result{toast: "Нет egress"}
+			return result{toast: b.text(msgEgressRequired)}
 		}
 		return b.finishDeviceAdd(ctx, cb, args[1])
 	default:
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 }
 
@@ -247,15 +315,15 @@ func (b *Bot) deviceAddEgressStep(ctx context.Context) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
 		b.dialogs.clear()
-		return renderFailure("конфигурация не читается", err)
+		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
 	}
 	var rows [][]tg.InlineKeyboardButton
 	for _, egress := range b.egressChoices(cfg) {
 		rows = append(rows, []tg.InlineKeyboardButton{btn(egress, "dev:add:eg:"+egress)})
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{btn("✖️ Отмена", "dev:x")})
+	rows = append(rows, []tg.InlineKeyboardButton{btn("✖️ "+b.text(msgButtonCancel), "dev:x")})
 	return screen{
-		text:   "Шаг 3 из 3. Через что выпускать устройство в интернет?",
+		text:   b.text(msgDeviceEgressStep),
 		markup: keyboard(rows...),
 	}
 }
@@ -265,48 +333,48 @@ func (b *Bot) handleDeviceAddInput(ctx context.Context, dialog *dialog, text str
 	switch dialog.step {
 	case 0:
 		if !deviceIDPattern.MatchString(text) {
-			b.send(ctx, "⚠️ Такой id не подойдёт: латиница в нижнем регистре, цифры, дефис. Попробуйте ещё раз или /cancel.", nil)
+			b.send(ctx, b.text(msgDeviceIDInvalid), nil)
 			return
 		}
 		dialog.data["id"] = text
 		dialog.step = 1
 
-		prompt := fmt.Sprintf("Шаг 2 из 3. Адрес устройства внутри клиентской сети (host-маршрут, например <code>%s</code>).", esc("10.80.0.2/32"))
+		prompt := b.text(msgDeviceAddressStep, esc("10.80.0.2/32"))
 		var markup *tg.InlineKeyboardMarkup
 		if cfg, err := b.Service.LoadAndValidate(ctx); err == nil {
 			if suggestion := nextFreeAddress(cfg); suggestion != "" {
-				prompt = fmt.Sprintf("Шаг 2 из 3. Адрес устройства. Свободен <code>%s</code> — можно взять его или прислать свой.", esc(suggestion))
+				prompt = b.text(msgDeviceAddressSuggestion, esc(suggestion))
 				markup = keyboard(
-					[]tg.InlineKeyboardButton{btn("Использовать "+suggestion, "dev:add:addr:"+suggestion)},
-					[]tg.InlineKeyboardButton{btn("✖️ Отмена", "dev:x")},
+					[]tg.InlineKeyboardButton{btn(b.text(msgButtonUseAddress, suggestion), "dev:add:addr:"+suggestion)},
+					[]tg.InlineKeyboardButton{btn("✖️ "+b.text(msgButtonCancel), "dev:x")},
 				)
 			}
 		}
 		b.send(ctx, prompt, markup)
 	case 1:
-		if err := validateHostRoute(text); err != nil {
-			b.send(ctx, "⚠️ "+esc(err.Error())+". Попробуйте ещё раз или /cancel.", nil)
+		if err := validateHostRoute(b.L, text); err != nil {
+			b.send(ctx, b.text(msgRetryOrCancel, esc(err.Error())), nil)
 			return
 		}
 		dialog.data["address"] = text
 		dialog.step = 2
 		b.sendScreen(ctx, b.deviceAddEgressStep(ctx))
 	default:
-		b.send(ctx, "Выберите egress кнопкой выше, или /cancel.", nil)
+		b.send(ctx, b.text(msgDeviceChooseEgress), nil)
 	}
 }
 
-func validateHostRoute(value string) error {
+func validateHostRoute(l Localizer, value string) error {
 	prefix, err := netip.ParsePrefix(value)
 	if err != nil {
-		return fmt.Errorf("адрес должен быть host-маршрутом вида 10.80.0.2/32")
+		return errors.New(l.Text(msgHostRouteExampleError))
 	}
 	bits := 32
 	if prefix.Addr().Is6() {
 		bits = 128
 	}
 	if prefix.Bits() != bits {
-		return fmt.Errorf("адрес должен быть host-маршрутом, то есть /%d", bits)
+		return errors.New(l.Text(msgHostRouteBitsError, bits))
 	}
 	return nil
 }
@@ -359,11 +427,11 @@ func nextFreeAddress(cfg domain.Config) string {
 func (b *Bot) finishDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, egress string) result {
 	dialog := b.dialogs.current()
 	if dialog == nil || dialog.kind != dialogDeviceAdd || dialog.data["id"] == "" || dialog.data["address"] == "" {
-		return result{toast: "Диалог уже завершён", alert: true}
+		return result{toast: b.text(msgDialogStale), alert: true}
 	}
 	deviceID, address := dialog.data["id"], dialog.data["address"]
 
-	release, busy := b.claim("добавление устройства " + deviceID)
+	release, busy := b.claim(b.text(msgOperationDeviceAdd, deviceID))
 	if busy != nil {
 		return *busy
 	}
@@ -371,40 +439,40 @@ func (b *Bot) finishDeviceAdd(ctx context.Context, cb *tg.CallbackQuery, egress 
 
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 	}
 
 	// The private key exists only inside this call: it goes into the profile that
 	// leaves through the chat, and the hub keeps the public half in the config.
 	privateKey, publicKey, err := domain.GenerateX25519KeyPair()
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("не удалось сгенерировать ключ", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureGenerateKey), err))
 	}
 	if err := b.Editor.AddDevice(deviceID, address, publicKey, egress); err != nil {
-		return b.show(ctx, cb, renderFailure("устройство не добавилось", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureDeviceAdd), err))
 	}
 	undoAdd := func() error { return b.Editor.RemoveDevice(deviceID) }
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		return b.show(ctx, cb, revertEdit(
-			"отменено: конфигурация с новым устройством не проходит проверку", err, undoAdd))
+		return b.show(ctx, cb, revertEdit(b.L,
+			b.text(msgRevertNewDeviceInvalid), err, undoAdd))
 	}
 	if err := b.saveProfileKey(ctx, deviceID, privateKey); err != nil {
-		return b.show(ctx, cb, revertEdit(
-			"устройство отменено: ключ профиля не сохранился", err, undoAdd))
+		return b.show(ctx, cb, revertEdit(b.L,
+			b.text(msgRevertProfileKeySaveAdd), err, undoAdd))
 	}
 	b.dialogs.clear()
 
 	if outcome := b.sendProfile(ctx, cfg.Hub, deviceID, address, privateKey); outcome != nil {
 		return *outcome
 	}
-	view := b.afterConfigChange(fmt.Sprintf("✅ Устройство <b>%s</b> добавлено (%s → %s).\nПрофиль и QR-код выше — доставьте их на устройство и удалите из чата.", esc(deviceID), esc(address), esc(egress)), backToDevices)
+	view := b.afterConfigChange(b.text(msgDeviceAdded, esc(deviceID), esc(address), esc(egress)), b.backToDevices())
 	b.sendScreen(ctx, view)
-	return result{toast: "Устройство добавлено"}
+	return result{toast: b.text(msgToastDeviceAdded)}
 }
 
 func (b *Bot) saveProfileKey(ctx context.Context, deviceID, privateKey string) error {
 	if b.ProfileKeys == nil {
-		return fmt.Errorf("хранилище профилей не настроено")
+		return errors.New(b.text(msgProfileStoreNotConfigured))
 	}
 	return b.ProfileKeys.Save(ctx, deviceID, privateKey)
 }
@@ -413,7 +481,7 @@ func (b *Bot) saveProfileKey(ctx context.Context, deviceID, privateKey string) e
 // profile issued before key storage was introduced cannot be reconstructed, so the
 // operator gets an explicit, safe reissue path instead of a different profile.
 func (b *Bot) sendCurrentProfile(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busy := b.claim("отправка профиля " + deviceID)
+	release, busy := b.claim(b.text(msgOperationProfileSend, deviceID))
 	if busy != nil {
 		return *busy
 	}
@@ -421,7 +489,7 @@ func (b *Bot) sendCurrentProfile(ctx context.Context, cb *tg.CallbackQuery, devi
 
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 	}
 	var device domain.Device
 	for _, candidate := range cfg.Devices {
@@ -431,38 +499,38 @@ func (b *Bot) sendCurrentProfile(ctx context.Context, cb *tg.CallbackQuery, devi
 		}
 	}
 	if device.ID == "" {
-		return result{toast: "Устройство не найдено", alert: true}
+		return result{toast: b.text(msgFailureDeviceNotFound), alert: true}
 	}
 	revoked, err := b.Revocations.Load(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("не удалось проверить отзыв", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureRevocationCheck), err))
 	}
 	for _, id := range revoked {
 		if id == deviceID {
-			return result{toast: "Устройство отозвано — перевыпустите профиль", alert: true}
+			return result{toast: b.text(msgRevokedNeedsReissue), alert: true}
 		}
 	}
 	if b.ProfileKeys == nil {
-		return result{toast: "Хранилище профилей не настроено", alert: true}
+		return result{toast: b.text(msgProfileStoreUnavailable), alert: true}
 	}
 	privateKey, err := b.ProfileKeys.Load(ctx, deviceID)
 	if errors.Is(err, runtimeadapter.ErrProfileKeyNotFound) {
-		return result{toast: "Старый профиль не сохранён — перевыпустите его", alert: true}
+		return result{toast: b.text(msgOldProfileMissing), alert: true}
 	}
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("не удалось прочитать сохранённый профиль", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureStoredProfileRead), err))
 	}
 	publicKey, err := domain.PublicKeyFromPrivate(privateKey)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("сохранённый профиль повреждён", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureStoredProfileCorrupt), err))
 	}
 	if publicKey != device.PublicKey {
-		return result{toast: "Ключ изменён — перевыпустите профиль", alert: true}
+		return result{toast: b.text(msgProfileKeyChanged), alert: true}
 	}
 	if outcome := b.sendProfile(ctx, cfg.Hub, deviceID, device.Address, privateKey); outcome != nil {
 		return *outcome
 	}
-	return result{toast: "Профиль отправлен"}
+	return result{toast: b.text(msgToastProfileSent)}
 }
 
 // sendProfile renders the client profile and delivers it as a file plus a QR code.
@@ -470,20 +538,20 @@ func (b *Bot) sendCurrentProfile(ctx context.Context, cb *tg.CallbackQuery, devi
 func (b *Bot) sendProfile(ctx context.Context, hub domain.Hub, deviceID, address, privateKey string) *result {
 	profile, err := b.Profiles.Render(hub, address, privateKey)
 	if err != nil {
-		b.sendScreen(ctx, renderFailure("профиль не отрендерился", err))
-		return &result{toast: "Ошибка"}
+		b.sendScreen(ctx, renderFailure(b.L, b.text(msgFailureProfileRender), err))
+		return &result{toast: b.text(msgToastError)}
 	}
 	if _, err := b.API.SendDocument(ctx, b.Cfg.AdminID, deviceID+".conf", []byte(profile),
-		"Профиль AmneziaWG для <b>"+esc(deviceID)+"</b>"); err != nil {
-		b.sendScreen(ctx, renderFailure("не удалось отправить профиль", err))
-		return &result{toast: "Ошибка"}
+		b.text(msgProfileCaption, esc(deviceID))); err != nil {
+		b.sendScreen(ctx, renderFailure(b.L, b.text(msgFailureProfileSend), err))
+		return &result{toast: b.text(msgToastError)}
 	}
 	// The QR code is a convenience; the profile file above already succeeded, so a
 	// missing qrencode degrades politely rather than failing the whole flow.
 	if image, err := b.QR.PNG(ctx, profile); err != nil {
-		b.send(ctx, "⚠️ QR-код не получился: <code>"+esc(err.Error())+"</code>", nil)
+		b.send(ctx, b.text(msgProfileQRFailed, esc(err.Error())), nil)
 	} else if _, err := b.API.SendPhoto(ctx, b.Cfg.AdminID, deviceID+".png", image,
-		"Сканировать в приложении AmneziaWG"); err != nil {
+		b.text(msgProfileQRCaption)); err != nil {
 		b.logf("sendPhoto: %v", err)
 	}
 	b.sendFallbackProfiles(ctx, hub, deviceID, address, privateKey)
@@ -505,8 +573,7 @@ func (b *Bot) sendProfile(ctx context.Context, hub domain.Hub, deviceID, address
 // journal is not.
 func (b *Bot) fallbackFailed(ctx context.Context, way string, err error) {
 	b.logf("%s fallback: %v", way, err)
-	b.send(ctx, "⚠️ Запасной вход <b>"+way+"</b> включён, но выдать его не удалось: <code>"+
-		esc(err.Error())+"</code>\nУстройство работает обычным профилем.", nil)
+	b.send(ctx, b.text(msgFallbackFailed, way, esc(err.Error())), nil)
 }
 
 func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID, address, privateKey string) {
@@ -515,8 +582,7 @@ func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID
 			b.fallbackFailed(ctx, "UDP/443", err)
 		} else if _, err := b.API.SendDocument(ctx, b.Cfg.AdminID,
 			runtimeadapter.RealityProfileName(deviceID), []byte(profile),
-			"Запасной профиль на <b>UDP/443</b> — для сетей, где режут порт 51820. "+
-				"Тот же профиль, другой порт."); err != nil {
+			b.text(msgFallbackUDP443Caption)); err != nil {
 			b.fallbackFailed(ctx, "UDP/443", err)
 		}
 	}
@@ -553,12 +619,11 @@ func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID
 		return
 	}
 
-	b.send(ctx, "🛡 Запасной вход по <b>TCP/443</b> — для сетей, где UDP не проходит вовсе. "+
-		"Импортировать в v2rayNG, Hiddify или sing-box:\n\n<code>"+esc(link)+"</code>", nil)
+	b.send(ctx, b.text(msgFallbackReality, esc(link)), nil)
 	if image, err := b.QR.PNG(ctx, link); err != nil {
 		b.logf("reality qr: %v", err)
 	} else if _, err := b.API.SendPhoto(ctx, b.Cfg.AdminID, deviceID+"-reality.png", image,
-		"Сканировать в прокси-клиенте"); err != nil {
+		b.text(msgFallbackRealityCaption)); err != nil {
 		b.logf("sendPhoto: %v", err)
 	}
 }
@@ -566,7 +631,7 @@ func (b *Bot) sendFallbackProfiles(ctx context.Context, hub domain.Hub, deviceID
 // --- reissue / revoke ------------------------------------------------------
 
 func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busy := b.claim("перевыпуск профиля " + deviceID)
+	release, busy := b.claim(b.text(msgOperationProfileReissue, deviceID))
 	if busy != nil {
 		return *busy
 	}
@@ -574,7 +639,7 @@ func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID 
 
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureConfigUnreadable), err))
 	}
 	var device domain.Device
 	for _, candidate := range cfg.Devices {
@@ -583,42 +648,42 @@ func (b *Bot) reissueDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID 
 		}
 	}
 	if device.ID == "" {
-		return result{toast: "Устройство не найдено", alert: true}
+		return result{toast: b.text(msgFailureDeviceNotFound), alert: true}
 	}
 
 	privateKey, publicKey, err := domain.GenerateX25519KeyPair()
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("не удалось сгенерировать ключ", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureGenerateKey), err))
 	}
 	if err := b.Editor.SetDeviceField(deviceID, "public_key", publicKey); err != nil {
-		return b.show(ctx, cb, renderFailure("ключ не записался", err))
+		return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureKeyWrite), err))
 	}
 	undoKey := func() error {
 		return b.Editor.SetDeviceField(deviceID, "public_key", device.PublicKey)
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		return b.show(ctx, cb, revertEdit("отменено: конфигурация не проходит проверку", err, undoKey))
+		return b.show(ctx, cb, revertEdit(b.L, b.text(msgRevertInvalidConfig), err, undoKey))
 	}
 	if err := b.saveProfileKey(ctx, deviceID, privateKey); err != nil {
-		return b.show(ctx, cb, revertEdit("отменено: ключ профиля не сохранился", err, undoKey))
+		return b.show(ctx, cb, revertEdit(b.L, b.text(msgRevertProfileKeySaveReissue), err, undoKey))
 	}
 	// A re-issued device is meant to work again: lifting the revocation is part of
 	// the same operation, not a separate thing to remember.
 	b.self.mark(b.Now())
 	if err := b.Revocations.Remove(ctx, deviceID); err != nil {
-		b.send(ctx, "⚠️ Отзыв не снялся: <code>"+esc(err.Error())+"</code>", nil)
+		b.send(ctx, b.text(msgRevocationRemoveFailed, esc(err.Error())), nil)
 	}
 
 	if outcome := b.sendProfile(ctx, cfg.Hub, deviceID, device.Address, privateKey); outcome != nil {
 		return *outcome
 	}
-	view := b.afterConfigChange(fmt.Sprintf("📤 Профиль <b>%s</b> перевыпущен, отзыв снят (если был).\nСтарый профиль перестанет работать после деплоя.", esc(deviceID)), backToDevices)
+	view := b.afterConfigChange(b.text(msgDeviceReissued, esc(deviceID)), b.backToDevices())
 	b.sendScreen(ctx, view)
-	return result{toast: "Профиль перевыпущен"}
+	return result{toast: b.text(msgToastProfileReissued)}
 }
 
 func (b *Bot) revokeDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID string) result {
-	release, busy := b.claim("отзыв устройства " + deviceID)
+	release, busy := b.claim(b.text(msgOperationDeviceRevoke, deviceID))
 	if busy != nil {
 		return *busy
 	}
@@ -626,9 +691,9 @@ func (b *Bot) revokeDevice(ctx context.Context, cb *tg.CallbackQuery, deviceID s
 
 	b.self.mark(b.Now())
 	if err := b.Revocations.Add(ctx, deviceID); err != nil {
-		return result{toast: err.Error(), alert: true}
+		return result{toast: b.text(msgOperationFailed, err.Error()), alert: true}
 	}
-	outcome := b.show(ctx, cb, b.afterConfigChange(fmt.Sprintf("🚫 Устройство <b>%s</b> отозвано.", esc(deviceID)), backToDevices))
-	outcome.toast = "Отозвано"
+	outcome := b.show(ctx, cb, b.afterConfigChange(b.text(msgDeviceRevokedSuccess, esc(deviceID)), b.backToDevices()))
+	outcome.toast = b.text(msgToastDeviceRevoked)
 	return outcome
 }

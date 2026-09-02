@@ -11,12 +11,6 @@ import (
 func TestLegacyRussianMessagesDoNotMixEnglishFragments(t *testing.T) {
 	t.Parallel()
 
-	t.Run("tunnel progress", func(t *testing.T) {
-		got := legacyRussianTunnelTestProgress(2)
-		want := "🩺 Проверяю 2 туннеля…"
-		assertLegacyRussianMessage(t, got, want, "tunnels")
-	})
-
 	t.Run("subscription progress", func(t *testing.T) {
 		instance, api := hubFixture(t)
 		instance.progressEditor(context.Background(), adminID, 7, "wg-nl")(2, 3, []string{"timeout"})

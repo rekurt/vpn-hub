@@ -45,9 +45,9 @@ func (b *Bot) clientACLEntries(ctx context.Context) ([]clientACLEntry, []string,
 func (b *Bot) buildClientACLs(ctx context.Context) screen {
 	entries, _, err := b.clientACLEntries(ctx)
 	if err != nil {
-		return renderFailure("конфигурация не читается", err)
+		return renderFailure(b.L, "конфигурация не читается", err)
 	}
-	return scr(renderClientACLs(task2EnglishLocalizer, entries))
+	return scr(renderClientACLs(b.L, entries))
 }
 
 func (b *Bot) routeClientACLs(ctx context.Context, cb *tg.CallbackQuery, action string, args []string) result {
@@ -60,18 +60,18 @@ func (b *Bot) routeClientACLs(ctx context.Context, cb *tg.CallbackQuery, action 
 	case "add":
 		_, devices, err := b.clientACLEntries(ctx)
 		if err != nil {
-			return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+			return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
 		}
-		return b.show(ctx, cb, scr(renderClientACLSource(task2EnglishLocalizer, devices)))
+		return b.show(ctx, cb, scr(renderClientACLSource(b.L, devices)))
 	case "src":
 		if len(args) < 1 {
 			return result{toast: "Нет source"}
 		}
 		_, devices, err := b.clientACLEntries(ctx)
 		if err != nil {
-			return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+			return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
 		}
-		return b.show(ctx, cb, scr(renderClientACLTarget(task2EnglishLocalizer, args[0], devices)))
+		return b.show(ctx, cb, scr(renderClientACLTarget(b.L, args[0], devices)))
 	case "tgt":
 		if len(args) < 2 {
 			return result{toast: "Нет target"}
@@ -87,7 +87,7 @@ func (b *Bot) routeClientACLs(ctx context.Context, cb *tg.CallbackQuery, action 
 		}
 		entries, _, err := b.clientACLEntries(ctx)
 		if err != nil {
-			return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+			return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
 		}
 		var target *domain.ClientACL
 		for _, entry := range entries {
@@ -99,7 +99,7 @@ func (b *Bot) routeClientACLs(ctx context.Context, cb *tg.CallbackQuery, action 
 		if target == nil {
 			return result{toast: "Правило уже изменилось", alert: true}
 		}
-		return b.show(ctx, cb, scr(renderConfirm(task2EnglishLocalizer,
+		return b.show(ctx, cb, scr(renderConfirm(b.L,
 			fmt.Sprintf("Удалить доступ <code>%s</code> → <code>%s</code> <code>%s/%d</code>?", esc(target.Source), esc(target.Target), esc(string(target.Protocol)), target.Port),
 			"acl:rm!:"+args[0], "acl")))
 	case "rm!":
@@ -133,7 +133,7 @@ func (b *Bot) addClientACL(ctx context.Context, cb *tg.CallbackQuery, source, ta
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		view := revertEdit("Изменение отменено, конфигурация не проходит проверку", err, func() error {
+		view := revertEdit(b.L, "Изменение отменено, конфигурация не проходит проверку", err, func() error {
 			return editor.RemoveClientACL(source, target, string(protocol), port)
 		})
 		return b.show(ctx, cb, view)
@@ -145,7 +145,7 @@ func (b *Bot) addClientACL(ctx context.Context, cb *tg.CallbackQuery, source, ta
 func (b *Bot) removeClientACL(ctx context.Context, cb *tg.CallbackQuery, ordinal string) result {
 	entries, _, err := b.clientACLEntries(ctx)
 	if err != nil {
-		return b.show(ctx, cb, renderFailure("конфигурация не читается", err))
+		return b.show(ctx, cb, renderFailure(b.L, "конфигурация не читается", err))
 	}
 	var target *domain.ClientACL
 	for _, entry := range entries {
@@ -167,7 +167,7 @@ func (b *Bot) removeClientACL(ctx context.Context, cb *tg.CallbackQuery, ordinal
 		return result{toast: err.Error(), alert: true}
 	}
 	if _, err := b.Service.LoadAndValidate(ctx); err != nil {
-		view := revertEdit("Изменение отменено, конфигурация не проходит проверку", err, func() error {
+		view := revertEdit(b.L, "Изменение отменено, конфигурация не проходит проверку", err, func() error {
 			return editor.AddClientACL(target.Source, target.Target, string(target.Protocol), target.Port)
 		})
 		return b.show(ctx, cb, view)

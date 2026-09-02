@@ -101,6 +101,7 @@ type upstreamStore interface {
 type Bot struct {
 	API API
 	Cfg Config
+	L   Localizer
 	// Out receives the bot's own diagnostics, which land in its journal.
 	Out io.Writer
 
@@ -197,12 +198,15 @@ func New(cfg Config, client *tg.Client, configPath, stateDir, configDir, runtime
 
 // init sets up the internal state New and the tests both need.
 func (b *Bot) init() {
-	locale, err := normalizeLocale(b.Cfg.Locale)
-	if err != nil {
-		b.initErr = err
-		return
+	if b.L.Locale() == "" {
+		localizer, err := NewLocalizer(b.Cfg.Locale)
+		if err != nil {
+			b.initErr = err
+			return
+		}
+		b.L = localizer
 	}
-	b.Cfg.Locale = locale
+	b.Cfg.Locale = b.L.Locale()
 	b.initErr = nil
 
 	if b.events == nil {
@@ -296,20 +300,50 @@ func (b *Bot) supervise(ctx context.Context, name string, worker func()) {
 	}()
 }
 
-var botCommands = []tg.BotCommand{
-	{Command: "start", Description: "Главное меню"},
-	{Command: "status", Description: "Статус хаба"},
-	{Command: "devices", Description: "Устройства"},
-	{Command: "tunnels", Description: "Туннели"},
-	{Command: "deploy", Description: "Деплой конфигурации"},
-	{Command: "subs", Description: "Подписки"},
-	{Command: "routes", Description: "Маршруты"},
-	{Command: "client_acls", Description: "Доступ между устройствами"},
-	{Command: "logs", Description: "Логи"},
-	{Command: "host", Description: "Хост и юниты"},
-	{Command: "hub", Description: "Параметры хаба"},
-	{Command: "settings", Description: "Уведомления"},
-	{Command: "cancel", Description: "Прервать диалог"},
+const (
+	msgCommandStart      MessageID = "command/start"
+	msgCommandStatus     MessageID = "command/status"
+	msgCommandDevices    MessageID = "command/devices"
+	msgCommandTunnels    MessageID = "command/tunnels"
+	msgCommandDeploy     MessageID = "command/deploy"
+	msgCommandSubs       MessageID = "command/subscriptions"
+	msgCommandRoutes     MessageID = "command/routes"
+	msgCommandClientACLs MessageID = "command/client_acls"
+	msgCommandLogs       MessageID = "command/logs"
+	msgCommandHost       MessageID = "command/host"
+	msgCommandHub        MessageID = "command/hub"
+	msgCommandSettings   MessageID = "command/settings"
+	msgCommandCancel     MessageID = "command/cancel"
+	msgStartup           MessageID = "bot/startup"
+	msgCancelEmpty       MessageID = "dialog/cancel_empty"
+	msgDialogCancelled   MessageID = "dialog/cancelled"
+	msgUnknownCommand    MessageID = "bot/unknown_command"
+	msgUnknownButton     MessageID = "bot/unknown_button"
+	msgBusyToast         MessageID = "operation/busy_toast"
+	msgBusyDialog        MessageID = "operation/busy_dialog"
+	msgOperationFailed   MessageID = "operation/failed"
+)
+
+func botCommands(l Localizer) []tg.BotCommand {
+	return []tg.BotCommand{
+		{Command: "start", Description: l.Text(msgCommandStart)},
+		{Command: "status", Description: l.Text(msgCommandStatus)},
+		{Command: "devices", Description: l.Text(msgCommandDevices)},
+		{Command: "tunnels", Description: l.Text(msgCommandTunnels)},
+		{Command: "deploy", Description: l.Text(msgCommandDeploy)},
+		{Command: "subs", Description: l.Text(msgCommandSubs)},
+		{Command: "routes", Description: l.Text(msgCommandRoutes)},
+		{Command: "client_acls", Description: l.Text(msgCommandClientACLs)},
+		{Command: "logs", Description: l.Text(msgCommandLogs)},
+		{Command: "host", Description: l.Text(msgCommandHost)},
+		{Command: "hub", Description: l.Text(msgCommandHub)},
+		{Command: "settings", Description: l.Text(msgCommandSettings)},
+		{Command: "cancel", Description: l.Text(msgCommandCancel)},
+	}
+}
+
+func (b *Bot) text(id MessageID, args ...any) string {
+	return b.L.Text(id, args...)
 }
 
 // Run drives the update loop until the context ends. Everything the bot does on
@@ -320,7 +354,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		return b.initErr
 	}
 	b.loadAlertSettings(ctx)
-	if err := b.API.SetMyCommands(ctx, botCommands); err != nil {
+	if err := b.API.SetMyCommands(ctx, botCommands(b.L)); err != nil {
 		b.logf("setMyCommands: %v", err)
 	}
 
@@ -333,8 +367,8 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	b.resumePendingDeploy(ctx)
 
-	menu := scr(renderMain(task2EnglishLocalizer))
-	if _, err := b.API.SendMessage(ctx, b.Cfg.AdminID, "🤖 Бот запущен.\n\n"+menu.text, menu.markup); err != nil {
+	menu := scr(renderMain(b.L))
+	if _, err := b.API.SendMessage(ctx, b.Cfg.AdminID, b.text(msgStartup)+"\n\n"+menu.text, menu.markup); err != nil {
 		b.logf("startup message: %v", err)
 	}
 
@@ -416,7 +450,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *tg.Message) {
 		b.handleDialogInput(ctx, text)
 		return
 	}
-	b.sendScreen(ctx, scr(renderMain(task2EnglishLocalizer)))
+	b.sendScreen(ctx, scr(renderMain(b.L)))
 }
 
 func (b *Bot) handleCommand(ctx context.Context, command string) {
@@ -427,7 +461,7 @@ func (b *Bot) handleCommand(ctx context.Context, command string) {
 	}
 	switch command {
 	case "start", "menu", "help":
-		b.sendScreen(ctx, scr(renderMain(task2EnglishLocalizer)))
+		b.sendScreen(ctx, scr(renderMain(b.L)))
 	case "status":
 		b.sendScreen(ctx, b.buildStatus(ctx))
 	case "devices":
@@ -452,13 +486,15 @@ func (b *Bot) handleCommand(ctx context.Context, command string) {
 		b.sendScreen(ctx, b.buildSettings())
 	case "cancel":
 		if b.dialogs.current() == nil {
-			b.send(ctx, "Нечего отменять.", nil)
+			b.send(ctx, b.text(msgCancelEmpty), nil)
 			return
 		}
 		b.dialogs.clear()
-		b.send(ctx, "✖️ Диалог отменён.", nil)
+		b.send(ctx, b.text(msgDialogCancelled), nil)
 	default:
-		b.sendScreen(ctx, scr(renderMain(task2EnglishLocalizer)))
+		menu := scr(renderMain(b.L))
+		menu.text = b.text(msgUnknownCommand) + "\n\n" + menu.text
+		b.sendScreen(ctx, menu)
 	}
 }
 
@@ -506,7 +542,7 @@ func (b *Bot) routeCallback(ctx context.Context, cb *tg.CallbackQuery, parts []s
 
 	switch parts[0] {
 	case "m":
-		return b.show(ctx, cb, scr(renderMain(task2EnglishLocalizer)))
+		return b.show(ctx, cb, scr(renderMain(b.L)))
 	case "st":
 		return b.show(ctx, cb, b.buildStatus(ctx))
 	case "dev":
@@ -530,7 +566,7 @@ func (b *Bot) routeCallback(ctx context.Context, cb *tg.CallbackQuery, parts []s
 	case "set":
 		return b.routeSettings(ctx, cb, action, args)
 	default:
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 }
 
