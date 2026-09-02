@@ -35,6 +35,7 @@ RuntimeDirectoryPreserve=yes
 # upstream link files live there.
 ProtectSystem=strict
 ReadWritePaths=/etc/vpn-hub /run/vpn-hub
+Environment=SOPS_AGE_KEY_FILE=/etc/vpn-hub/age/keys.txt
 UMask=0077
 ProtectHome=true
 PrivateTmp=true

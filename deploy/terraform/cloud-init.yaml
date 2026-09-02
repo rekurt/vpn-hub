@@ -101,6 +101,21 @@ write_files:
       rm -rf "${SINGBOX_TGZ}" "sing-box-${SINGBOX_VERSION}-linux-amd64"
       sing-box version | head -1
 
+      echo "==> SOPS for encrypted hub configuration"
+      SOPS_VERSION="3.13.3"
+      SOPS_SHA256="e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b"
+      SOPS_BINARY="sops-v${SOPS_VERSION}.linux.amd64"
+      cd /tmp
+      curl -fsSLO "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/${SOPS_BINARY}"
+      if ! echo "${SOPS_SHA256}  ${SOPS_BINARY}" | sha256sum -c -; then
+        echo "SOPS checksum mismatch; refusing to install" >&2
+        rm -f "${SOPS_BINARY}"
+        exit 1
+      fi
+      install -m 0755 "${SOPS_BINARY}" /usr/local/bin/sops
+      rm -f "${SOPS_BINARY}"
+      sops --version
+
       echo "==> hand the firewall to the agent"
       # ufw and the distro nftables unit both install their own rulesets and would
       # fight the agent, which owns the `inet vpn_hub` table and reinstalls it on
@@ -114,7 +129,10 @@ write_files:
 
       echo "==> directories owned by the hub"
       install -d -m 0700 /var/lib/vpn-hub
-      install -d -m 0755 /etc/vpn-hub
+      install -d -m 0700 /etc/vpn-hub
+      install -d -m 0700 /etc/vpn-hub/age
+      # The operator must place the SOPS age identity in keys.txt with mode 0600
+      # before enabling a service that decrypts hub configuration.
 
       echo "==> bootstrap complete"
 
