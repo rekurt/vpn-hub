@@ -11,16 +11,18 @@
     "preview": "astro preview",
     "check": "astro check",
     "verify:content": "node scripts/verify-content.mjs",
-    "test:verify-content": "node scripts/test-verify-content.mjs"
+    "test:verify-content": "node scripts/test-verify-content.mjs",
+    "test:built-site": "node scripts/test-built-site.mjs"
   },
   "dependencies": {
     "@astrojs/sitemap": "3.7.4",
     "@astrojs/starlight": "0.41.11",
     "astro": "7.2.10",
-    "sharp": "0.35.4"
+    "sharp": "0.35.4",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.10",
-    "typescript": "7.0.2"
+    "typescript": "6.0.3"
   }
 }

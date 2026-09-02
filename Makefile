@@ -43,7 +43,7 @@ site:
 
 ## site-check: install and run all static documentation checks
 site-check:
-	cd site && npm ci && npm run test:verify-content && npm run verify:content && npm run check && npm run build
+	cd site && npm ci && npm run test:verify-content && npm run verify:content && npm run check && npm run build && npm run test:built-site
 
 ## bot-docs: regenerate tested Telegram UI examples for the website
 bot-docs:
