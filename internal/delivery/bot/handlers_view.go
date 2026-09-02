@@ -39,6 +39,13 @@ const (
 )
 
 func renderFailure(l Localizer, what string, err error) screen {
+	var safe interface{ safeMessageID() MessageID }
+	if errors.As(err, &safe) {
+		return screen{
+			text:   "⚠️ " + l.Text(safe.safeMessageID()),
+			markup: keyboard(backRow(l)),
+		}
+	}
 	return screen{
 		text:   "⚠️ " + what + ":\n<code>" + esc(err.Error()) + "</code>",
 		markup: keyboard(backRow(l)),

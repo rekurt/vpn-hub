@@ -886,9 +886,7 @@ const (
 	msgRefreshResultApply      MessageID = "refresh/result_apply"
 	msgRefreshFailureTitle     MessageID = "refresh/failure_title"
 	msgRefreshFailureUnchanged MessageID = "refresh/failure_unchanged"
-	msgRefreshRejectedTitle    MessageID = "refresh/rejected_title"
-	msgRefreshRejectedMore     MessageID = "refresh/rejected_more"
-	msgRefreshRejectedReason   MessageID = "refresh/rejected_reason"
+	msgRefreshRejectedSummary  MessageID = "refresh/rejected_summary"
 	msgRoutesTitle             MessageID = "routes/title"
 	msgRoutesLine              MessageID = "routes/line"
 	msgRoutesEmpty             MessageID = "routes/empty"
@@ -990,11 +988,11 @@ func renderCandidates(l Localizer, tunnelID string, candidates []domain.ProxyTun
 	return b.String(), keyboard(rows...)
 }
 
-func renderRefreshResult(l Localizer, tunnelID string, chosen domain.ProxyTunnel, rejected []string, agentWarning string) (string, *tg.InlineKeyboardMarkup) {
+func renderRefreshResult(l Localizer, tunnelID string, chosen domain.ProxyTunnel, rejectedCount int, agentWarning string) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
 	b.WriteString(l.Text(msgRefreshResultTitle, esc(tunnelID)))
 	b.WriteString(l.Text(msgRefreshResultChosen, esc(chosen.Server), chosen.Port))
-	appendRejections(l, &b, rejected)
+	appendRejectionSummary(l, &b, rejectedCount)
 	// No deploy involved: the revision names the link file, not its contents, so
 	// the agent re-reads it and restarts the proxy on its next pass by itself.
 	b.WriteString(l.Text(msgRefreshResultApply))
@@ -1006,26 +1004,26 @@ func renderRefreshResult(l Localizer, tunnelID string, chosen domain.ProxyTunnel
 	)
 }
 
-func renderRefreshFailure(l Localizer, tunnelID string, rejected []string, message string) (string, *tg.InlineKeyboardMarkup) {
+func renderRefreshFailure(l Localizer, tunnelID string, rejectedCount int, failure subscriptionFailureKind) (string, *tg.InlineKeyboardMarkup) {
 	var b strings.Builder
-	b.WriteString(l.Text(msgRefreshFailureTitle, esc(tunnelID), esc(message)))
-	appendRejections(l, &b, rejected)
+	b.WriteString(l.Text(msgRefreshFailureTitle, esc(tunnelID), l.Text(failure.messageID())))
+	appendRejectionSummary(l, &b, rejectedCount)
 	b.WriteString(l.Text(msgRefreshFailureUnchanged))
 	return b.String(), keyboard([]tg.InlineKeyboardButton{btn("📡 "+l.Text(msgButtonSubscriptions), "sub"), btn("🏠 "+l.Text(msgButtonMenu), "m")})
 }
 
-func appendRejections(l Localizer, b *strings.Builder, rejected []string) {
-	if len(rejected) == 0 {
+func renderSubscriptionFailure(l Localizer, failure subscriptionFailureKind) screen {
+	return screen{
+		text:   "⚠️ " + l.Text(failure.messageID()),
+		markup: keyboard(backRow(l)),
+	}
+}
+
+func appendRejectionSummary(l Localizer, b *strings.Builder, rejectedCount int) {
+	if rejectedCount == 0 {
 		return
 	}
-	b.WriteString(l.Text(msgRefreshRejectedTitle, len(rejected)))
-	for index, reason := range rejected {
-		if index == 10 {
-			b.WriteString(l.Text(msgRefreshRejectedMore, len(rejected)-index))
-			break
-		}
-		b.WriteString(l.Text(msgRefreshRejectedReason, esc(shorten(reason, 120))))
-	}
+	b.WriteString(l.Text(msgRefreshRejectedSummary, rejectedCount))
 }
 
 // --- Routes ----------------------------------------------------------------

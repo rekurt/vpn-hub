@@ -146,7 +146,7 @@ func TestJournalConvergenceNotificationLocalizesKnownRevision(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.locale), func(t *testing.T) {
-			l, err := NewLocalizer(tt.locale)
+			l, err := newStrictLocalizer(tt.locale)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -179,7 +179,7 @@ func TestJournalUnknownConvergenceFormUsesSafeLocalizedFallback(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.locale), func(t *testing.T) {
-			l, err := NewLocalizer(tt.locale)
+			l, err := newStrictLocalizer(tt.locale)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -202,7 +202,7 @@ func TestJournalUnknownConvergenceFormUsesSafeLocalizedFallback(t *testing.T) {
 
 func TestNotificationTextEscapesRuntimeValuesAndKeepsRawDetails(t *testing.T) {
 	t.Parallel()
-	l, err := NewLocalizer(LocaleEnglish)
+	l, err := newStrictLocalizer(LocaleEnglish)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestNotificationTextEscapesRuntimeValuesAndKeepsRawDetails(t *testing.T) {
 
 func traceNotifications(t *testing.T, locale Locale) notificationTrace {
 	t.Helper()
-	l, err := NewLocalizer(locale)
+	l, err := newStrictLocalizer(locale)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestClassifyAgentLine(t *testing.T) {
 		{"   ", "", false},
 	}
 	for _, testCase := range cases {
-		l, err := NewLocalizer(LocaleEnglish)
+		l, err := newStrictLocalizer(LocaleEnglish)
 		if err != nil {
 			t.Fatal(err)
 		}
