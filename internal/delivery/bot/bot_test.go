@@ -40,6 +40,7 @@ type fakeAPI struct {
 	edits       []sent
 	screens     []sent // sent + edits in delivery order
 	docs        []string
+	docCaptions []string
 	photos      []string
 	toasts      []string
 	commands    []tg.BotCommand
@@ -48,6 +49,7 @@ type fakeAPI struct {
 	// failDocumentsAfter, when > 0, makes SendDocument fail once that many have
 	// succeeded -- used to drive partial-failure flows.
 	failDocumentsAfter int
+	failDocuments      bool
 }
 
 func (f *fakeAPI) GetUpdates(context.Context, int64, int) ([]tg.Update, error) { return nil, nil }
@@ -76,13 +78,14 @@ func (f *fakeAPI) AnswerCallbackQuery(_ context.Context, _, text string, _ bool)
 	return nil
 }
 
-func (f *fakeAPI) SendDocument(_ context.Context, _ int64, filename string, _ []byte, _ string) (tg.Message, error) {
+func (f *fakeAPI) SendDocument(_ context.Context, _ int64, filename string, _ []byte, caption string) (tg.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.failDocumentsAfter > 0 && len(f.docs) >= f.failDocumentsAfter {
+	if f.failDocuments || (f.failDocumentsAfter > 0 && len(f.docs) >= f.failDocumentsAfter) {
 		return tg.Message{}, fmt.Errorf("document delivery failed (test)")
 	}
 	f.docs = append(f.docs, filename)
+	f.docCaptions = append(f.docCaptions, caption)
 	return tg.Message{}, nil
 }
 
@@ -127,6 +130,35 @@ func (fakeUnits) Status(_ context.Context, unit string) (linux.UnitStatus, error
 }
 func (fakeUnits) ListMatching(context.Context, string) ([]linux.UnitStatus, error) { return nil, nil }
 func (fakeUnits) Restart(context.Context, string) error                            { return nil }
+
+type branchJournal struct {
+	tail string
+	err  error
+}
+
+func (j branchJournal) Tail(context.Context, string, int) (string, error) { return j.tail, j.err }
+func (branchJournal) Follow(context.Context, []string) <-chan linux.JournalEntry {
+	entries := make(chan linux.JournalEntry)
+	close(entries)
+	return entries
+}
+
+type branchUnits struct {
+	status     linux.UnitStatus
+	statusErr  error
+	listErr    error
+	restartErr error
+}
+
+func (u branchUnits) Status(_ context.Context, unit string) (linux.UnitStatus, error) {
+	status := u.status
+	status.Unit = unit
+	return status, u.statusErr
+}
+func (u branchUnits) ListMatching(context.Context, string) ([]linux.UnitStatus, error) {
+	return nil, u.listErr
+}
+func (u branchUnits) Restart(context.Context, string) error { return u.restartErr }
 
 type fakeQR struct{}
 
@@ -521,6 +553,35 @@ func findButton(t *testing.T, markup *tg.InlineKeyboardMarkup, want string) stri
 	return ""
 }
 
+func findCallbackPrefix(t *testing.T, markup *tg.InlineKeyboardMarkup, prefix string) string {
+	t.Helper()
+	if markup == nil {
+		t.Fatalf("no keyboard while looking for callback prefix %q", prefix)
+	}
+	for _, row := range markup.InlineKeyboard {
+		for _, button := range row {
+			if strings.HasPrefix(button.CallbackData, prefix) {
+				return button.CallbackData
+			}
+		}
+	}
+	t.Fatalf("no callback prefix %q in %+v", prefix, markup.InlineKeyboard)
+	return ""
+}
+
+func lastScreenContaining(t *testing.T, api *fakeAPI, fragment string) sent {
+	t.Helper()
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	for index := len(api.screens) - 1; index >= 0; index-- {
+		if strings.Contains(api.screens[index].text, fragment) {
+			return api.screens[index]
+		}
+	}
+	t.Fatalf("no screen contains %q", fragment)
+	return sent{}
+}
+
 func lastToast(t *testing.T, api *fakeAPI) string {
 	t.Helper()
 	api.mu.Lock()
@@ -791,7 +852,7 @@ func TestDeployRefusesAStaleButton(t *testing.T) {
 	api.mu.Lock()
 	lastToast := api.toasts[len(api.toasts)-1]
 	api.mu.Unlock()
-	if !strings.Contains(lastToast, "Конфигурация изменилась") {
+	if !strings.Contains(lastToast, "Configuration changed") {
 		t.Fatalf("expected the stale-preview refusal, got %q", lastToast)
 	}
 	if _, err := instance.Revisions.Load(ctx); err == nil {
@@ -818,30 +879,370 @@ func TestBusyGateAnswersWithTheRunningOperation(t *testing.T) {
 	}
 }
 
-func TestEnglishACLResultRemainsConsistentlyLegacyRussian(t *testing.T) {
-	t.Parallel()
-	instance, api := hubFixtureLocale(t, LocaleEnglish)
+func TestACLResultIsLocalized(t *testing.T) {
+	tests := []struct {
+		locale Locale
+		want   []string
+	}{
+		{LocaleEnglish, []string{
+			"🔐 Access allowed from <b>any</b> to <b>macbook</b> on <code>tcp/22</code>.",
+			"The change will take effect after deployment.", "🚀 Deploy", "🏠 Menu",
+		}},
+		{LocaleRussian, []string{
+			"🔐 Разрешён доступ <b>any</b> → <b>macbook</b> <code>tcp/22</code>.",
+			"Изменение вступит в силу после деплоя.", "🚀 Деплой", "🏠 Меню",
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.locale), func(t *testing.T) {
+			instance, api := hubFixtureLocale(t, tt.locale)
+			instance.addClientACL(context.Background(), nil, domain.ClientACLAny, "macbook", domain.ClientACLTCP, 22)
+			view := api.lastScreen(t)
+			for _, fragment := range tt.want {
+				if !strings.Contains(view.text+screenButtonText(view.markup), fragment) {
+					t.Fatalf("localized ACL result is missing %q: text=%q markup=%+v", fragment, view.text, view.markup)
+				}
+			}
+			if got := screenCallbackData(view.markup); !equalStrings(got, []string{"dep", "acl", "m"}) {
+				t.Fatalf("ACL result callbacks = %v", got)
+			}
+		})
+	}
+}
 
-	instance.addClientACL(context.Background(), nil, domain.ClientACLAny, "macbook", domain.ClientACLTCP, 22)
+type dangerousActionTrace struct {
+	confirmations map[string]string
+	terminals     map[string]string
+	callbacks     map[string][]string
+}
+
+func TestDangerousActionsLocaleMatrix(t *testing.T) {
+	englishBot, englishAPI := hubFixtureLocale(t, LocaleEnglish)
+	russianBot, russianAPI := hubFixtureLocale(t, LocaleRussian)
+	if err := os.WriteFile(russianBot.ConfigPath, []byte(read(t, englishBot.ConfigPath)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	english := collectDangerousActionTrace(t, englishBot, englishAPI, LocaleEnglish)
+	russian := collectDangerousActionTrace(t, russianBot, russianAPI, LocaleRussian)
+
+	if got, want := fmt.Sprint(english.callbacks), fmt.Sprint(russian.callbacks); got != want {
+		t.Fatalf("dangerous-action callbacks differ by locale:\nEnglish: %s\nRussian: %s", got, want)
+	}
+	for action, callbacks := range english.callbacks {
+		if len(callbacks) == 0 {
+			t.Errorf("%s emitted no confirmation callback", action)
+		}
+	}
+
+	wants := map[Locale]map[string][]string{
+		LocaleEnglish: {
+			"immediate": {"without rollback protection", "provider console", "saved without rollback protection"},
+			"insured":   {"How long do you need to confirm?", "restores the previous revision", "awaits confirmation"},
+			"confirm":   {"awaits confirmation", "confirmed, rollback protection is disarmed"},
+			"rollback":  {"Restore the previous revision?", "Restored revision"},
+			"acl":       {"Remove access", "Rule removed"},
+			"lkg":       {"Restore the previous upstream", "restored upstream"},
+			"key":       {"All devices lose connectivity", "rollback will <b>not restore</b> the old key", "Key rotation complete"},
+			"export":    {"subscription URLs with tokens", "Provider files and keys are not exported", "Exported files: 1 of 1"},
+			"restart":   {"Restart the agent?", "Agent restarted"},
+		},
+		LocaleRussian: {
+			"immediate": {"без страховки", "консоль провайдера", "сохранена без страховки"},
+			"insured":   {"За какое время успеете подтвердить?", "агент вернёт предыдущую ревизию", "ждёт подтверждения"},
+			"confirm":   {"ждёт подтверждения", "подтверждена, страховка снята"},
+			"rollback":  {"Вернуть предыдущую ревизию?", "Восстановлена ревизия"},
+			"acl":       {"Удалить доступ", "Правило удалено"},
+			"lkg":       {"Вернуть предыдущий upstream", "восстановлен upstream"},
+			"key":       {"Все устройства теряют связь", "Откат ревизии <b>не вернёт</b> старый ключ", "Ротация завершена"},
+			"export":    {"подписочные URL с токенами", "Файлы провайдеров и ключи не выгружаются", "Выгружено файлов: 1 из 1"},
+			"restart":   {"Перезапустить агента?", "Агент перезапущен"},
+		},
+	}
+
+	for locale, trace := range map[Locale]dangerousActionTrace{LocaleEnglish: english, LocaleRussian: russian} {
+		for action, fragments := range wants[locale] {
+			combined := trace.confirmations[action] + "\n" + trace.terminals[action]
+			for _, fragment := range fragments {
+				if !strings.Contains(combined, fragment) {
+					t.Errorf("%s %s flow is missing %q:\n%s", locale, action, fragment, combined)
+				}
+			}
+		}
+		if count := strings.Count(trace.confirmations["key"], "⚠️"); count != 3 {
+			t.Errorf("%s key rotation has %d warnings, want 3:\n%s", locale, count, trace.confirmations["key"])
+		}
+	}
+}
+
+func collectDangerousActionTrace(t *testing.T, instance *Bot, api *fakeAPI, locale Locale) dangerousActionTrace {
+	t.Helper()
+	ctx := context.Background()
+	trace := dangerousActionTrace{
+		confirmations: map[string]string{},
+		terminals:     map[string]string{},
+		callbacks:     map[string][]string{},
+	}
+
+	instance.handleUpdate(ctx, tap(adminID, "dep"))
+	now := findCallbackPrefix(t, api.lastScreen(t).markup, "dep:now:")
+	instance.handleUpdate(ctx, tap(adminID, now))
 	view := api.lastScreen(t)
-	for _, fragment := range []string{
-		"🔐 Разрешён доступ <b>any</b> → <b>macbook</b> <code>tcp/22</code>.",
-		"Изменение вступит в силу после деплоя.",
-		"🚀 Деплой",
-		"🏠 Меню",
-	} {
-		if !strings.Contains(view.text+screenButtonText(view.markup), fragment) {
-			t.Fatalf("legacy ACL result is missing %q: text=%q markup=%+v", fragment, view.text, view.markup)
+	trace.confirmations["immediate"] = view.text
+	trace.callbacks["immediate"] = screenCallbackData(view.markup)
+	instance.handleUpdate(ctx, tap(adminID, findCallbackPrefix(t, view.markup, "dep:now!:")))
+	trace.terminals["immediate"] = api.lastScreen(t).text
+
+	instance.handleUpdate(ctx, tap(adminID, "dev:eg:macbook:wg-nl"))
+	instance.handleUpdate(ctx, tap(adminID, "dep"))
+	arm := findCallbackPrefix(t, api.lastScreen(t).markup, "dep:arm:")
+	instance.handleUpdate(ctx, tap(adminID, arm))
+	view = api.lastScreen(t)
+	trace.confirmations["insured"] = view.text
+	trace.callbacks["insured"] = screenCallbackData(view.markup)
+	instance.handleUpdate(ctx, tap(adminID, findCallbackPrefix(t, view.markup, "dep:go:300:")))
+	view = api.lastScreen(t)
+	trace.terminals["insured"] = view.text
+	trace.confirmations["confirm"] = view.text
+	trace.callbacks["confirm"] = screenCallbackData(view.markup)
+	instance.handleUpdate(ctx, tap(adminID, "dep:ok"))
+	trace.terminals["confirm"] = api.lastScreen(t).text
+
+	instance.handleUpdate(ctx, tap(adminID, "dev:eg:macbook:direct"))
+	instance.handleUpdate(ctx, tap(adminID, "dep"))
+	arm = findCallbackPrefix(t, api.lastScreen(t).markup, "dep:arm:")
+	instance.handleUpdate(ctx, tap(adminID, arm))
+	view = api.lastScreen(t)
+	instance.handleUpdate(ctx, tap(adminID, findCallbackPrefix(t, view.markup, "dep:go:300:")))
+	instance.handleUpdate(ctx, tap(adminID, "dep:rb"))
+	view = api.lastScreen(t)
+	trace.confirmations["rollback"] = view.text
+	trace.callbacks["rollback"] = screenCallbackData(view.markup)
+	instance.handleUpdate(ctx, tap(adminID, "dep:rb!"))
+	trace.terminals["rollback"] = api.lastScreen(t).text
+
+	instance.addClientACL(ctx, nil, domain.ClientACLAny, "macbook", domain.ClientACLTCP, 22)
+	instance.handleUpdate(ctx, tap(adminID, "acl:rm:0"))
+	view = api.lastScreen(t)
+	trace.confirmations["acl"] = view.text
+	trace.callbacks["acl"] = screenCallbackData(view.markup)
+	instance.handleUpdate(ctx, tap(adminID, "acl:rm!:0"))
+	trace.terminals["acl"] = api.lastScreen(t).text
+
+	body := strings.Replace(read(t, instance.ConfigPath),
+		"    source: {kind: config, value: \"wg-nl.conf\"}",
+		"    source: {kind: subscription, value: \"https://provider.example/sub\"}", 1)
+	body = strings.Replace(body, "type: wireguard", "type: xray", 1)
+	if err := os.WriteFile(instance.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tunnel := domain.Tunnel{ID: "wg-nl", Source: domain.TunnelSource{Kind: domain.SourceSubscription}}
+	proxy := func(server string) domain.ProxyTunnel {
+		return domain.ProxyTunnel{Protocol: "vless", Server: server, Port: 443, UUID: "3b1c8a52-4b6e-4d8a-9f00-0123456789ab"}
+	}
+	if err := instance.Upstreams.Write(ctx, tunnel, proxy("1.1.1.1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Upstreams.Write(ctx, tunnel, proxy("2.2.2.2")); err != nil {
+		t.Fatal(err)
+	}
+	instance.handleUpdate(ctx, tap(adminID, "sub:lkg:wg-nl"))
+	view = api.lastScreen(t)
+	trace.confirmations["lkg"] = view.text
+	trace.callbacks["lkg"] = screenCallbackData(view.markup)
+	instance.handleUpdate(ctx, tap(adminID, "sub:lkg!:wg-nl"))
+	trace.terminals["lkg"] = api.lastScreen(t).text
+
+	instance.handleUpdate(ctx, tap(adminID, "hub:rk"))
+	view = api.lastScreen(t)
+	trace.confirmations["key"] = view.text
+	trace.callbacks["key"] = screenCallbackData(view.markup)
+	instance.handleUpdate(ctx, tap(adminID, "hub:rk:go"))
+	instance.wg.Wait()
+	completion := "Key rotation complete"
+	if locale == LocaleRussian {
+		completion = "Ротация завершена"
+	}
+	trace.terminals["key"] = lastScreenContaining(t, api, completion).text
+
+	instance.handleUpdate(ctx, tap(adminID, "hub:dl"))
+	view = api.lastScreen(t)
+	trace.confirmations["export"] = view.text
+	trace.callbacks["export"] = screenCallbackData(view.markup)
+	instance.handleUpdate(ctx, tap(adminID, "hub:dl!"))
+	instance.wg.Wait()
+	trace.terminals["export"] = api.lastScreen(t).text
+
+	instance.handleUpdate(ctx, tap(adminID, "host:ra"))
+	view = api.lastScreen(t)
+	trace.confirmations["restart"] = view.text
+	trace.callbacks["restart"] = screenCallbackData(view.markup)
+	instance.handleUpdate(ctx, tap(adminID, "host:ra!"))
+	trace.terminals["restart"] = lastToast(t, api)
+
+	return trace
+}
+
+type privilegedBranchTrace struct {
+	staleDeploy       string
+	staleCandidate    string
+	subscriptionMiss  string
+	inactiveAgent     string
+	rejectedCandidate string
+	rejectedCallbacks []string
+	logMissingUnit    string
+	logUnavailable    string
+	logCaption        string
+	logSendFailure    string
+	hostRestart       string
+	exportReadFailure string
+	exportSendFailure string
+}
+
+func TestPrivilegedOperationBranchesLocaleMatrix(t *testing.T) {
+	traces := map[Locale]privilegedBranchTrace{}
+	for _, locale := range []Locale{LocaleEnglish, LocaleRussian} {
+		instance, api := hubFixtureLocale(t, locale)
+		traces[locale] = collectPrivilegedBranchTrace(t, instance, api)
+	}
+
+	wants := map[Locale][]string{
+		LocaleEnglish: {
+			"Configuration changed — the preview has been refreshed; review it again",
+			"The list is stale — open candidates again",
+			"tunnel &#34;missing&#34; is not subscription-backed",
+			"The agent is not running (inactive) — the change will not be applied until it starts.",
+			"did not pass traffic", "No unit specified", "journal is unavailable",
+			"last 500 lines", "Failed to send file", "Agent restart failed",
+			"could not be read", "could not be sent",
+		},
+		LocaleRussian: {
+			"Конфигурация изменилась — превью обновлено, посмотрите ещё раз",
+			"Список устарел — откройте кандидатов заново",
+			"туннель &#34;missing&#34; не подписочный",
+			"Агент сейчас не работает (inactive) — изменение не применится, пока он не запустится.",
+			"не пропустил трафик", "Не указан юнит", "журнал недоступен",
+			"последние 500 строк", "Не удалось отправить файл", "Не удалось перезапустить агента",
+			"не прочитался", "не отправился",
+		},
+	}
+	for locale, trace := range traces {
+		got := []string{
+			trace.staleDeploy, trace.staleCandidate, trace.subscriptionMiss, trace.inactiveAgent, trace.rejectedCandidate,
+			trace.logMissingUnit, trace.logUnavailable, trace.logCaption, trace.logSendFailure,
+			trace.hostRestart, trace.exportReadFailure, trace.exportSendFailure,
+		}
+		for index, fragment := range wants[locale] {
+			if !strings.Contains(got[index], fragment) {
+				t.Errorf("%s branch %d = %q, want fragment %q", locale, index, got[index], fragment)
+			}
+		}
+		if strings.Contains(trace.hostRestart, "restart exploded") {
+			t.Errorf("%s host restart exposed raw error: %q", locale, trace.hostRestart)
 		}
 	}
-	for _, fragment := range []string{"The change will take effect after deployment.", "Deploy", "Menu"} {
-		if strings.Contains(view.text+screenButtonText(view.markup), fragment) {
-			t.Fatalf("legacy ACL result mixes in English %q: text=%q markup=%+v", fragment, view.text, view.markup)
-		}
+	if got, want := fmt.Sprint(traces[LocaleEnglish].rejectedCallbacks), fmt.Sprint(traces[LocaleRussian].rejectedCallbacks); got != want {
+		t.Fatalf("rejected-candidate callbacks differ by locale: English=%s Russian=%s", got, want)
 	}
-	if got := screenCallbackData(view.markup); !equalStrings(got, []string{"dep", "acl", "m"}) {
-		t.Fatalf("ACL result callbacks = %v", got)
+}
+
+func collectPrivilegedBranchTrace(t *testing.T, instance *Bot, api *fakeAPI) privilegedBranchTrace {
+	t.Helper()
+	ctx := context.Background()
+	trace := privilegedBranchTrace{}
+
+	instance.handleUpdate(ctx, tap(adminID, "dep:now!:deadbeef00000000"))
+	trace.staleDeploy = lastToast(t, api)
+
+	body := strings.Replace(read(t, instance.ConfigPath),
+		"    source: {kind: config, value: \"wg-nl.conf\"}",
+		"    source: {kind: subscription, value: \"https://provider.example/sub\"}", 1)
+	body = strings.Replace(body, "type: wireguard", "type: xray", 1)
+	if err := os.WriteFile(instance.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
 	}
+
+	instance.handleUpdate(ctx, tap(adminID, "sub:pick:wg-nl:0"))
+	trace.staleCandidate = lastToast(t, api)
+	instance.handleUpdate(ctx, tap(adminID, "sub:c:missing"))
+	trace.subscriptionMiss = api.lastScreen(t).text
+
+	tunnel := domain.Tunnel{ID: "wg-nl", Source: domain.TunnelSource{Kind: domain.SourceSubscription}}
+	proxy := func(server string) domain.ProxyTunnel {
+		return domain.ProxyTunnel{Protocol: "vless", Server: server, Port: 443, UUID: "3b1c8a52-4b6e-4d8a-9f00-0123456789ab"}
+	}
+	if err := instance.Upstreams.Write(ctx, tunnel, proxy("1.1.1.1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Upstreams.Write(ctx, tunnel, proxy("2.2.2.2")); err != nil {
+		t.Fatal(err)
+	}
+	instance.Units = branchUnits{status: linux.UnitStatus{Active: "inactive", Sub: "dead"}}
+	instance.handleUpdate(ctx, tap(adminID, "sub:lkg!:wg-nl"))
+	trace.inactiveAgent = api.lastScreen(t).text
+
+	candidate := proxy("1.2.3.4")
+	instance.candidates.put("wg-nl", []domain.ProxyTunnel{candidate})
+	instance.Resolver = botEndpointResolverStub{}
+	instance.Uplink = func(context.Context) (string, error) { return "eth0", nil }
+	instance.Prove = func(context.Context, domain.ProxyTunnel, string) error { return fmt.Errorf("probe rejected <unsafe>") }
+	instance.handleUpdate(ctx, tap(adminID, "sub:pick:wg-nl:0"))
+	instance.wg.Wait()
+	view := api.lastScreen(t)
+	trace.rejectedCandidate = view.text
+	trace.rejectedCallbacks = screenCallbackData(view.markup)
+
+	instance.handleUpdate(ctx, tap(adminID, "log:u"))
+	trace.logMissingUnit = lastToast(t, api)
+	instance.Journal = branchJournal{err: fmt.Errorf("journal exploded")}
+	instance.handleUpdate(ctx, tap(adminID, "log:u:vpn-hub-agent.service"))
+	trace.logUnavailable = api.lastScreen(t).text
+
+	instance.Journal = branchJournal{tail: "one\ntwo"}
+	instance.handleUpdate(ctx, tap(adminID, "log:f:vpn-hub-agent.service"))
+	api.mu.Lock()
+	trace.logCaption = api.docCaptions[len(api.docCaptions)-1]
+	api.mu.Unlock()
+
+	api.failDocuments = true
+	instance.handleUpdate(ctx, tap(adminID, "log:f:vpn-hub-agent.service"))
+	trace.logSendFailure = lastToast(t, api)
+	instance.Units = branchUnits{restartErr: fmt.Errorf("restart exploded")}
+	instance.handleUpdate(ctx, tap(adminID, "host:ra!"))
+	trace.hostRestart = lastToast(t, api)
+
+	validConfigPath := instance.ConfigPath
+	instance.ConfigPath = filepath.Join(t.TempDir(), "missing-config")
+	api.failDocuments = false
+	start := screenCount(api)
+	instance.handleUpdate(ctx, tap(adminID, "hub:dl!"))
+	instance.wg.Wait()
+	trace.exportReadFailure = screensSince(api, start)
+
+	instance.ConfigPath = validConfigPath
+	api.failDocuments = true
+	start = screenCount(api)
+	instance.handleUpdate(ctx, tap(adminID, "hub:dl!"))
+	instance.wg.Wait()
+	trace.exportSendFailure = screensSince(api, start)
+
+	return trace
+}
+
+func screenCount(api *fakeAPI) int {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	return len(api.screens)
+}
+
+func screensSince(api *fakeAPI, start int) string {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	var texts []string
+	for _, view := range api.screens[start:] {
+		texts = append(texts, view.text)
+	}
+	return strings.Join(texts, "\n")
 }
 
 func TestDeviceAddDialogDeliversProfileAndQR(t *testing.T) {
@@ -1046,7 +1447,7 @@ func TestProbeSetAndRemove(t *testing.T) {
 	// Plain http is refused by the domain's own rules: the probe exists to prove
 	// the tunnel carries traffic, and it must not be spoofable in transit.
 	instance.handleUpdate(ctx, message(adminID, "http://1.1.1.1/x"))
-	if !strings.Contains(api.lastScreen(t).text, "Попробуйте ещё раз") {
+	if !strings.Contains(api.lastScreen(t).text, "Try again") {
 		t.Fatalf("expected a validation refusal:\n%s", api.lastScreen(t).text)
 	}
 
@@ -1077,7 +1478,7 @@ func TestKeyRotationReissuesEveryDevice(t *testing.T) {
 	}
 
 	instance.handleUpdate(ctx, tap(adminID, "hub:rk"))
-	if !strings.Contains(api.lastScreen(t).text, "теряют связь") {
+	if !strings.Contains(api.lastScreen(t).text, "lose connectivity") {
 		t.Fatalf("expected the hard warning:\n%s", api.lastScreen(t).text)
 	}
 	instance.handleUpdate(ctx, tap(adminID, "hub:rk:go"))
@@ -1373,10 +1774,10 @@ func TestKeyRotationPartialFailureIsHonest(t *testing.T) {
 	instance.wg.Wait()
 
 	last := api.lastScreen(t)
-	if !strings.Contains(last.text, "прервана") {
+	if !strings.Contains(last.text, "Rotation stopped") {
 		t.Fatalf("expected an interrupted-rotation message:\n%s", last.text)
 	}
-	if !strings.Contains(last.text, "перевыпуска вручную") {
+	if !strings.Contains(last.text, "manual reissue") {
 		t.Fatalf("the message must name devices needing manual re-issue:\n%s", last.text)
 	}
 }
@@ -1389,7 +1790,7 @@ func TestAWGParameterAddAndRemove(t *testing.T) {
 	instance.handleUpdate(ctx, tap(adminID, "hub:aa"))
 	// An unknown parameter is refused.
 	instance.handleUpdate(ctx, message(adminID, "Nope 5"))
-	if !strings.Contains(api.lastScreen(t).text, "неизвестен") {
+	if !strings.Contains(api.lastScreen(t).text, "is unknown") {
 		t.Fatalf("expected an unknown-parameter refusal:\n%s", api.lastScreen(t).text)
 	}
 	// A known one with a numeric value lands.
@@ -1527,7 +1928,7 @@ func TestDeployRollback(t *testing.T) {
 	if _, isArmed, _ := instance.Confirmations.Load(); isArmed {
 		t.Fatal("rollback did not clear the pending state")
 	}
-	if !strings.Contains(api.lastScreen(t).text, "Восстановлена") {
+	if !strings.Contains(api.lastScreen(t).text, "Restored revision") {
 		t.Fatalf("expected a rollback confirmation:\n%s", api.lastScreen(t).text)
 	}
 }

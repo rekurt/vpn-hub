@@ -15,8 +15,27 @@ import (
 )
 
 const (
-	msgFailureUndoFailed  MessageID = "failure/undo_failed"
-	msgFailureUndoDetails MessageID = "failure/undo_details"
+	msgFailureUndoFailed       MessageID = "failure/undo_failed"
+	msgFailureUndoDetails      MessageID = "failure/undo_details"
+	msgFailureRevisionBuild    MessageID = "failure/revision_build"
+	msgRoutePrivateNetwork     MessageID = "route/private_network"
+	msgRoutePrivateDomain      MessageID = "route/private_domain"
+	msgRouteEverythingElse     MessageID = "route/everything_else"
+	msgRouteDefaultFor         MessageID = "route/default_for"
+	msgRouteApplication        MessageID = "route/application"
+	msgFailureUnitList         MessageID = "failure/unit_list"
+	msgUnitRequired            MessageID = "logs/unit_required"
+	msgFailureJournal          MessageID = "failure/journal"
+	msgJournalUnavailableToast MessageID = "logs/unavailable_toast"
+	msgJournalCaption          MessageID = "logs/file_caption"
+	msgJournalSendFailure      MessageID = "logs/send_failure"
+	msgJournalSent             MessageID = "logs/sent"
+	msgHostRestartConfirm      MessageID = "host/restart_confirm"
+	msgHostRestartFailure      MessageID = "host/restart_failure"
+	msgHostRestarted           MessageID = "host/restarted"
+	msgCategoryRequired        MessageID = "settings/category_required"
+	msgCategoryEnabled         MessageID = "settings/category_enabled"
+	msgCategoryDisabled        MessageID = "settings/category_disabled"
 )
 
 func renderFailure(l Localizer, what string, err error) screen {
@@ -101,11 +120,11 @@ func (b *Bot) buildStatus(ctx context.Context) screen {
 func (b *Bot) buildRoutes(ctx context.Context) screen {
 	cfg, err := b.Service.LoadAndValidate(ctx)
 	if err != nil {
-		return renderFailure(b.L, "конфигурация не читается", err)
+		return renderFailure(b.L, b.text(msgFailureConfigUnreadable), err)
 	}
 	state, err := b.Service.BuildDesiredState(cfg)
 	if err != nil {
-		return renderFailure(b.L, "ревизия не собирается", err)
+		return renderFailure(b.L, b.text(msgFailureRevisionBuild), err)
 	}
 
 	var lines []routeLine
@@ -114,10 +133,10 @@ func (b *Bot) buildRoutes(ctx context.Context) screen {
 			continue
 		}
 		for _, route := range tunnel.Routes {
-			lines = append(lines, routeLine{route, tunnel.ID, "приватная сеть"})
+			lines = append(lines, routeLine{route, tunnel.ID, b.text(msgRoutePrivateNetwork)})
 		}
 		for _, zone := range tunnel.DNSZones {
-			lines = append(lines, routeLine{"*." + zone, tunnel.ID, "приватный домен"})
+			lines = append(lines, routeLine{"*." + zone, tunnel.ID, b.text(msgRoutePrivateDomain)})
 		}
 	}
 
@@ -133,7 +152,7 @@ func (b *Bot) buildRoutes(ctx context.Context) screen {
 	for _, egress := range egresses {
 		devices := byEgress[egress]
 		sort.Strings(devices)
-		lines = append(lines, routeLine{"всё остальное", egress, "по умолчанию для " + strings.Join(devices, ", ")})
+		lines = append(lines, routeLine{b.text(msgRouteEverythingElse), egress, b.text(msgRouteDefaultFor, strings.Join(devices, ", "))})
 	}
 
 	// SOCKS endpoints are the other way traffic is steered; failures here only cost
@@ -146,7 +165,7 @@ func (b *Bot) buildRoutes(ctx context.Context) screen {
 						continue
 					}
 					endpoint := fmt.Sprintf("socks5://%s:%d", hostOf(spec.HostAddress), spec.SocksPort)
-					lines = append(lines, routeLine{endpoint, spec.TunnelID, "для отдельного приложения"})
+					lines = append(lines, routeLine{endpoint, spec.TunnelID, b.text(msgRouteApplication)})
 				}
 			}
 		}
@@ -177,7 +196,7 @@ func hostOf(address string) string {
 func (b *Bot) buildLogsMenu(ctx context.Context) screen {
 	units, err := b.Units.ListMatching(ctx, "vpn-hub-*")
 	if err != nil {
-		return renderFailure(b.L, "список юнитов недоступен", err)
+		return renderFailure(b.L, b.text(msgFailureUnitList), err)
 	}
 	return scr(renderLogsMenu(b.L, units))
 }
@@ -188,30 +207,32 @@ func (b *Bot) routeLogs(ctx context.Context, cb *tg.CallbackQuery, action string
 		return b.show(ctx, cb, b.buildLogsMenu(ctx))
 	case "u":
 		if len(args) < 1 {
-			return result{toast: "Не указан юнит"}
+			return result{toast: b.text(msgUnitRequired)}
 		}
 		unit := args[0]
 		tail, err := b.Journal.Tail(ctx, unit, 50)
 		if err != nil {
-			return b.show(ctx, cb, renderFailure(b.L, "журнал недоступен", err))
+			return b.show(ctx, cb, renderFailure(b.L, b.text(msgFailureJournal), err))
 		}
 		return b.show(ctx, cb, scr(renderLogTail(b.L, unit, tail)))
 	case "f":
 		if len(args) < 1 {
-			return result{toast: "Не указан юнит"}
+			return result{toast: b.text(msgUnitRequired)}
 		}
 		unit := args[0]
 		tail, err := b.Journal.Tail(ctx, unit, 500)
 		if err != nil {
-			return result{toast: "Журнал недоступен: " + err.Error(), alert: true}
+			b.logf("read journal for %s: %v", unit, err)
+			return result{toast: b.text(msgJournalUnavailableToast), alert: true}
 		}
 		name := strings.TrimSuffix(unit, ".service") + ".log.txt"
-		if _, err := b.API.SendDocument(ctx, b.Cfg.AdminID, name, []byte(tail), "📜 "+esc(unit)+", последние 500 строк"); err != nil {
-			return result{toast: "Не удалось отправить файл", alert: true}
+		if _, err := b.API.SendDocument(ctx, b.Cfg.AdminID, name, []byte(tail), b.text(msgJournalCaption, esc(unit))); err != nil {
+			b.logf("send journal for %s: %v", unit, err)
+			return result{toast: b.text(msgJournalSendFailure), alert: true}
 		}
-		return result{toast: "Отправил файлом"}
+		return result{toast: b.text(msgJournalSent)}
 	default:
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 }
 
@@ -250,17 +271,18 @@ func (b *Bot) routeHost(ctx context.Context, cb *tg.CallbackQuery, action string
 		return b.show(ctx, cb, b.buildHost(ctx))
 	case "ra":
 		return b.show(ctx, cb, scr(renderConfirm(b.L,
-			"Перезапустить агента? На время рестарта хост перестаёт сходиться (туннели продолжают работать).",
+			b.text(msgHostRestartConfirm),
 			"host:ra!", "host")))
 	case "ra!":
 		if err := b.Units.Restart(ctx, agentUnit); err != nil {
-			return result{toast: "Не удалось: " + err.Error(), alert: true}
+			b.logf("restart agent: %v", err)
+			return result{toast: b.text(msgHostRestartFailure), alert: true}
 		}
 		outcome := b.show(ctx, cb, b.buildHost(ctx))
-		outcome.toast = "🔁 Агент перезапущен"
+		outcome.toast = b.text(msgHostRestarted)
 		return outcome
 	default:
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 }
 
@@ -276,19 +298,19 @@ func (b *Bot) routeSettings(ctx context.Context, cb *tg.CallbackQuery, action st
 		return b.show(ctx, cb, b.buildSettings())
 	case "t":
 		if len(args) < 1 {
-			return result{toast: "Не указана категория"}
+			return result{toast: b.text(msgCategoryRequired)}
 		}
 		enabled := b.alerts.toggle(args[0])
 		b.saveAlertSettings(ctx)
 		outcome := b.show(ctx, cb, b.buildSettings())
 		if enabled {
-			outcome.toast = "🔔 Включено"
+			outcome.toast = b.text(msgCategoryEnabled)
 		} else {
-			outcome.toast = "🔕 Выключено"
+			outcome.toast = b.text(msgCategoryDisabled)
 		}
 		return outcome
 	default:
-		return result{toast: "Не понимаю эту кнопку"}
+		return result{toast: b.text(msgUnknownButton)}
 	}
 }
 

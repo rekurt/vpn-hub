@@ -11,16 +11,6 @@ import (
 func TestLegacyRussianMessagesDoNotMixEnglishFragments(t *testing.T) {
 	t.Parallel()
 
-	t.Run("subscription progress", func(t *testing.T) {
-		instance, api := hubFixture(t)
-		instance.progressEditor(context.Background(), adminID, 7, "wg-nl")(2, 3, []string{"timeout"})
-
-		got := api.lastScreen(t).text
-		want := "📡 <b>wg-nl</b>: проверяю кандидата 2 из 3 в изолированном namespace…\n\n" +
-			"Отклонены (1):\n • <code>timeout</code>\n"
-		assertLegacyRussianMessage(t, got, want, "Rejected")
-	})
-
 	t.Run("drift alert", func(t *testing.T) {
 		operations := []domain.Operation{
 			{Kind: domain.OpUpdate, Resource: domain.ResourceRef{Type: "peer", ID: "macbook"}, Reason: "key differs"},
@@ -33,6 +23,25 @@ func TestLegacyRussianMessagesDoNotMixEnglishFragments(t *testing.T) {
 			"Агент должен был устранить это за минуту; проверьте его журнал."
 		assertLegacyRussianMessage(t, got, want, "discrepancies")
 	})
+}
+
+func TestSubscriptionProgressIsLocalized(t *testing.T) {
+	tests := []struct {
+		locale Locale
+		want   string
+	}{
+		{LocaleEnglish, "📡 <b>wg-nl</b>: checking candidate 2 of 3 in an isolated namespace…\n\nRejected (1):\n • <code>timeout</code>\n"},
+		{LocaleRussian, "📡 <b>wg-nl</b>: проверяю кандидата 2 из 3 в изолированном namespace…\n\nОтклонены (1):\n • <code>timeout</code>\n"},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.locale), func(t *testing.T) {
+			instance, api := hubFixtureLocale(t, tt.locale)
+			instance.progressEditor(context.Background(), adminID, 7, "wg-nl")(2, 3, []string{"timeout"})
+			if got := api.lastScreen(t).text; got != tt.want {
+				t.Fatalf("progress message = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
 func assertLegacyRussianMessage(t *testing.T, got, want, englishFragment string) {
