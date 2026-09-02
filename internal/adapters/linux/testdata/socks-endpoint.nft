@@ -6,9 +6,14 @@ table inet vpn_hub
 delete table inet vpn_hub
 
 table inet vpn_hub {
-	comment "vpn-hub:8020d7e28d9a8861"
+	comment "vpn-hub:83b4586f586681d8"
 
 	set client_direct {
+		type ipv4_addr
+		elements = { 10.80.0.2, 10.80.0.3 }
+	}
+
+	set dns_clients_admitted {
 		type ipv4_addr
 		elements = { 10.80.0.2, 10.80.0.3 }
 	}
@@ -37,6 +42,10 @@ table inet vpn_hub {
 
 	chain input {
 		type filter hook input priority filter; policy drop;
+		iifname "awg0" ip saddr @dns_clients_admitted ip daddr 10.80.0.1 udp dport 53 accept
+		iifname "awg0" ip saddr @dns_clients_admitted ip daddr 10.80.0.1 tcp dport 53 accept
+		iifname "awg0" udp dport 53 drop
+		iifname "awg0" tcp dport 53 drop
 		ct state established,related accept
 		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 udp dport 53 accept
 		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 tcp dport 53 accept
@@ -45,8 +54,6 @@ table inet vpn_hub {
 		ip protocol icmp accept
 		tcp dport 22 accept
 		udp dport 51820 accept
-		iifname "awg0" ip daddr 10.80.0.1 udp dport 53 accept
-		iifname "awg0" ip daddr 10.80.0.1 tcp dport 53 accept
 	}
 
 	chain output {
@@ -56,8 +63,8 @@ table inet vpn_hub {
 
 	chain prerouting_nat {
 		type nat hook prerouting priority dstnat; policy accept;
-		iifname "awg0" udp dport 53 dnat ip to 10.80.0.1:53
-		iifname "awg0" tcp dport 53 dnat ip to 10.80.0.1:53
+		iifname "awg0" ip saddr @dns_clients_admitted udp dport 53 dnat ip to 10.80.0.1:53
+		iifname "awg0" ip saddr @dns_clients_admitted tcp dport 53 dnat ip to 10.80.0.1:53
 	}
 
 	chain postrouting {

@@ -6,7 +6,7 @@ table inet vpn_hub
 delete table inet vpn_hub
 
 table inet vpn_hub {
-	comment "vpn-hub:ad8410e706254169"
+	comment "vpn-hub:a01156fae54d9dec"
 
 	set client_direct {
 		type ipv4_addr
@@ -42,6 +42,14 @@ table inet vpn_hub {
 
 	chain input {
 		type filter hook input priority filter; policy drop;
+		iifname "awg0" ip saddr @dns_clients_direct ip daddr 10.80.0.1 udp dport 53 accept
+		iifname "awg0" ip saddr @dns_clients_direct ip daddr 10.80.0.1 tcp dport 53 accept
+		iifname "awg0" ip saddr @dns_clients_direct udp dport 53 drop
+		iifname "awg0" ip saddr @dns_clients_direct tcp dport 53 drop
+		iifname "awg0" ip saddr @dns_clients_admitted ip daddr 10.80.0.1 udp dport 53 accept
+		iifname "awg0" ip saddr @dns_clients_admitted ip daddr 10.80.0.1 tcp dport 53 accept
+		iifname "awg0" udp dport 53 drop
+		iifname "awg0" tcp dport 53 drop
 		ct state established,related accept
 		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 udp dport 53 accept
 		iif lo meta mark != 0x00000000 ip daddr 10.80.0.1 tcp dport 53 accept
@@ -50,8 +58,6 @@ table inet vpn_hub {
 		ip protocol icmp accept
 		tcp dport 22 accept
 		udp dport 51820 accept
-		iifname "awg0" ip saddr @dns_clients_admitted ip daddr 10.80.0.1 udp dport 53 accept
-		iifname "awg0" ip saddr @dns_clients_admitted ip daddr 10.80.0.1 tcp dport 53 accept
 	}
 
 	chain output {

@@ -119,6 +119,25 @@ func TestDNSDestinationsFollowEgressLayout(t *testing.T) {
 	}
 }
 
+func TestLastDeviceRemovalLeavesNoDNSAdmission(t *testing.T) {
+	t.Parallel()
+	state := planState()
+	state.Devices = nil
+
+	plan, err := BuildFirewallPlan(state, "eth0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.DNSDestinations) != 0 {
+		t.Fatalf("DNSDestinations = %+v, want none after the last device is removed", plan.DNSDestinations)
+	}
+	for _, group := range plan.Egresses {
+		if len(group.Addresses) != 0 {
+			t.Fatalf("egress %q still admits revoked addresses: %v", group.ID, group.Addresses)
+		}
+	}
+}
+
 // nftables sets of type ipv4_addr reject a prefix length.
 func TestAddressesAreRenderedWithoutPrefixLength(t *testing.T) {
 	t.Parallel()

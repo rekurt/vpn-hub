@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -114,8 +115,9 @@ func TestDNSQueriesDNATToEachDevicesResolver(t *testing.T) {
 		`iifname "awg0" ip saddr @dns_clients_direct tcp dport 53 dnat ip to 10.80.0.1:53`,
 		`iifname "awg0" ip saddr @dns_clients_wg_nl udp dport 53 dnat ip to 10.90.0.1:53`,
 		`iifname "awg0" ip saddr @dns_clients_wg_nl tcp dport 53 dnat ip to 10.90.0.1:53`,
-		`iifname "awg0" ip saddr @dns_clients_admitted ip daddr 10.90.0.1 udp dport 53 accept`,
-		`iifname "awg0" ip saddr @dns_clients_admitted ip daddr 10.90.0.1 tcp dport 53 accept`,
+		`iifname "awg0" ip saddr @dns_clients_wg_nl ip daddr 10.90.0.1 udp dport 53 accept`,
+		`iifname "awg0" ip saddr @dns_clients_wg_nl ip daddr 10.90.0.1 tcp dport 53 accept`,
+		`iifname "awg0" ip saddr @dns_clients_wg_nl udp dport 53 drop`,
 	} {
 		if !strings.Contains(rendered, wanted) {
 			t.Errorf("missing %q:\n%s", wanted, rendered)
@@ -128,6 +130,129 @@ func TestDNSQueriesDNATToEachDevicesResolver(t *testing.T) {
 	}
 	if strings.Index(chain, catchAll) < strings.Index(chain, "@dns_clients_wg_nl") {
 		t.Errorf("the catch-all shadows source-aware DNS routing:\n%s", chain)
+	}
+}
+
+func TestDNSFallbackRemainsLimitedToAdmittedClientsWithoutDestinations(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.DNSDestinations = nil
+
+	rendered := RenderRuleset(plan)
+	for _, wanted := range []string{
+		"set dns_clients_admitted {",
+		`iifname "awg0" ip saddr @dns_clients_admitted ip daddr 10.80.0.1 udp dport 53 accept`,
+		`iifname "awg0" ip saddr @dns_clients_admitted udp dport 53 dnat ip to 10.80.0.1:53`,
+	} {
+		if !strings.Contains(rendered, wanted) {
+			t.Errorf("missing admitted-client DNS guard %q:\n%s", wanted, rendered)
+		}
+	}
+	if strings.Contains(rendered, `iifname "awg0" udp dport 53 dnat`) {
+		t.Errorf("DNS fallback is reachable without an admitted source:\n%s", rendered)
+	}
+	input := rendered[strings.Index(rendered, "chain input {"):strings.Index(rendered, "chain output")]
+	drop := `iifname "awg0" udp dport 53 drop`
+	if !strings.Contains(input, drop) || strings.Index(input, drop) > strings.Index(input, "ct state established,related accept") {
+		t.Errorf("stale DNS conntrack is not denied before established traffic:\n%s", input)
+	}
+}
+
+func TestRevokedClientCannotUseDNSWhenIngressRemovalFails(t *testing.T) {
+	t.Parallel()
+	plan := directOnlyPlan()
+	plan.Egresses = nil
+	plan.DNSDestinations = []domain.DNSDestination{{ResolverAddress: "10.90.0.1"}}
+
+	rendered := RenderRuleset(plan)
+	input := rendered[strings.Index(rendered, "chain input {"):strings.Index(rendered, "chain output")]
+	nat := rendered[strings.Index(rendered, "chain prerouting_nat {"):]
+	if strings.Contains(input, "dport 53 accept") || strings.Contains(nat, "dport 53 dnat") {
+		t.Fatalf("a stale ingress peer retains DNS access after revocation:\n%s", rendered)
+	}
+	if !strings.Contains(input, `iifname "awg0" udp dport 53 drop`) {
+		t.Fatalf("revoked DNS conntrack is not explicitly denied:\n%s", rendered)
+	}
+}
+
+func TestDNSConntrackIsClearedForChangedAndRevokedClients(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	host := &fakeHost{replies: map[string]string{
+		"nft -j list table inet vpn_hub": `{"nftables":[{"table":{"comment":"vpn-hub:old"}}]}`,
+	}}
+	adapter := NFTables{Run: host.run, RuntimeDir: directory}
+	previous := directOnlyPlan()
+	previous.Egresses[0].Addresses = append(previous.Egresses[0].Addresses, "10.80.0.4")
+	previous.DNSDestinations[0].ClientAddresses = append(previous.DNSDestinations[0].ClientAddresses, "10.80.0.4")
+	if _, err := adapter.Apply(context.Background(), previous); err != nil {
+		t.Fatalf("seed previous plan: %v", err)
+	}
+	host.commands = nil
+
+	next := directOnlyPlan()
+	next.Egresses = []domain.EgressGroup{
+		{ID: domain.EgressDirect, Mark: 0x100, Interface: "eth0", Addresses: []string{"10.80.0.4"}},
+		{ID: "wg-nl", Mark: 0x101, Interface: "vh-wg-nl", Addresses: []string{"10.80.0.2"}},
+	}
+	next.DNSDestinations = []domain.DNSDestination{{
+		ClientAddresses: []string{"10.80.0.2"}, ResolverAddress: "10.90.0.1",
+	}}
+	if _, err := adapter.Apply(context.Background(), next); err != nil {
+		t.Fatalf("apply changed plan: %v", err)
+	}
+
+	want := []string{
+		"conntrack -D -p udp -s 10.80.0.2 --dport 53",
+		"conntrack -D -p tcp -s 10.80.0.2 --dport 53",
+		"conntrack -D -p udp -s 10.80.0.3 --dport 53",
+		"conntrack -D -p tcp -s 10.80.0.3 --dport 53",
+	}
+	var got []string
+	for _, command := range host.commands {
+		if strings.HasPrefix(command, "conntrack ") {
+			got = append(got, command)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("conntrack cleanup = %v, want %v", got, want)
+	}
+}
+
+func TestDNSConntrackCleanupFailureIsRetriedAndNeverReportedAsApplied(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	host := &fakeHost{replies: map[string]string{
+		"nft -j list table inet vpn_hub": `{"nftables":[{"table":{"comment":"vpn-hub:old"}}]}`,
+	}}
+	adapter := NFTables{Run: host.run, RuntimeDir: directory}
+	previous := directOnlyPlan()
+	if _, err := adapter.Apply(context.Background(), previous); err != nil {
+		t.Fatalf("seed previous plan: %v", err)
+	}
+
+	next := directOnlyPlan()
+	next.DNSDestinations[0].ResolverAddress = "10.90.0.1"
+	failing := "conntrack -D -p udp -s 10.80.0.2 --dport 53"
+	host.failures = map[string]error{failing: errors.New("operation not permitted")}
+	rebuilt, err := adapter.Apply(context.Background(), next)
+	const wantError = "clear udp DNS conntrack for 10.80.0.2: operation not permitted"
+	if err == nil || err.Error() != wantError {
+		t.Fatalf("Apply error = %v, want %q", err, wantError)
+	}
+	if rebuilt {
+		t.Fatal("Apply reported success before required DNS conntrack cleanup")
+	}
+
+	host.failures = nil
+	host.commands = nil
+	host.replies["nft -j list table inet vpn_hub"] = fmt.Sprintf(
+		`{"nftables":[{"table":{"comment":"vpn-hub:%s"}}]}`, Fingerprint(next))
+	if rebuilt, err := adapter.Apply(context.Background(), next); err != nil || rebuilt {
+		t.Fatalf("retry = (%t, %v), want cleanup without another rebuild", rebuilt, err)
+	}
+	if !host.ran(failing) {
+		t.Fatalf("failed cleanup was not retried; commands: %v", host.commands)
 	}
 }
 
