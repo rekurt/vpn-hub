@@ -490,7 +490,7 @@ func englishCatalog() Catalog {
 		msgCategorySubscription:        "Subscription refresh results",
 		msgCategoryOutOfBand:           "Changes outside the bot",
 		msgNotifyAgentRollback:         "⛔ <b>Automatic rollback</b>: the agent restored the previous revision.\n<code>%s</code>",
-		msgNotifyAgentConverged:        "✅ Agent: %s",
+		msgNotifyAgentConverged:        "✅ Agent converged on revision <code>%s</code>.",
 		msgNotifyAgentError:            "⚠️ Agent: <code>%s</code>",
 		msgNotifyButtonJournal:         "Logs",
 		msgNotifyButtonAgentJournal:    "Agent logs",

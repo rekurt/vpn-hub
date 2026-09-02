@@ -102,7 +102,7 @@ func assertLocalizedNotificationFragments(t *testing.T, english, russian notific
 		russian string
 	}{
 		{"agent-error", "Agent:", "Агент:"},
-		{"agent-recovered", "Agent:", "Агент:"},
+		{"agent-recovered", "converged on revision", "сошёлся на ревизии"},
 		{"auto-rollback", "Automatic rollback", "Автооткат"},
 		{"health-down", "Tunnel", "Туннель"},
 		{"health-up", "healthy again", "снова здоров"},
@@ -132,6 +132,71 @@ func assertLocalizedNotificationFragments(t *testing.T, english, russian notific
 	}
 	if !strings.Contains(english.countdown.text, "2m 5s") || !strings.Contains(russian.countdown.text, "2м 5с") {
 		t.Errorf("countdown units are not localized: English=%q Russian=%q", english.countdown.text, russian.countdown.text)
+	}
+}
+
+func TestJournalConvergenceNotificationLocalizesKnownRevision(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		locale Locale
+		want   string
+	}{
+		{LocaleEnglish, "✅ Agent converged on revision <code>&lt;dead&amp;beef&gt;</code>."},
+		{LocaleRussian, "✅ Агент сошёлся на ревизии <code>&lt;dead&amp;beef&gt;</code>."},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.locale), func(t *testing.T) {
+			l, err := NewLocalizer(tt.locale)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ev, ok := journalNotification(l, "converged on revision <dead&beef>")
+			if !ok {
+				t.Fatal("known convergence line was ignored")
+			}
+			if ev.category != "converge" || ev.debounce != 0 || ev.markup != nil {
+				t.Fatalf("event behavior changed: category=%q debounce=%s callbacks=%v",
+					ev.category, ev.debounce, screenCallbackData(ev.markup))
+			}
+			if ev.text != tt.want {
+				t.Fatalf("text = %q, want %q", ev.text, tt.want)
+			}
+			if tt.locale == LocaleRussian && strings.Contains(ev.text, "converged on revision") {
+				t.Fatalf("Russian notification contains the raw English semantic phrase: %q", ev.text)
+			}
+		})
+	}
+}
+
+func TestJournalUnknownConvergenceFormUsesSafeLocalizedFallback(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		locale Locale
+		want   string
+	}{
+		{LocaleEnglish, "⚠️ Agent: <code>agent converged after revision &lt;bad&amp;detail&gt;</code>"},
+		{LocaleRussian, "⚠️ Агент: <code>agent converged after revision &lt;bad&amp;detail&gt;</code>"},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.locale), func(t *testing.T) {
+			l, err := NewLocalizer(tt.locale)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ev, ok := journalNotification(l, "agent converged after revision <bad&detail>")
+			if !ok {
+				t.Fatal("unknown convergence line was ignored")
+			}
+			if ev.category != "agent-error" || ev.debounce != 15*time.Minute {
+				t.Fatalf("fallback behavior changed: category=%q debounce=%s", ev.category, ev.debounce)
+			}
+			if got, want := screenCallbackData(ev.markup), []string{"log:u:" + agentUnit, "host:ra"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("fallback callbacks = %v, want %v", got, want)
+			}
+			if ev.text != tt.want {
+				t.Fatalf("text = %q, want %q", ev.text, tt.want)
+			}
+		})
 	}
 }
 

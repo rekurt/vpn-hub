@@ -490,7 +490,7 @@ func russianCatalog() Catalog {
 		msgCategorySubscription:        "Итоги обновления подписок",
 		msgCategoryOutOfBand:           "Изменения мимо бота",
 		msgNotifyAgentRollback:         "⛔ <b>Автооткат</b>: агент вернул предыдущую ревизию.\n<code>%s</code>",
-		msgNotifyAgentConverged:        "✅ Агент: %s",
+		msgNotifyAgentConverged:        "✅ Агент сошёлся на ревизии <code>%s</code>.",
 		msgNotifyAgentError:            "⚠️ Агент: <code>%s</code>",
 		msgNotifyButtonJournal:         "Журнал",
 		msgNotifyButtonAgentJournal:    "Журнал агента",
