@@ -343,7 +343,7 @@ func (b *Bot) progressEditor(ctx context.Context, chatID, messageID int64, tunne
 
 		var text strings.Builder
 		fmt.Fprintf(&text, "📡 <b>%s</b>: проверяю кандидата %d из %d в изолированном namespace…\n", esc(tunnelID), tried, total)
-		appendRejections(task2EnglishLocalizer, &text, rejected)
+		appendRejections(task2LegacyRussianLocalizer, &text, rejected)
 		if err := b.API.EditMessageText(ctx, chatID, messageID, text.String(), nil); err != nil {
 			b.logf("progress edit: %v", err)
 		}

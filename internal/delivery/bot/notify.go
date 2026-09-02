@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tg "vpn-hub/internal/adapters/telegram"
+	"vpn-hub/internal/domain"
 )
 
 // event is one thing the bot decided to say on its own.
@@ -476,18 +477,7 @@ func (b *Bot) watchDrift(ctx context.Context) {
 			}
 			sawDrift, alerted = false, false
 		case sawDrift && !alerted:
-			var text strings.Builder
-			fmt.Fprintf(&text, "⚠️ <b>Дрейф</b>: хост расходится с ревизией и не сходится сам (%d %s):\n",
-				len(operations), plural(task2EnglishLocalizer, len(operations), msgPluralDiscrepancyOne, msgPluralDiscrepancyFew, msgPluralDiscrepancyMany))
-			for index, operation := range operations {
-				if index == 10 {
-					fmt.Fprintf(&text, " • … и ещё %d\n", len(operations)-index)
-					break
-				}
-				fmt.Fprintf(&text, " • <code>%s</code>\n", esc(operation.String()))
-			}
-			text.WriteString("Агент должен был устранить это за минуту; проверьте его журнал.")
-			b.emit(event{category: "drift", text: text.String(),
+			b.emit(event{category: "drift", text: legacyRussianDriftAlert(operations),
 				markup: keyboard([]tg.InlineKeyboardButton{
 					btn("📜 Журнал агента", "log:u:"+agentUnit), btn("🔁 Рестарт агента", "host:ra"),
 				})})
@@ -496,4 +486,19 @@ func (b *Bot) watchDrift(ctx context.Context) {
 			sawDrift = true
 		}
 	}
+}
+
+func legacyRussianDriftAlert(operations []domain.Operation) string {
+	var text strings.Builder
+	fmt.Fprintf(&text, "⚠️ <b>Дрейф</b>: хост расходится с ревизией и не сходится сам (%d %s):\n",
+		len(operations), plural(task2LegacyRussianLocalizer, len(operations), msgPluralDiscrepancyOne, msgPluralDiscrepancyFew, msgPluralDiscrepancyMany))
+	for index, operation := range operations {
+		if index == 10 {
+			fmt.Fprintf(&text, " • … и ещё %d\n", len(operations)-index)
+			break
+		}
+		fmt.Fprintf(&text, " • <code>%s</code>\n", esc(operation.String()))
+	}
+	text.WriteString("Агент должен был устранить это за минуту; проверьте его журнал.")
+	return text.String()
 }
