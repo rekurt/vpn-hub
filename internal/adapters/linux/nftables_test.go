@@ -2,6 +2,7 @@ package linux
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,10 +10,17 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"vpn-hub/internal/domain"
 )
+
+type fakeExitError struct{ code int }
+
+func (e fakeExitError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+func (e fakeExitError) ExitCode() int { return e.code }
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
@@ -203,14 +211,14 @@ func TestDNSConntrackIsClearedForChangedAndRevokedClients(t *testing.T) {
 	}
 
 	want := []string{
-		"conntrack -D -p udp -s 10.80.0.2 --dport 53",
-		"conntrack -D -p tcp -s 10.80.0.2 --dport 53",
-		"conntrack -D -p udp -s 10.80.0.3 --dport 53",
-		"conntrack -D -p tcp -s 10.80.0.3 --dport 53",
+		"env LC_ALL=C conntrack -D -p udp -s 10.80.0.2 --dport 53",
+		"env LC_ALL=C conntrack -D -p tcp -s 10.80.0.2 --dport 53",
+		"env LC_ALL=C conntrack -D -p udp -s 10.80.0.3 --dport 53",
+		"env LC_ALL=C conntrack -D -p tcp -s 10.80.0.3 --dport 53",
 	}
 	var got []string
 	for _, command := range host.commands {
-		if strings.HasPrefix(command, "conntrack ") {
+		if strings.Contains(command, "conntrack -D ") {
 			got = append(got, command)
 		}
 	}
@@ -219,7 +227,7 @@ func TestDNSConntrackIsClearedForChangedAndRevokedClients(t *testing.T) {
 	}
 }
 
-func TestDNSConntrackCleanupFailureIsRetriedAndNeverReportedAsApplied(t *testing.T) {
+func TestDNSConntrackCleanupFailureKeepsRepopulationPending(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
 	host := &fakeHost{replies: map[string]string{
@@ -227,32 +235,286 @@ func TestDNSConntrackCleanupFailureIsRetriedAndNeverReportedAsApplied(t *testing
 	}}
 	adapter := NFTables{Run: host.run, RuntimeDir: directory}
 	previous := directOnlyPlan()
-	if _, err := adapter.Apply(context.Background(), previous); err != nil {
+	if repopulate, err := adapter.Apply(context.Background(), previous); err != nil || !repopulate {
 		t.Fatalf("seed previous plan: %v", err)
+	}
+	if err := adapter.CommitDNSRepopulation(context.Background(), previous); err != nil {
+		t.Fatalf("commit seeded plan: %v", err)
 	}
 
 	next := directOnlyPlan()
 	next.DNSDestinations[0].ResolverAddress = "10.90.0.1"
-	failing := "conntrack -D -p udp -s 10.80.0.2 --dport 53"
+	failing := "env LC_ALL=C conntrack -D -p udp -s 10.80.0.2 --dport 53"
 	host.failures = map[string]error{failing: errors.New("operation not permitted")}
-	rebuilt, err := adapter.Apply(context.Background(), next)
+	repopulate, err := adapter.Apply(context.Background(), next)
 	const wantError = "clear udp DNS conntrack for 10.80.0.2: operation not permitted"
 	if err == nil || err.Error() != wantError {
 		t.Fatalf("Apply error = %v, want %q", err, wantError)
 	}
-	if rebuilt {
-		t.Fatal("Apply reported success before required DNS conntrack cleanup")
+	if !repopulate {
+		t.Fatal("successful nft rebuild did not request DNS repopulation")
 	}
 
 	host.failures = nil
 	host.commands = nil
 	host.replies["nft -j list table inet vpn_hub"] = fmt.Sprintf(
 		`{"nftables":[{"table":{"comment":"vpn-hub:%s"}}]}`, Fingerprint(next))
-	if rebuilt, err := adapter.Apply(context.Background(), next); err != nil || rebuilt {
-		t.Fatalf("retry = (%t, %v), want cleanup without another rebuild", rebuilt, err)
+	if repopulate, err := adapter.Apply(context.Background(), next); err != nil || !repopulate {
+		t.Fatalf("retry = (%t, %v), want pending DNS repopulation", repopulate, err)
 	}
 	if !host.ran(failing) {
 		t.Fatalf("failed cleanup was not retried; commands: %v", host.commands)
+	}
+	host.commands = nil
+	if repopulate, err := adapter.Apply(context.Background(), next); err != nil || !repopulate {
+		t.Fatalf("pending retry = (%t, %v), want repopulate until commit", repopulate, err)
+	}
+	if host.ran("conntrack -D") {
+		t.Fatalf("completed cleanup repeated while awaiting DNS: %v", host.commands)
+	}
+	if err := adapter.CommitDNSRepopulation(context.Background(), next); err != nil {
+		t.Fatalf("commit repopulation: %v", err)
+	}
+	if err := adapter.CommitDNSRepopulation(context.Background(), next); err != nil {
+		t.Fatalf("repeat committed repopulation: %v", err)
+	}
+	if err := adapter.CommitDNSRepopulation(context.Background(), previous); err == nil {
+		t.Fatal("stale plan acknowledged the committed transition")
+	}
+	if repopulate, err := adapter.Apply(context.Background(), next); err != nil || repopulate {
+		t.Fatalf("committed retry = (%t, %v), want converged", repopulate, err)
+	}
+}
+
+func TestDNSConntrackZeroDeletionIsIdempotent(t *testing.T) {
+	t.Parallel()
+	var commands []string
+	run := func(_ context.Context, name string, args ...string) (string, error) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		return "conntrack v1.4.7 (conntrack-tools): 0 flow entries have been deleted.\n", fakeExitError{code: 1}
+	}
+
+	err := (NFTables{Run: run}).clearDNSConntrack(context.Background(), []string{"10.80.0.2"})
+	if err != nil {
+		t.Fatalf("zero-match cleanup: %v", err)
+	}
+	want := []string{
+		"env LC_ALL=C conntrack -D -p udp -s 10.80.0.2 --dport 53",
+		"env LC_ALL=C conntrack -D -p tcp -s 10.80.0.2 --dport 53",
+	}
+	if !slices.Equal(commands, want) {
+		t.Fatalf("commands = %v, want %v", commands, want)
+	}
+}
+
+func TestDNSConntrackRejectsNonExactZeroDeletionResults(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		output string
+		err    error
+	}{
+		{name: "wrong count", output: "conntrack v1.4.7 (conntrack-tools): 1 flow entries have been deleted.\n", err: fakeExitError{code: 1}},
+		{name: "wrong exit code", output: "conntrack v1.4.7 (conntrack-tools): 0 flow entries have been deleted.\n", err: fakeExitError{code: 2}},
+		{name: "extra output", output: "warning\nconntrack v1.4.7 (conntrack-tools): 0 flow entries have been deleted.\n", err: fakeExitError{code: 1}},
+		{name: "localized", output: "conntrack v1.4.7 (conntrack-tools): удалено записей: 0\n", err: fakeExitError{code: 1}},
+		{name: "not an exit error", output: "conntrack v1.4.7 (conntrack-tools): 0 flow entries have been deleted.\n", err: errors.New("permission denied")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			run := func(context.Context, string, ...string) (string, error) { return test.output, test.err }
+			if err := (NFTables{Run: run}).clearDNSConntrack(context.Background(), []string{"10.80.0.2"}); err == nil {
+				t.Fatal("non-exact conntrack failure was accepted")
+			}
+		})
+	}
+}
+
+func TestCorruptDNSStateForcesScopedCleanupAndRepopulation(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, dnsConntrackStateFile), []byte(`{"mappings":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := directOnlyPlan()
+	host := &fakeHost{replies: map[string]string{
+		"nft -j list table inet vpn_hub": fmt.Sprintf(
+			`{"nftables":[{"table":{"comment":"vpn-hub:%s"}}]}`, Fingerprint(plan)),
+	}}
+	adapter := NFTables{Run: host.run, RuntimeDir: directory}
+
+	repopulate, err := adapter.Apply(context.Background(), plan)
+	if err != nil || !repopulate {
+		t.Fatalf("Apply = (%t, %v), want conservative repopulation", repopulate, err)
+	}
+	want := []string{
+		"env LC_ALL=C conntrack -D -p udp -s 10.80.0.0/24 --dport 53",
+		"env LC_ALL=C conntrack -D -p tcp -s 10.80.0.0/24 --dport 53",
+	}
+	var got []string
+	for _, command := range host.commands {
+		if strings.Contains(command, "conntrack -D ") {
+			got = append(got, command)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("cleanup = %v, want %v", got, want)
+	}
+	if host.ran("nft -f") {
+		t.Fatalf("matching live ruleset was unnecessarily rebuilt: %v", host.commands)
+	}
+	if err := adapter.CommitDNSRepopulation(context.Background(), plan); err != nil {
+		t.Fatalf("commit repopulation: %v", err)
+	}
+	payload, err := os.ReadFile(filepath.Join(directory, dnsConntrackStateFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state dnsConntrackState
+	if err := json.Unmarshal(payload, &state); err != nil {
+		t.Fatalf("state was not recovered atomically: %v", err)
+	}
+	if state.PendingRepopulate {
+		t.Fatal("successful repopulation remained pending")
+	}
+}
+
+func TestInvalidDNSStateScopeFallsBackToClientCIDR(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	payload := `{"client_cidr":"10.80.0.0/24","ingress_interface":"awg0","cleanup_scopes":["not-an-address"],"pending_repopulate":true,"plan_fingerprint":"bad"}`
+	if err := os.WriteFile(filepath.Join(directory, dnsConntrackStateFile), []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := directOnlyPlan()
+	host := &fakeHost{replies: map[string]string{
+		"nft -j list table inet vpn_hub": fmt.Sprintf(
+			`{"nftables":[{"table":{"comment":"vpn-hub:%s"}}]}`, Fingerprint(plan)),
+	}}
+	adapter := NFTables{Run: host.run, RuntimeDir: directory}
+
+	if repopulate, err := adapter.Apply(context.Background(), plan); err != nil || !repopulate {
+		t.Fatalf("Apply = (%t, %v), want conservative repopulation", repopulate, err)
+	}
+	var got []string
+	for _, command := range host.commands {
+		if strings.Contains(command, "conntrack -D ") {
+			got = append(got, command)
+		}
+	}
+	want := []string{
+		"env LC_ALL=C conntrack -D -p udp -s 10.80.0.0/24 --dport 53",
+		"env LC_ALL=C conntrack -D -p tcp -s 10.80.0.0/24 --dport 53",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("cleanup = %v, want %v", got, want)
+	}
+}
+
+func TestConcurrentFirewallTransitionsAreSerialized(t *testing.T) {
+	directory := t.TempDir()
+	first := directOnlyPlan()
+	second := directOnlyPlan()
+	second.DNSDestinations[0].ResolverAddress = "10.90.0.1"
+
+	var mu sync.Mutex
+	live := "old"
+	nftCalls := 0
+	firstInNFT := false
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondObserved := make(chan struct{}, 1)
+	run := func(_ context.Context, name string, args ...string) (string, error) {
+		if name == "nft" && slices.Equal(args, []string{"-j", "list", "table", "inet", "vpn_hub"}) {
+			mu.Lock()
+			observed, concurrent := live, firstInNFT
+			mu.Unlock()
+			if concurrent {
+				select {
+				case secondObserved <- struct{}{}:
+				default:
+				}
+			}
+			return fmt.Sprintf(`{"nftables":[{"table":{"comment":"vpn-hub:%s"}}]}`, observed), nil
+		}
+		if name == "nft" && len(args) == 2 && args[0] == "-f" {
+			mu.Lock()
+			nftCalls++
+			call := nftCalls
+			if call == 1 {
+				firstInNFT = true
+			}
+			mu.Unlock()
+			if call == 1 {
+				close(firstEntered)
+				<-releaseFirst
+			}
+			payload, err := os.ReadFile(args[1])
+			if err != nil {
+				return "", err
+			}
+			fingerprint := Fingerprint(second)
+			if strings.Contains(string(payload), Fingerprint(first)) {
+				fingerprint = Fingerprint(first)
+			}
+			mu.Lock()
+			live = fingerprint
+			if call == 1 {
+				firstInNFT = false
+			}
+			mu.Unlock()
+			return "", nil
+		}
+		return "", nil
+	}
+	adapter := NFTables{Run: run, RuntimeDir: directory}
+	type result struct {
+		repopulate bool
+		err        error
+	}
+	firstResult := make(chan result, 1)
+	secondResult := make(chan result, 1)
+	go func() {
+		repopulate, err := adapter.Apply(context.Background(), first)
+		firstResult <- result{repopulate: repopulate, err: err}
+	}()
+	<-firstEntered
+	secondStarted := make(chan struct{})
+	go func() {
+		close(secondStarted)
+		repopulate, err := adapter.Apply(context.Background(), second)
+		secondResult <- result{repopulate: repopulate, err: err}
+	}()
+	<-secondStarted
+	interleaved := false
+	select {
+	case <-secondObserved:
+		interleaved = true
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(releaseFirst)
+	for name, channel := range map[string]<-chan result{"first": firstResult, "second": secondResult} {
+		result := <-channel
+		if result.err != nil || !result.repopulate {
+			t.Fatalf("%s Apply = (%t, %v), want pending repopulation", name, result.repopulate, result.err)
+		}
+	}
+	if interleaved {
+		t.Fatal("the second process observed the firewall during the first transition")
+	}
+	if err := adapter.CommitDNSRepopulation(context.Background(), second); err != nil {
+		t.Fatalf("commit second transition: %v", err)
+	}
+	payload, err := os.ReadFile(filepath.Join(directory, dnsConntrackStateFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state dnsConntrackState
+	if err := json.Unmarshal(payload, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.PlanFingerprint != Fingerprint(second) || state.PendingRepopulate {
+		t.Fatalf("final state = %+v, want committed second plan", state)
 	}
 }
 
@@ -607,17 +869,32 @@ func TestRenderSocksEndpoint(t *testing.T) {
 func TestAnUnchangedRulesetIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	plan := directOnlyPlan()
+	directory := t.TempDir()
 	host := &fakeHost{replies: map[string]string{
 		"nft -j list table inet vpn_hub": fmt.Sprintf(
 			`{"nftables":[{"table":{"comment":"vpn-hub:%s"}}]}`, Fingerprint(plan)),
 	}}
 
-	rebuilt, err := (NFTables{Run: host.run, RuntimeDir: t.TempDir()}).Apply(context.Background(), plan)
+	adapter := NFTables{Run: host.run, RuntimeDir: directory}
+	repopulate, err := adapter.Apply(context.Background(), plan)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if rebuilt {
-		t.Error("Apply reported a rebuild it did not need to do")
+	if !repopulate {
+		t.Error("unknown transition state did not request conservative DNS repopulation")
+	}
+	if host.ran("nft -f") {
+		t.Fatalf("matching ruleset was rebuilt: %v", host.commands)
+	}
+	if err := adapter.CommitDNSRepopulation(context.Background(), plan); err != nil {
+		t.Fatalf("commit DNS repopulation: %v", err)
+	}
+	host.commands = nil
+	if repopulate, err := adapter.Apply(context.Background(), plan); err != nil || repopulate {
+		t.Fatalf("converged Apply = (%t, %v), want false, nil", repopulate, err)
+	}
+	if host.ran("nft -f") {
+		t.Fatalf("converged ruleset was rebuilt: %v", host.commands)
 	}
 }
 

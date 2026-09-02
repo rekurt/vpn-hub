@@ -5,12 +5,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
+	runtimeadapter "vpn-hub/internal/adapters/runtime"
 	"vpn-hub/internal/domain"
 )
 
@@ -77,9 +82,12 @@ type dnsConntrackMapping struct {
 }
 
 type dnsConntrackState struct {
-	ClientCIDR       string                `json:"client_cidr"`
-	IngressInterface string                `json:"ingress_interface"`
-	Mappings         []dnsConntrackMapping `json:"mappings"`
+	ClientCIDR        string                `json:"client_cidr"`
+	IngressInterface  string                `json:"ingress_interface"`
+	Mappings          []dnsConntrackMapping `json:"mappings"`
+	PlanFingerprint   string                `json:"plan_fingerprint,omitempty"`
+	CleanupScopes     []string              `json:"cleanup_scopes,omitempty"`
+	PendingRepopulate bool                  `json:"pending_repopulate,omitempty"`
 }
 
 func dnsConntrackStateFor(plan domain.FirewallPlan) dnsConntrackState {
@@ -100,7 +108,10 @@ func dnsConntrackStateFor(plan domain.FirewallPlan) dnsConntrackState {
 	}
 	sort.Strings(addresses)
 
-	state := dnsConntrackState{ClientCIDR: plan.ClientCIDR, IngressInterface: plan.IngressInterface}
+	state := dnsConntrackState{
+		ClientCIDR: plan.ClientCIDR, IngressInterface: plan.IngressInterface,
+		PlanFingerprint: Fingerprint(plan),
+	}
 	for _, address := range addresses {
 		state.Mappings = append(state.Mappings, dnsConntrackMapping{
 			ClientAddress: address, ResolverAddress: resolvers[address],
@@ -121,7 +132,10 @@ func dnsConntrackCleanupScopes(previous *dnsConntrackState, current dnsConntrack
 	for _, mapping := range current.Mappings {
 		currentResolvers[mapping.ClientAddress] = mapping.ResolverAddress
 	}
-	affected := make(map[string]bool)
+	affected := make(map[string]bool, len(previous.CleanupScopes))
+	for _, scope := range previous.CleanupScopes {
+		affected[scope] = true
+	}
 	for _, mapping := range previous.Mappings {
 		resolver, admitted := currentResolvers[mapping.ClientAddress]
 		if previous.IngressInterface != current.IngressInterface || !admitted || resolver != mapping.ResolverAddress {
@@ -639,7 +653,31 @@ func (n NFTables) readDNSConntrackState() (*dnsConntrackState, error) {
 	}
 	var state dnsConntrackState
 	if err := json.Unmarshal(payload, &state); err != nil {
-		return nil, fmt.Errorf("decode DNS conntrack state: %w", err)
+		return nil, nil
+	}
+	if _, err := netip.ParsePrefix(state.ClientCIDR); err != nil || state.IngressInterface == "" {
+		return nil, nil
+	}
+	if state.PendingRepopulate {
+		fingerprint, err := hex.DecodeString(state.PlanFingerprint)
+		if err != nil || len(fingerprint) != 8 {
+			return nil, nil
+		}
+	}
+	for _, scope := range state.CleanupScopes {
+		if _, err := netip.ParseAddr(scope); err != nil {
+			if _, err := netip.ParsePrefix(scope); err != nil {
+				return nil, nil
+			}
+		}
+	}
+	for _, mapping := range state.Mappings {
+		if _, err := netip.ParseAddr(mapping.ClientAddress); err != nil {
+			return nil, nil
+		}
+		if _, err := netip.ParseAddr(mapping.ResolverAddress); err != nil {
+			return nil, nil
+		}
 	}
 	return &state, nil
 }
@@ -650,25 +688,58 @@ func (n NFTables) writeDNSConntrackState(state dnsConntrackState) error {
 		return fmt.Errorf("encode DNS conntrack state: %w", err)
 	}
 	path := filepath.Join(n.runtimeDir(), dnsConntrackStateFile)
-	if _, err := writeIfChanged(path, string(payload)+"\n", 0o600); err != nil {
+	if err := runtimeadapter.AtomicWrite(path, append(payload, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write DNS conntrack state: %w", err)
 	}
 	return nil
 }
 
-func (n NFTables) clearDNSConntrack(ctx context.Context, scopes []string) error {
-	run := n.Run
-	if run == nil {
-		run = execRunner
+func (n NFTables) lockTransition() (func(), error) {
+	if err := os.MkdirAll(n.runtimeDir(), 0o700); err != nil {
+		return nil, fmt.Errorf("create nftables runtime directory: %w", err)
 	}
+	release, err := runtimeadapter.LockDir(n.runtimeDir())
+	if err != nil {
+		return nil, fmt.Errorf("lock nftables transition: %w", err)
+	}
+	return release, nil
+}
+
+func (n NFTables) clearDNSConntrack(ctx context.Context, scopes []string) error {
 	for _, scope := range scopes {
 		for _, protocol := range []string{"udp", "tcp"} {
-			if _, err := run(ctx, "conntrack", "-D", "-p", protocol, "-s", scope, "--dport", "53"); err != nil {
+			output, err := n.runDNSConntrack(ctx, "-D", "-p", protocol, "-s", scope, "--dport", "53")
+			if err != nil && !isZeroDNSConntrackDeletion(output, err) {
 				return fmt.Errorf("clear %s DNS conntrack for %s: %w", protocol, scope, err)
 			}
 		}
 	}
 	return nil
+}
+
+func (n NFTables) runDNSConntrack(ctx context.Context, args ...string) (string, error) {
+	if n.Run != nil {
+		return n.Run(ctx, "env", append([]string{"LC_ALL=C", "conntrack"}, args...)...)
+	}
+	command := exec.CommandContext(ctx, "conntrack", args...)
+	for _, variable := range os.Environ() {
+		if !strings.HasPrefix(variable, "LC_ALL=") {
+			command.Env = append(command.Env, variable)
+		}
+	}
+	command.Env = append(command.Env, "LC_ALL=C")
+	output, err := command.CombinedOutput()
+	return string(output), err
+}
+
+var zeroDNSConntrackDeletion = regexp.MustCompile(
+	`^conntrack v[0-9]+(?:\.[0-9]+)* \(conntrack-tools\): 0 flow entries have been deleted\.$`,
+)
+
+func isZeroDNSConntrackDeletion(output string, err error) bool {
+	var exitError interface{ ExitCode() int }
+	return errors.As(err, &exitError) && exitError.ExitCode() == 1 &&
+		zeroDNSConntrackDeletion.MatchString(strings.TrimSuffix(output, "\n"))
 }
 
 // Observe reports the fingerprint carried by the live table, or an empty string when
@@ -728,7 +799,8 @@ func parseFingerprint(output string) (string, error) {
 // without an adapter.
 func (n NFTables) Fingerprint(plan domain.FirewallPlan) string { return Fingerprint(plan) }
 
-// Apply loads the ruleset, and reports whether it actually replaced the live one.
+// Apply loads the ruleset and reports whether DNS must repopulate its dynamic sets.
+// The result remains true until CommitDNSRepopulation acknowledges a successful fill.
 //
 // It replaces the table only when the fingerprints differ, which is a deliberate
 // narrowing of what this corrects. Replacement is atomic because it deletes the
@@ -745,6 +817,12 @@ func (n NFTables) Fingerprint(plan domain.FirewallPlan) string { return Fingerpr
 // already root on the hub, whereas the addresses were being lost continuously and
 // by design.
 func (n NFTables) Apply(ctx context.Context, plan domain.FirewallPlan) (bool, error) {
+	release, err := n.lockTransition()
+	if err != nil {
+		return false, err
+	}
+	defer release()
+
 	loaded, observeErr := n.Observe(ctx)
 	previous, err := n.readDNSConntrackState()
 	if err != nil {
@@ -753,6 +831,15 @@ func (n NFTables) Apply(ctx context.Context, plan domain.FirewallPlan) (bool, er
 	current := dnsConntrackStateFor(plan)
 	cleanupScopes := dnsConntrackCleanupScopes(previous, current)
 	rebuilt := observeErr != nil || loaded != Fingerprint(plan)
+	repopulate := rebuilt || previous == nil || previous.PendingRepopulate || len(cleanupScopes) > 0
+	transition := current
+	transition.PendingRepopulate = repopulate
+	transition.CleanupScopes = cleanupScopes
+	if repopulate {
+		if err := n.writeDNSConntrackState(transition); err != nil {
+			return false, err
+		}
+	}
 
 	if rebuilt {
 		path := filepath.Join(n.runtimeDir(), "ruleset.nft")
@@ -770,10 +857,42 @@ func (n NFTables) Apply(ctx context.Context, plan domain.FirewallPlan) (bool, er
 	}
 
 	if err := n.clearDNSConntrack(ctx, cleanupScopes); err != nil {
-		return false, err
+		return repopulate, err
 	}
-	if err := n.writeDNSConntrackState(current); err != nil {
-		return false, err
+	if repopulate && len(transition.CleanupScopes) > 0 {
+		transition.CleanupScopes = nil
+		if err := n.writeDNSConntrackState(transition); err != nil {
+			return true, err
+		}
 	}
-	return rebuilt, nil
+	return repopulate, nil
+}
+
+// CommitDNSRepopulation records that dnsmasq has refilled the dynamic nft sets
+// emptied by the firewall transition.
+func (n NFTables) CommitDNSRepopulation(ctx context.Context, plan domain.FirewallPlan) error {
+	release, err := n.lockTransition()
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	state, err := n.readDNSConntrackState()
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		return fmt.Errorf("DNS repopulation state is unavailable")
+	}
+	if state.PlanFingerprint != Fingerprint(plan) {
+		return fmt.Errorf("DNS repopulation plan changed during transition")
+	}
+	if !state.PendingRepopulate {
+		return nil
+	}
+	if len(state.CleanupScopes) > 0 {
+		return fmt.Errorf("DNS conntrack cleanup is still pending")
+	}
+	state.PendingRepopulate = false
+	return n.writeDNSConntrackState(*state)
 }

@@ -125,12 +125,19 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 	// The packet filter goes in first. Doing it the other way round would leave a
 	// window where the ingress interface is up and forwarding under whatever rules
 	// happened to be loaded.
-	rebuilt, err := r.Firewall.Apply(ctx, plan)
-	if err != nil {
-		return nil, fmt.Errorf("apply firewall: %w", err)
+	repopulate, firewallErr := r.Firewall.Apply(ctx, plan)
+	if firewallErr != nil && !repopulate {
+		return nil, fmt.Errorf("apply firewall: %w", firewallErr)
+	}
+	var errs []error
+	if firewallErr != nil {
+		errs = append(errs, fmt.Errorf("apply firewall: %w", firewallErr))
 	}
 	if err := r.Ingress.Apply(ctx, spec); err != nil {
-		return nil, fmt.Errorf("apply ingress: %w", err)
+		if !repopulate {
+			return nil, fmt.Errorf("apply ingress: %w", err)
+		}
+		errs = append(errs, fmt.Errorf("apply ingress: %w", err))
 	}
 	// Egress namespaces come last: the marks that steer traffic into them are already
 	// installed, so a half-built namespace drops traffic rather than leaking it.
@@ -142,7 +149,6 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 	// emptied, so skipping DNS left private-zone answers unpopulated and their traffic
 	// following the default (internet) egress -- the silent misroute the rebuild
 	// exists to prevent. So apply DNS regardless and report both errors together.
-	var errs []error
 	if r.Egress != nil {
 		if err := r.Egress.Apply(ctx, egresses); err != nil {
 			errs = append(errs, fmt.Errorf("apply egress: %w", err))
@@ -151,8 +157,13 @@ func (r HostReconciler) Apply(ctx context.Context, state domain.DesiredState) ([
 	// Resolvers after the namespaces they live in and forward through. The plan
 	// itself was derived by compile, before any of the above ran.
 	if r.DNS != nil {
-		if err := r.DNS.Apply(ctx, compiled.dns, rebuilt); err != nil {
-			errs = append(errs, fmt.Errorf("apply dns: %w", err))
+		dnsErr := r.DNS.Apply(ctx, compiled.dns, repopulate)
+		if dnsErr != nil {
+			errs = append(errs, fmt.Errorf("apply dns: %w", dnsErr))
+		} else if repopulate && firewallErr == nil {
+			if err := r.Firewall.CommitDNSRepopulation(ctx, plan); err != nil {
+				errs = append(errs, fmt.Errorf("commit DNS repopulation: %w", err))
+			}
 		}
 	}
 	// The fallback listener is the last thing and its failure is collected rather

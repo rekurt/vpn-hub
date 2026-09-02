@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,17 +11,24 @@ import (
 )
 
 type recordingFirewall struct {
-	applied []domain.FirewallPlan
-	err     error
+	applied   []domain.FirewallPlan
+	committed []domain.FirewallPlan
+	err       error
+	commitErr error
 	// live is the fingerprint the host reports; empty means the table is absent.
 	live string
-	// rebuilt is what Apply reports back: whether it replaced the live ruleset.
-	rebuilt bool
+	// repopulate is what Apply reports back while DNS dynamic sets need refilling.
+	repopulate bool
 }
 
 func (f *recordingFirewall) Apply(_ context.Context, plan domain.FirewallPlan) (bool, error) {
 	f.applied = append(f.applied, plan)
-	return f.rebuilt, f.err
+	return f.repopulate, f.err
+}
+
+func (f *recordingFirewall) CommitDNSRepopulation(_ context.Context, plan domain.FirewallPlan) error {
+	f.committed = append(f.committed, plan)
+	return f.commitErr
 }
 
 func (f *recordingFirewall) Observe(context.Context) (string, error) { return f.live, nil }
@@ -174,6 +182,47 @@ func TestDNSAppliesEvenWhenEgressFails(t *testing.T) {
 	}
 	if dns.applied != 1 {
 		t.Errorf("DNS.Apply called %d times, want 1 despite the egress failure", dns.applied)
+	}
+}
+
+func TestDNSRepopulatesEvenWhenPostLoadFirewallCleanupFails(t *testing.T) {
+	t.Parallel()
+	key, state := hubKeyPair(t)
+	cleanupErr := errors.New("delete stale DNS conntrack: operation not permitted")
+	dnsErr := errors.New("repopulate private DNS sets: dnsmasq failed")
+	firewall := &recordingFirewall{repopulate: true, err: cleanupErr}
+	dns := &recordingDNS{err: dnsErr}
+	r := newReconciler(key, firewall, &recordingIngress{})
+	r.DNS = dns
+
+	_, err := r.Apply(context.Background(), state)
+	if err == nil || !errors.Is(err, cleanupErr) || !errors.Is(err, dnsErr) {
+		t.Fatalf("Apply error = %v, want joined firewall cleanup and DNS errors", err)
+	}
+	if dns.applied != 1 || !dns.repopulated {
+		t.Fatalf("DNS apply = (%d, repopulate=%t), want one forced repopulation", dns.applied, dns.repopulated)
+	}
+	if len(firewall.committed) != 0 {
+		t.Fatal("failed firewall cleanup was committed")
+	}
+}
+
+func TestSuccessfulDNSRepopulationCommitsFirewallTransition(t *testing.T) {
+	t.Parallel()
+	key, state := hubKeyPair(t)
+	firewall := &recordingFirewall{repopulate: true}
+	dns := &recordingDNS{}
+	r := newReconciler(key, firewall, &recordingIngress{})
+	r.DNS = dns
+
+	if _, err := r.Apply(context.Background(), state); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if dns.applied != 1 || !dns.repopulated {
+		t.Fatalf("DNS apply = (%d, repopulate=%t), want one forced repopulation", dns.applied, dns.repopulated)
+	}
+	if len(firewall.committed) != 1 {
+		t.Fatalf("firewall transition committed %d times, want 1", len(firewall.committed))
 	}
 }
 

@@ -24,9 +24,10 @@ type RevisionStore interface {
 
 // Firewall installs a rendered policy as a single transaction.
 type Firewall interface {
-	// Apply reports whether it replaced the live ruleset. The answer matters to the
-	// resolver: replacement empties the sets it had been filling from DNS answers.
+	// Apply reports whether the resolver must repopulate dynamic nft sets. The answer
+	// remains true across retries until CommitDNSRepopulation acknowledges success.
 	Apply(context.Context, domain.FirewallPlan) (bool, error)
+	CommitDNSRepopulation(context.Context, domain.FirewallPlan) error
 	// Observe returns the fingerprint carried by the live ruleset, empty when there
 	// is none.
 	Observe(context.Context) (string, error)
