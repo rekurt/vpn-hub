@@ -31,3 +31,4 @@ host.corp.internal
 intranet.corp.internal
 service.corp.internal
 tcp.corp.internal
+schema.org
