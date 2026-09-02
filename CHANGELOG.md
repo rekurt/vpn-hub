@@ -7,8 +7,8 @@ All notable user-facing changes are recorded here. The project follows conventio
 ### Added
 
 - Public documentation site with English as the default language, plus Russian and Simplified Chinese navigation.
-- Cookbook runbooks for safe rollout, rollback, segmentation, and subscription canaries.
-- Telegram-bot operation guides and example screens for guarded device, deployment, and subscription workflows.
+- Cookbook runbooks for safe rollout, rollback, segmentation, subscription canaries, device lifecycle, and tunnel lifecycle.
+- Telegram-bot operation guides and example screens for guarded device, deployment, subscription, routing, ACL, hub, host, notification, and incident workflows.
 - GitHub Pages publication workflow for the static documentation site.
 
 ### Changed
