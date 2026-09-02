@@ -29,6 +29,12 @@
   outline-offset: 3px;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    --vpn-focus-ring: #71f6ff;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
