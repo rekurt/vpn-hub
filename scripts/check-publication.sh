@@ -4,6 +4,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 allowlist="$script_dir/publication-allowlist.txt"
+active_allowlist=$(cat "$allowlist")
 report_matches() {
 	label=$1
 	pattern=$2
@@ -30,7 +31,7 @@ is_allowed_ip() {
 			[ "$second" -ge 16 ] 2>/dev/null && [ "$second" -le 31 ] 2>/dev/null && return 0
 			;;
 	esac
-	grep -Fxq "$ip" "$allowlist"
+	printf '%s\n' "$active_allowlist" | grep -Fxq "$ip"
 }
 
 is_allowed_host() {
@@ -38,7 +39,7 @@ is_allowed_host() {
 	case "$host" in
 		*.example.com|*.example.net|*.example.org|example.com|example.net|example.org|*.internal|*.test|localhost) return 0 ;;
 	esac
-	grep -Fxq "$host" "$allowlist"
+	printf '%s\n' "$active_allowlist" | grep -Fxq "$host"
 }
 
 is_non_network_literal() {
@@ -138,6 +139,7 @@ extract_address_candidates() {
 		chomp;
 		next unless /^([^\0]+)\0([0-9]+)\0(.*)$/s;
 		my ($path, $number, $content) = ($1, $2, $3);
+		next if $path =~ m{(?:^|/)package-lock\.json$};
 		if ($path ne $current_path) {
 			$state = "code";
 			$current_path = $path;
@@ -180,43 +182,26 @@ EOF
 	[ "$bad" -eq 0 ]
 }
 
-package_lock_paths() {
-	ref=$1
-	if [ -n "$ref" ]; then
-		git ls-tree -r --name-only "$ref" | grep -E '(^|/)package-lock\.json$' || true
-	else
-		git ls-files | grep -E '(^|/)package-lock\.json$' || true
-	fi
-}
-
 check_package_locks() {
 	ref=$1
 	if ! command -v node >/dev/null 2>&1; then
-		echo "The node executable is required to validate tracked package-lock.json files." >&2
+		echo "The node executable is required to validate tracked package-lock files." >&2
 		return 1
 	fi
-
-	locks=$(package_lock_paths "$ref")
-	[ -n "$locks" ] || return 0
-	failed=0
-	while IFS= read -r lock; do
-		[ -n "$lock" ] || continue
-		if [ -n "$ref" ]; then
-			if ! git show "$ref:$lock" | node "$script_dir/validate-package-lock.mjs" "$lock"; then
-				failed=1
-			fi
-		elif ! node "$script_dir/validate-package-lock.mjs" "$lock" <"$lock"; then
-			failed=1
-		fi
-	done <<EOF
-$locks
-EOF
-	[ "$failed" -eq 0 ]
+	if [ -n "$ref" ]; then
+		node "$script_dir/check-package-locks.mjs" --ref "$ref"
+	else
+		node "$script_dir/check-package-locks.mjs"
+	fi
 }
 
 check_ref() {
 	ref=$1
 	failed=0
+	active_allowlist=$(cat "$allowlist")
+	if [ -n "$ref" ] && git cat-file -e "$ref:scripts/publication-allowlist.txt" 2>/dev/null; then
+		active_allowlist=$(git show "$ref:scripts/publication-allowlist.txt")
+	fi
 	report_matches 'private key' '(client_private_key|private_key)[[:space:]]*[:=][[:space:]]*[A-Za-z0-9+/]{42,}={0,2}' "$ref" || failed=1
 	report_matches 'Telegram bot token' '[0-9]{8,10}:AA[A-Za-z0-9_-]{30,}' "$ref" || failed=1
 	report_matches 'runtime state document' '"revision"[^}]*"hub"[[:space:]]*:' "$ref" || failed=1
