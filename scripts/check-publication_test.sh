@@ -12,6 +12,7 @@ new_repo() {
 	repo="$tmp_dir/$name"
 	mkdir -p "$repo/scripts"
 	cp "$script_dir/check-publication.sh" "$repo/scripts/check-publication.sh" || exit 1
+	cp "$script_dir/check-publication-addresses.mjs" "$repo/scripts/check-publication-addresses.mjs" || exit 1
 	cp "$script_dir/check-package-locks.mjs" "$repo/scripts/check-package-locks.mjs" || exit 1
 	cp "$script_dir/validate-package-lock.mjs" "$repo/scripts/validate-package-lock.mjs" || exit 1
 	cp "$script_dir/publication-allowlist.txt" "$repo/scripts/publication-allowlist.txt" || exit 1
@@ -223,6 +224,25 @@ expect_staged_secret_fail() {
 	fi
 }
 
+expect_staged_hostname_fail() {
+	name=$1
+	new_repo "$name"
+	printf '%s\n' 'endpoint: vpn.example.com:51820' >"$repo/fixture.txt"
+	commit_fixture
+	printf '%s\n' 'endpoint: staged.personal-domain.dev:51820' >"$repo/fixture.txt"
+	git -C "$repo" add -- fixture.txt
+	printf '%s\n' 'endpoint: vpn.example.com:51820' >"$repo/fixture.txt"
+	output="$repo/check-output"
+	if (cd "$repo" && sh scripts/check-publication.sh) >"$output" 2>&1; then
+		echo "$name: expected staged hostname to fail" >&2
+		failed=1
+	fi
+	if ! grep -Fq '[index]' "$output"; then
+		echo "$name: expected staged hostname index evidence" >&2
+		failed=1
+	fi
+}
+
 expect_large_lock_blob_pass() {
 	name=$1
 	new_repo "$name"
@@ -336,11 +356,114 @@ expect_fail_path filename-shaped-server-host fixture.yaml printf '%s\n' \
 	'server: corp.ovpn'
 expect_fail_path filename-shaped-js-host fixture.mjs printf '%s\n' \
 	'const endpoint = "server.key.previous";'
+expect_fail_path executable-member-endpoint-host fixture.mjs printf '%s\n' \
+	'const endpoint = corp.ovpn;'
+expect_fail_path template-interpolation-endpoint-host fixture.mjs printf '%s\n' \
+	'const endpoint = `endpoint=${corp.ovpn}`;'
+expect_fail_path anchored-regexp-host fixture.mjs printf '%s\n' \
+	'const pattern = /^corp.ovpn$/;'
+expect_fail_path filename-shaped-neutral-js-value fixture.mjs printf '%s\n' \
+	'const value = "server.key.previous";'
+expect_fail_path filename-shaped-js-url fixture.mjs printf '%s\n' \
+	'const value = "https://corp.ovpn/path";'
 expect_fail_path filename-shaped-go-host fixture.go printf '%s\n' \
 	'package fixture' \
 	'const host = "server.key.previous"'
 expect_fail_path filename-shaped-prose-host fixture.mdx printf '%s\n' \
 	'Connect to corp.ovpn for access.'
+expect_fail_path filename-shaped-bare-prose fixture.mdx printf '%s\n' \
+	'corp.ovpn'
+expect_fail_path filename-shaped-configure-prose fixture.mdx printf '%s\n' \
+	'Configure endpoint corp.ovpn before deployment.'
+expect_fail_path identifier-shaped-yaml-host fixture.yaml printf '%s\n' \
+	'endpoint: hub.endpoint'
+expect_fail_path filename-shaped-yaml-value fixture.yaml printf '%s\n' \
+	'value: server.key.previous'
+expect_fail_path identifier-shaped-js-comment fixture.mjs printf '%s\n' \
+	'// connect to source.kind'
+expect_fail_path identifier-shaped-go-comment fixture.go printf '%s\n' \
+	'package fixture' \
+	'// connect to source.kind'
+expect_fail_path dial-identifier-js-comment fixture.mjs printf '%s\n' \
+	'// dial source.kind now'
+expect_fail_path dial-identifier-js-string fixture.mjs printf '%s\n' \
+	'const message = "must dial source.kind";'
+expect_fail_path dial-identifier-markdown-inline fixture.mdx printf '%s\n' \
+	'Dial `hub.endpoint` now.'
+expect_fail_path dial-filename-go-comment fixture.go printf '%s\n' \
+	'package fixture' \
+	'// dial hub.yaml now'
+expect_fail_path neutral-identifier-js-comment fixture.mjs printf '%s\n' \
+	'// source.kind'
+expect_fail_path fabricated-go-symbol-comment fixture.go printf '%s\n' \
+	'package fixture' \
+	'// Server.Key'
+expect_fail_path fabricated-go-doc-symbol-comment fixture.go printf '%s\n' \
+	'package fixture' \
+	'// Server.Key documents an external endpoint.'
+expect_fail_path punctuated-filename-host fixture.mjs printf '%s\n' \
+	'const value = "(corp.ovpn)";'
+expect_fail_path multiline-js-comment-host fixture.mjs printf '%s\n' \
+	'/* operator note:' \
+	'connect to source.kind' \
+	'*/'
+expect_fail_path js-template-literal-host fixture.mjs printf '%s\n' \
+	'const value = `server.key.previous`;'
+expect_fail_path js-regexp-host fixture.mjs printf '%s\n' \
+	'const pattern = /corp.ovpn/;'
+expect_pass_path js-template-expression fixture.mjs printf '%s\n' \
+	'const label = `${source.kind}`;'
+expect_fail_path go-raw-filename-host fixture.go printf '%s\n' \
+	'package fixture' \
+	'const value = `server.key.previous`'
+expect_fail_path markdown-inline-endpoint-host fixture.mdx printf '%s\n' \
+	'Configure endpoint `corp.ovpn` before deployment.'
+expect_pass_path markdown-inline-local-file fixture.mdx printf '%s\n' \
+	'Local file: `corp.ovpn`.'
+expect_fail_path markdown-inline-fabricated-symbol fixture.mdx printf '%s\n' \
+	'Use `Corp.Ovpn`.'
+expect_fail_path markdown-inline-unreviewed-file-host fixture.mdx printf '%s\n' \
+	'Use `corp.yaml`.'
+expect_fail_path markdown-fenced-yaml-host fixture.mdx printf '%s\n' \
+	'```yaml' \
+	'endpoint: corp.ovpn' \
+	'```'
+expect_fail_path markdown-fenced-js-string-host fixture.mdx printf '%s\n' \
+	'```js' \
+	'const value = "server.key.previous";' \
+	'```'
+expect_pass_path markdown-fenced-js-member fixture.mdx printf '%s\n' \
+	'```js' \
+	'fields.push(source.kind);' \
+	'```'
+expect_pass_path markdown-fenced-local-path fixture.mdx printf '%s\n' \
+	'```text' \
+	'/etc/vpn-hub/age/recipient.txt' \
+	'```'
+expect_fail_path quoted-yaml-filename-host fixture.yaml printf '%s\n' \
+	'endpoint: "corp.ovpn"'
+expect_fail_path reviewed-suffix-yaml-host fixture.yaml printf '%s\n' \
+	'endpoint: hub.yaml'
+expect_fail_path reviewed-suffix-url-host fixture.mjs printf '%s\n' \
+	'const value = "https://hub.yaml/path";'
+expect_fail_path bare-reviewed-suffix-prose fixture.mdx printf '%s\n' \
+	'corp.yaml'
+expect_fail_path schemeless-path-like-host fixture.mdx printf '%s\n' \
+	'Visit corp.ovpn/path for access.'
+expect_fail_path sibling-file-call-host fixture.mjs printf '%s\n' \
+	'const value = readFileSync("local.txt") + "corp.ovpn";'
+expect_fail_path slash-prefixed-host fixture.mdx printf '%s\n' \
+	'Visit gateway/private.personal-domain.dev.'
+expect_fail_path reviewed-root-prose-host fixture.mdx printf '%s\n' \
+	'Visit secrets/corp.ovpn.'
+expect_fail_path prose-in-host fixture.mdx printf '%s\n' \
+	'Reach the service in corp.ovpn.'
+expect_fail_path yaml-source-host fixture.yaml printf '%s\n' \
+	'source: corp.ovpn'
+expect_fail_path angle-bracket-host fixture.mdx printf '%s\n' \
+	'Visit <corp.ovpn>.'
+expect_fail_path quoted-yaml-neutral-value fixture.yaml printf '%s\n' \
+	'value: "server.key.previous"'
 expect_fail_path unknown-doc-code-host fixture.mdx printf '%s\n' \
 	'```yaml' \
 	'endpoint: edge.personal-domain.lan' \
@@ -364,10 +487,43 @@ expect_worktree_package_lock_symlink_fail worktree-lock-symlink
 expect_unstaged_package_lock_fail unstaged-lock-content
 expect_staged_package_lock_fail staged-lock-content
 expect_staged_secret_fail staged-secret
+expect_staged_hostname_fail staged-hostname
 expect_invalid_utf8_package_lock_path_fail invalid-utf8-lock-path
 expect_large_lock_blob_pass large-lock-blob
 expect_large_tree_listing_pass large-tree-listing
 expect_oversized_lock_blob_fail_clearly oversized-lock-blob
+
+if printf 'malformed address input' | node "$script_dir/check-publication-addresses.mjs" >/dev/null 2>&1; then
+	echo "malformed-address-input: classifier must fail closed" >&2
+	failed=1
+fi
+
+if printf 'fixture.txt\0001\000\377\n' | node "$script_dir/check-publication-addresses.mjs" >/dev/null 2>&1; then
+	echo "invalid-utf8-address-input: classifier must fail closed" >&2
+	failed=1
+fi
+
+new_repo historical-nonblob-lock
+printf '%s\n' 'safe fixture' >"$repo/fixture.txt"
+commit_fixture
+commit_oid=$(git -C "$repo" rev-parse HEAD)
+tree_oid=$(printf '160000 commit %s\tpackage-lock.json\0' "$commit_oid" | git -C "$repo" mktree -z)
+if (cd "$repo" && node scripts/check-package-locks.mjs --ref "$tree_oid"); then
+	echo "historical-nonblob-lock: package-lock gitlink must fail closed" >&2
+	failed=1
+fi
+
+new_repo schema-self-approval
+mkdir -p "$repo/site/scripts" "$repo/site/src/data"
+printf '%s\n' '{"fields":[{"path":"corp.private"}]}' >"$repo/site/src/data/config-schema.json"
+printf '%s\n' '#!/bin/sh' 'exit 1' >"$repo/site/scripts/extract-config-schema.mjs"
+printf '%s\n' 'Use `corp.private`.' >"$repo/fixture.mdx"
+git -C "$repo" add -- site/scripts/extract-config-schema.mjs site/src/data/config-schema.json fixture.mdx
+git -C "$repo" commit -qm 'test: add unverified schema fixture'
+if (cd "$repo" && sh scripts/check-publication.sh); then
+	echo "schema-self-approval: unverified schema must not approve its own hostname" >&2
+	failed=1
+fi
 
 new_repo tracked-filename-host
 printf '%s\n' 'local profile fixture' >"$repo/corp.ovpn"
@@ -376,6 +532,71 @@ git -C "$repo" add -- corp.ovpn fixture.yaml
 git -C "$repo" commit -qm "test: add tracked filename host fixture"
 if (cd "$repo" && sh scripts/check-publication.sh); then
 	echo "tracked-filename-host: tracked basename must not approve a network value" >&2
+	failed=1
+fi
+
+new_repo cross-file-artifact-host
+printf '%s\n' 'const profile = readFileSync("corp.ovpn");' >"$repo/local.mjs"
+printf '%s\n' 'corp.ovpn' >"$repo/fixture.mdx"
+git -C "$repo" add -- local.mjs fixture.mdx
+git -C "$repo" commit -qm "test: add cross-file artifact host fixture"
+if (cd "$repo" && sh scripts/check-publication.sh); then
+	echo "cross-file-artifact-host: file evidence must not leak across records" >&2
+	failed=1
+fi
+
+new_repo same-record-artifact-host
+printf '%s\n' 'const local = readFileSync("local.txt"); const value = "corp.ovpn";' >"$repo/fixture.mjs"
+commit_fixture fixture.mjs
+if (cd "$repo" && sh scripts/check-publication.sh); then
+	echo "same-record-artifact-host: file evidence must apply to its own candidate only" >&2
+	failed=1
+fi
+
+new_repo cross-file-identifier-host
+printf '%s\n' 'fields.push(Corp.Ovpn);' >"$repo/local.mjs"
+printf '%s\n' 'Use `Corp.Ovpn`.' >"$repo/fixture.mdx"
+git -C "$repo" add -- local.mjs fixture.mdx
+git -C "$repo" commit -qm "test: add cross-file identifier host fixture"
+if (cd "$repo" && sh scripts/check-publication.sh); then
+	echo "cross-file-identifier-host: executable identifier evidence must not leak across files" >&2
+	failed=1
+fi
+
+new_repo newline-path-host
+newline_path=$(printf 'nested/line\nbreak.txt')
+mkdir -p "$repo/nested"
+printf '%s\n' 'endpoint: newline.personal-domain.dev' >"$repo/$newline_path"
+commit_fixture "$newline_path"
+if (cd "$repo" && sh scripts/check-publication.sh); then
+	echo "newline-path-host: NUL-delimited records must preserve newline paths" >&2
+	failed=1
+fi
+
+new_repo malformed-text-index
+printf 'endpoint: malformed.personal-domain.dev\000\377\n' >"$repo/fixture.mdx"
+git -C "$repo" add -- fixture.mdx
+if (cd "$repo" && sh scripts/check-publication.sh); then
+	echo "malformed-text-index: tracked text with NUL and invalid UTF-8 must fail closed" >&2
+	failed=1
+fi
+
+new_repo malformed-text-worktree
+printf '%s\n' 'safe fixture' >"$repo/fixture.mdx"
+commit_fixture fixture.mdx
+printf 'endpoint: malformed.personal-domain.dev\000\377\n' >"$repo/fixture.mdx"
+if (cd "$repo" && sh scripts/check-publication.sh); then
+	echo "malformed-text-worktree: worktree text with NUL and invalid UTF-8 must fail closed" >&2
+	failed=1
+fi
+
+new_repo malformed-text-history
+printf 'endpoint: malformed.personal-domain.dev\000\377\n' >"$repo/fixture.mdx"
+commit_fixture fixture.mdx
+printf '%s\n' 'safe fixture' >"$repo/fixture.mdx"
+commit_fixture fixture.mdx
+if (cd "$repo" && sh scripts/check-publication.sh --history); then
+	echo "malformed-text-history: historical text with NUL and invalid UTF-8 must fail closed" >&2
 	failed=1
 fi
 
@@ -419,6 +640,26 @@ git -C "$repo" add -- site/package-lock.json
 git -C "$repo" commit -qm "test: remove package lock"
 if (cd "$repo" && sh scripts/check-publication.sh --history); then
 	echo "history-package-lock: expected historical package-lock check to fail" >&2
+	failed=1
+fi
+
+new_repo history-author-email
+printf '%s\n' 'safe fixture' >"$repo/fixture.txt"
+commit_fixture
+git -C "$repo" config user.email operator@personal-domain.dev
+printf '%s\n' 'another safe fixture' >>"$repo/fixture.txt"
+commit_fixture
+if (cd "$repo" && sh scripts/check-publication.sh --history); then
+	echo "history-author-email: expected non-noreply author email to fail" >&2
+	failed=1
+fi
+
+new_repo history-assistant-trailer
+printf '%s\n' 'safe fixture' >"$repo/fixture.txt"
+git -C "$repo" add -- fixture.txt
+git -C "$repo" commit -qm 'test: add fixture' -m 'Generated-By: assistant'
+if (cd "$repo" && sh scripts/check-publication.sh --history); then
+	echo "history-assistant-trailer: expected assistant attribution to fail" >&2
 	failed=1
 fi
 

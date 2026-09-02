@@ -20,7 +20,7 @@ The hub block defines the one client ingress. Changes to endpoint, key, client n
 
 <ConfigField path="hub.endpoint" type="string host:port" required="Yes" defaultValue="None" validation="Non-empty host and numeric port 1–65535; control characters are rejected." secret="No; public endpoint." sideEffects="Sets the profile endpoint and AmneziaWG listen port." example="vpn.example.com:51820" />
 
-<ConfigField path="hub.server_public_key" type="base64 string" required="Yes" defaultValue="None" validation="Must decode to a 32-byte X25519 public key." secret="No; keep the matching server.key secret." sideEffects="Identifies the hub in every client profile." example="W/kKaUP1n48AgIzxs8po0HKV+UEk1vMcTuBW648atSE=" />
+<ConfigField path="hub.server_public_key" type="base64 string" required="Yes" defaultValue="None" validation="Must decode to a 32-byte X25519 public key." secret="No; keep the matching private key secret." sideEffects="Identifies the hub in every client profile." example="W/kKaUP1n48AgIzxs8po0HKV+UEk1vMcTuBW648atSE=" />
 
 <ConfigField path="hub.client_cidr" type="CIDR string" required="Yes" defaultValue="None" validation="Must parse as a network and must not overlap the internal 10.90.0.0/16 egress-link range." secret="No; topology metadata." sideEffects="Defines ingress addressing, firewall scopes, and device allocation." example="10.80.0.0/24" />
 
@@ -32,7 +32,7 @@ The hub block defines the one client ingress. Changes to endpoint, key, client n
 
 <ConfigField path="hub.fallback.udp443" type="boolean" required="No" defaultValue="false" validation="Cannot be true when endpoint already listens on port 443." secret="No." sideEffects="Redirects uplink UDP/443 to the configured AmneziaWG ingress port." example="udp443: true" />
 
-<ConfigField path="hub.fallback.reality" type="object" required="No" defaultValue="Disabled object" validation="server_name becomes required when enabled is true." secret="No; the listener key stays in reality.key." sideEffects="Controls the optional TCP/443 VLESS/REALITY listener." example="reality: { enabled: false }" />
+<ConfigField path="hub.fallback.reality" type="object" required="No" defaultValue="Disabled object" validation="server_name becomes required when enabled is true." secret="No; keep the matching REALITY private key secret." sideEffects="Controls the optional TCP/443 VLESS/REALITY listener." example="reality: { enabled: false }" />
 
 <ConfigField path="hub.fallback.reality.enabled" type="boolean" required="No" defaultValue="false" validation="When true, a valid server_name and /etc/vpn-hub/reality.key are needed." secret="No." sideEffects="Opens TCP/443 in the host rules only when the listener can be compiled." example="enabled: true" />
 
