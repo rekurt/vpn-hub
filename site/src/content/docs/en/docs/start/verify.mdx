@@ -36,13 +36,49 @@ For a provider egress, compare the observed public address with the provider's d
 
 ## Prove fail-closed behavior
 
-Use a non-critical test device assigned to a provider tunnel. Stop that upstream or disable it only after moving every production device away. Traffic assigned to an unavailable egress must stop; it must not move to `direct`. Restore the tunnel and run its configured probe.
+Use a dedicated non-critical device whose egress is a dedicated WireGuard tunnel named `kill-switch-wg`. Do not disable that tunnel in YAML: validation rejects a disabled egress while a device references it. First prove the device has connectivity:
 
 ```bash
-sudo hubctl --config /etc/vpn-hub/hub.yaml test tunnel edge-wg
+curl --max-time 10 --fail --silent --show-error https://example.com/ >/dev/null
 ```
 
-An unconfigured probe returns `unknown` as an error; it is not reported healthy.
+In an independent root SSH session, run a bounded transient unit. It stops the reconciler, lowers only that tunnel's `wg0`, waits 45 seconds, then raises the interface and restarts the agent even on interruption. The 90-second runtime limit provides a second recovery bound.
+
+```bash
+systemd-run --unit=vpn-hub-kill-switch-test --collect --wait \
+  --property=RuntimeMaxSec=90 \
+  /bin/bash -ceu '
+restore() {
+  ip -n vpn-hub-kill-switch-wg link set wg0 up || true
+  systemctl start vpn-hub-agent
+}
+trap restore EXIT INT TERM
+systemctl stop vpn-hub-agent
+ip -n vpn-hub-kill-switch-wg link set wg0 down
+sleep 45
+'
+```
+
+During that 45-second window, run this on the dedicated device:
+
+```bash
+if curl --max-time 10 --fail --silent --show-error https://example.com/ >/dev/null; then
+  echo 'unexpected connectivity: investigate before continuing' >&2
+  exit 1
+else
+  echo 'blocked as expected'
+fi
+```
+
+**Expected result:** the request fails and prints `blocked as expected`; it must not leave through `direct`. After the transient unit exits, verify recovery on the hub:
+
+```bash
+systemctl is-active vpn-hub-agent
+ip -n vpn-hub-kill-switch-wg link show wg0
+hubctl --config /etc/vpn-hub/hub.yaml test tunnel kill-switch-wg
+```
+
+The agent should be `active`, `wg0` should be `UP`, and the configured tunnel probe should succeed. An unconfigured probe returns `unknown` as an error; it is not reported healthy. If recovery fails, run `ip -n vpn-hub-kill-switch-wg link set wg0 up` and `systemctl start vpn-hub-agent` from the independent SSH session, then inspect the journal before continuing.
 
 <VerifyBlock command="sudo nft list table inet vpn_hub >/dev/null && sudo ip link show awg0 >/dev/null" expected="both commands exit zero" />
 

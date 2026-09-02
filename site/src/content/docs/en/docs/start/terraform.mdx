@@ -9,8 +9,8 @@ The module creates a DigitalOcean droplet, SSH key, and cloud firewall. Cloud-in
 
 ## Prerequisites
 
-- OpenTofu or a compatible Terraform CLI.
-- `doctl` authenticated to the intended DigitalOcean account, or `TF_VAR_do_token` supplied securely.
+- OpenTofu for the provided `make stand-*` targets. A Terraform CLI can run the module manually, but the Makefile invokes `tofu` explicitly.
+- `DIGITALOCEAN_TOKEN` in the environment, or `doctl` authenticated to the intended DigitalOcean account.
 - A trusted management CIDR. Global SSH is rejected unless the explicit break-glass override is enabled.
 
 ## Plan and apply
@@ -18,12 +18,15 @@ The module creates a DigitalOcean droplet, SSH key, and cloud firewall. Cloud-in
 ```bash
 cp deploy/terraform/terraform.tfvars.example deploy/terraform/terraform.tfvars
 ${EDITOR:-vi} deploy/terraform/terraform.tfvars
+test -n "${DIGITALOCEAN_TOKEN:-}" || doctl account get >/dev/null
 make stand-init
 make stand-plan
 make stand-up
 ```
 
 Set `ssh_allowed_cidrs` to the operator's real CIDR before `stand-up`. Do not copy `198.51.100.10/32`; it is documentation-only space.
+
+For every `stand-*` target, `deploy/terraform/do-token.sh` first reads `DIGITALOCEAN_TOKEN`; if it is unset, the script reads the current `doctl` context. The Makefile exports that result as `TF_VAR_do_token` to OpenTofu. Set the source credential, not `TF_VAR_do_token`, so every target resolves it consistently. Keep the token out of shell history and `terraform.tfvars`.
 
 **Expected result:** the apply prints `ipv4`, `droplet_id`, and an SSH command. Cloud-init finishes after installing the AmneziaWG module and pinned `sing-box` and SOPS binaries.
 

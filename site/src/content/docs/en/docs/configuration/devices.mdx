@@ -20,7 +20,7 @@ A device has one stable ingress profile. Its default Internet egress is a hub-si
 
 <ConfigField path="devices[].id" type="string" required="Yes" defaultValue="None" validation="Unique; 1–32 characters matching lowercase letters, digits, and internal hyphens." secret="No; identifier metadata." sideEffects="Names peers, bot callbacks, revocations, profile-key files, and policies." example="laptop" />
 
-<ConfigField path="devices[].address" type="host CIDR string" required="Yes" defaultValue="None" validation="A /32 or /128 host route inside client_cidr; not the network, IPv4 broadcast, or dns_address; unique." secret="No; topology metadata." sideEffects="Becomes the peer address and policy source identity." example="10.80.0.2/32" />
+<ConfigField path="devices[].address" type="IPv4 host CIDR string" required="Yes" defaultValue="None" validation="The parser accepts a /32 or /128 host route inside client_cidr; not the network, IPv4 broadcast, or dns_address; unique. The supported deployment is IPv4 /32 only." secret="No; topology metadata." sideEffects="Becomes the peer address and IPv4 policy source identity. Current nftables and host provisioning are IPv4-only, so a parsed /128 is not an operational IPv6 promise." example="10.80.0.2/32" />
 
 <ConfigField path="devices[].public_key" type="base64 string" required="Yes" defaultValue="None" validation="Unique and decodes to a 32-byte X25519 public key." secret="No; the client private half must remain secret." sideEffects="Admits the AmneziaWG peer and participates in REALITY credential derivation." example="TE5crMJPBmCr2bF/uSbHqAlTAHKQwLKMs0RQxfQ0LU4=" />
 
@@ -41,5 +41,7 @@ The following `profiles` shape is decoded only to produce a migration error. It 
 <ConfigField path="devices[].profiles[].client_private_key" type="deprecated secret string" required="Must be absent" defaultValue="None" validation="Parent profiles list is rejected." secret="Yes; rotate if this legacy field was exposed." sideEffects="Blocks validation; a private key must never live in hub YAML." example="REDACTED" />
 
 CLI-generated profiles are written `0600` and their private key is not retained. Bot-issued profiles deliberately retain the private key at `/var/lib/vpn-hub/device-profiles/<id>.key`, mode `0600` inside a `0700` directory, so the bot can deliver the same profile again.
+
+Use only IPv4 `/32` device addresses. Although structural validation currently accepts IPv6 `/128`, the generated packet filter uses IPv4 address sets and the supported host disables IPv6; deploying `/128` is unsupported.
 
 Next: [Tunnel configuration](../tunnels/) and [Client ACLs](../client-acls/).
