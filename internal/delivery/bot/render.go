@@ -72,6 +72,15 @@ var task2EnglishLocalizer = func() Localizer {
 	return l
 }()
 
+// task2LegacyRussianLocalizer keeps three legacy messages atomic until Tasks 3–5 localize their callers.
+var task2LegacyRussianLocalizer = func() Localizer {
+	l, err := NewLocalizer(LocaleRussian)
+	if err != nil {
+		panic(err)
+	}
+	return l
+}()
+
 func esc(value string) string { return html.EscapeString(value) }
 
 func btn(text, data string) tg.InlineKeyboardButton {

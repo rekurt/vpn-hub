@@ -245,7 +245,7 @@ func (b *Bot) testAllTunnels(ctx context.Context, _ *tg.CallbackQuery) result {
 	}
 
 	message, err := b.API.SendMessage(ctx, b.Cfg.AdminID,
-		fmt.Sprintf("🩺 Проверяю %d %s…", len(subjects), plural(task2EnglishLocalizer, len(subjects), msgPluralTunnelOne, msgPluralTunnelFew, msgPluralTunnelMany)), nil)
+		legacyRussianTunnelTestProgress(len(subjects)), nil)
 	if err != nil {
 		return result{toast: "Не удалось начать: " + err.Error(), alert: true}
 	}
@@ -276,6 +276,11 @@ func (b *Bot) testAllTunnels(ctx context.Context, _ *tg.CallbackQuery) result {
 		}
 	})
 	return result{toast: "Проверяю все"}
+}
+
+func legacyRussianTunnelTestProgress(count int) string {
+	return fmt.Sprintf("🩺 Проверяю %d %s…", count,
+		plural(task2LegacyRussianLocalizer, count, msgPluralTunnelOne, msgPluralTunnelFew, msgPluralTunnelMany))
 }
 
 // --- allowed_devices -------------------------------------------------------
