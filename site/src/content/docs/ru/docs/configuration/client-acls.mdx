@@ -1,0 +1,31 @@
+---
+title: Client ACL configuration
+description: Open one directional TCP or UDP service while preserving default client isolation.
+coverage:
+  - client_acls[].source
+  - client_acls[].target
+  - client_acls[].protocol
+  - client_acls[].port
+---
+
+import ConfigField from '../../../../../components/ConfigField.astro';
+
+<ConfigField path="client_acls[].source" type="device ID or any" required="Yes" defaultValue="None" validation="Existing device ID or the reserved value any; cannot equal target." secret="No; access-policy metadata." sideEffects="Selects which enrolled clients may initiate the flow." example="laptop" />
+
+<ConfigField path="client_acls[].target" type="device ID" required="Yes" defaultValue="None" validation="Must name an existing device and differ from source." secret="No." sideEffects="Selects the enrolled destination address." example="server" />
+
+<ConfigField path="client_acls[].protocol" type="enum" required="Yes" defaultValue="None" validation="Exactly tcp or udp." secret="No." sideEffects="Adds a protocol-specific nftables accept rule." example="tcp" />
+
+<ConfigField path="client_acls[].port" type="uint16" required="Yes" defaultValue="None" validation="Numeric port 1–65535; the complete ACL tuple must be unique." secret="No." sideEffects="Limits the exception to one destination port." example="22" />
+
+```yaml
+client_acls:
+  - source: laptop
+    target: server
+    protocol: tcp
+    port: 22
+```
+
+An ACL is directional. Connection tracking admits replies, but it does not let `server` initiate an unrelated connection back to `laptop`. The target service still needs authentication and its own host security.
+
+Next: [Isolation model](../../concepts/client-isolation/).

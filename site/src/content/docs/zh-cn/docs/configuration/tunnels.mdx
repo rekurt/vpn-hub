@@ -1,0 +1,39 @@
+---
+title: Tunnel configuration
+description: Define an isolated provider path, its role, lifecycle, and device access boundary.
+coverage:
+  - tunnels[].id
+  - tunnels[].type
+  - tunnels[].role
+  - tunnels[].enabled
+  - tunnels[].allowed_devices[]
+---
+
+import ConfigField from '../../../../../components/ConfigField.astro';
+
+Each enabled tunnel gets an isolated namespace. Provider files are loaded from `source`, described under [Subscriptions](../subscriptions/); routes, DNS, and probes are separate policy fields.
+
+<ConfigField path="tunnels[].id" type="string" required="Yes" defaultValue="None" validation="Unique, at most 12 characters, lowercase alphanumeric with internal hyphens; direct is reserved." secret="No; identifier metadata." sideEffects="Names namespaces, interfaces, transient units, nftables sets, and state files." example="edge-wg" />
+
+<ConfigField path="tunnels[].type" type="enum" required="Yes" defaultValue="None" validation="One of wireguard, amneziawg, xray, or openvpn." secret="No." sideEffects="Selects the provider parser, interface, and egress driver." example="wireguard" />
+
+<ConfigField path="tunnels[].role" type="enum" required="Yes" defaultValue="None" validation="One of egress or private-network." secret="No." sideEffects="Egress is selected per device; private-network is selected by route or private DNS answer." example="egress" />
+
+<ConfigField path="tunnels[].enabled" type="nullable boolean" required="No" defaultValue="true when absent" validation="Cannot be false while an enrolled device selects this tunnel as egress." secret="No." sideEffects="A disabled tunnel is omitted from desired state and removed instead of being built idle." example="enabled: false" />
+
+<ConfigField path="tunnels[].allowed_devices[]" type="array of device IDs" required="No" defaultValue="Empty, meaning all enrolled devices" validation="Every ID must name an existing device." secret="No; access-policy metadata." sideEffects="Limits default egress, private-network access, and the tunnel's SOCKS endpoint." example="allowed_devices: [laptop]" />
+
+```yaml
+tunnels:
+  - id: edge-wg
+    type: wireguard
+    role: egress
+    source:
+      kind: config
+      value: secrets/edge-wg.conf
+    allowed_devices: [laptop]
+```
+
+Move assigned devices before disabling an egress; validation refuses silent failover.
+
+Next: choose [WireGuard](../wireguard/), [AmneziaWG](../amneziawg/), [Xray/VLESS](../xray-vless/), or [OpenVPN](../openvpn/).

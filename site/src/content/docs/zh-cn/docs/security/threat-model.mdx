@@ -1,0 +1,18 @@
+---
+title: Threat model
+description: What is protected by design and what is operator responsibility.
+---
+
+Protected:
+
+- state reconciliation and service restart
+- per-namespace policy application
+- explicit deploy approvals
+
+Operator responsibility:
+
+- host hardening
+- key lifecycle and secret distribution
+- firewall ingress scope and SSH policy
+- update cadence and patching
+

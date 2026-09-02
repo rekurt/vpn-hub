@@ -1,0 +1,13 @@
+---
+title: Subscription canary
+description: Candidate upstream testing path with controlled promotion.
+---
+
+## Steps
+
+1. Add upstream candidates in source config.
+2. Refresh candidates and run health probes.
+3. Promote only after stable health and fallback timer.
+
+Use `hubctl subscription restore <id>` when candidate health does not meet baseline.
+

@@ -1,0 +1,28 @@
+---
+title: Incident response
+description: Structured rollback and recovery for routing or policy incidents.
+---
+
+## Incident entry
+
+1. Stop non-essential deployments.
+2. Capture status and drift before any changes.
+3. Check whether tunnel health checks are failing in active namespace set.
+4. If policy is incorrect, keep configuration changes in a branch and do not deploy.
+
+## Fast safe response
+
+- `hubctl status --state-dir /var/lib/vpn-hub`
+- `hubctl verify --config /etc/vpn-hub/hub.yaml`
+- If a bad deploy is active, use confirm timeout to let rollback trigger or apply rollback command.
+
+## SSH recovery
+
+When bot is unavailable, SSH recovery still supports:
+
+- restart agent
+- inspect logs and unit status
+- apply known-good config through staging directory and re-run install
+
+Do not change private keys and tunnel private components manually.
+

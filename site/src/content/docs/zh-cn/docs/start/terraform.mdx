@@ -1,0 +1,47 @@
+---
+title: Provision with OpenTofu or Terraform
+description: Create the supported DigitalOcean host with restricted SSH and the required outer firewall.
+---
+
+import VerifyBlock from '../../../../../components/VerifyBlock.astro';
+
+The module creates a DigitalOcean droplet, SSH key, and cloud firewall. Cloud-init installs networking dependencies, disables host IPv6, enables forwarding, and prepares protected directories. It does not install VPN Hub binaries.
+
+## Prerequisites
+
+- OpenTofu for the provided `make stand-*` targets. A Terraform CLI can run the module manually, but the Makefile invokes `tofu` explicitly.
+- `DIGITALOCEAN_TOKEN` in the environment, or `doctl` authenticated to the intended DigitalOcean account.
+- A trusted management CIDR. Global SSH is rejected unless the explicit break-glass override is enabled.
+
+## Plan and apply
+
+```bash
+cp deploy/terraform/terraform.tfvars.example deploy/terraform/terraform.tfvars
+${EDITOR:-vi} deploy/terraform/terraform.tfvars
+test -n "${DIGITALOCEAN_TOKEN:-}" || doctl account get >/dev/null
+make stand-init
+make stand-plan
+make stand-up
+```
+
+Set `ssh_allowed_cidrs` to the operator's real CIDR before `stand-up`. Do not copy `198.51.100.10/32`; it is documentation-only space.
+
+For every `stand-*` target, `deploy/terraform/do-token.sh` first reads `DIGITALOCEAN_TOKEN`; if it is unset, the script reads the current `doctl` context. The Makefile exports that result as `TF_VAR_do_token` to OpenTofu. Set the source credential, not `TF_VAR_do_token`, so every target resolves it consistently. Keep the token out of shell history and `terraform.tfvars`.
+
+**Expected result:** the apply prints `ipv4`, `droplet_id`, and an SSH command. Cloud-init finishes after installing the AmneziaWG module and pinned `sing-box` and SOPS binaries.
+
+<VerifyBlock command="make stand-ip && ssh root@$(make -s stand-ip) 'cloud-init status --wait && systemctl is-active ssh'" expected="a public IPv4 address, cloud-init status done, and active" />
+
+The cloud firewall admits 22/TCP only from `ssh_allowed_cidrs`, 51820/UDP globally, both 443 transports for optional fallback, and ICMP. Host nftables still decides whether fallback traffic is accepted.
+
+## Roll back
+
+```bash
+make stand-down
+```
+
+This destroys billable cloud resources. Back up configuration, state, and the age identity first if the host was ever used.
+
+## Next
+
+[Install the binaries](../install/), then create the [first hub](../first-hub/).

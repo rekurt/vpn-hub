@@ -1,0 +1,20 @@
+---
+title: Troubleshooting
+description: Fast diagnostics and corrective actions for routing incidents.
+---
+
+## Common checks
+
+- health output: `hubctl status`
+- routing state: `hubctl routes`
+- tunnel reachability and subscriptions
+- host units: `systemctl status vpn-hub-agent`
+
+## If traffic is blocked
+
+1. Validate kill-switch and tunnel namespace mapping.
+2. Confirm desired state revision is active.
+3. Check whether confirmation timeout triggered rollback.
+
+Do not disable safety checks in production without a written incident plan.
+

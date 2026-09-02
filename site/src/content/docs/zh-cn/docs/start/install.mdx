@@ -1,0 +1,51 @@
+---
+title: Install VPN Hub
+description: Build and install the three binaries and hardened systemd units on a prepared host.
+---
+
+import VerifyBlock from '../../../../../components/VerifyBlock.astro';
+
+This source-install path is useful before the first tagged release. For a public release, prefer the checksum-verified release recipe when it becomes available.
+
+## Prerequisites
+
+- A host that satisfies [Requirements](../requirements/).
+- A clean checkout on the operator workstation.
+- SSH root access in `HUB_HOST`; the example address is from RFC 5737.
+
+## Build and stage
+
+```bash
+export HUB_HOST=192.0.2.10
+make build-linux
+ssh root@"$HUB_HOST" 'install -d -m 0700 /run/vpn-hub-stage/systemd'
+scp bin/linux/hubctl bin/linux/vpn-hub-agent bin/linux/vpn-hub-bot \
+  deploy/install.sh root@"$HUB_HOST":/run/vpn-hub-stage/
+scp deploy/systemd/vpn-hub-agent.service deploy/systemd/vpn-hub-bot.service \
+  root@"$HUB_HOST":/run/vpn-hub-stage/systemd/
+ssh root@"$HUB_HOST" 'sh /run/vpn-hub-stage/install.sh'
+```
+
+**Expected result:** `/usr/local/bin` contains all three executables. The agent starts; the bot starts only when `/etc/vpn-hub/telegram.yaml` exists.
+
+<VerifyBlock command="ssh root@$HUB_HOST 'systemctl is-enabled vpn-hub-agent && /usr/local/bin/hubctl --help >/dev/null'" expected="enabled, followed by a zero exit status" />
+
+## Roll back
+
+Keep the previous verified artifact before replacing binaries. Restage that artifact and run the same `deploy/install.sh`. To undo a first install before configuration exists:
+
+```bash
+ssh root@"$HUB_HOST" '
+set -eu
+systemctl disable --now vpn-hub-bot vpn-hub-agent
+rm -f /usr/local/bin/hubctl /usr/local/bin/vpn-hub-agent /usr/local/bin/vpn-hub-bot
+rm -f /etc/systemd/system/vpn-hub-agent.service /etc/systemd/system/vpn-hub-bot.service
+systemctl daemon-reload
+'
+```
+
+Do not remove `/etc/vpn-hub` or `/var/lib/vpn-hub` after real use until their secrets and recovery state have been backed up or deliberately destroyed.
+
+## Next
+
+Create the [first hub configuration](../first-hub/).

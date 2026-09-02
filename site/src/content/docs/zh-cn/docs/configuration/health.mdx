@@ -1,0 +1,27 @@
+---
+title: Tunnel health configuration
+description: Define safe TCP, HTTPS, and DNS probes and interpret unknown correctly.
+coverage:
+  - tunnels[].health
+  - tunnels[].health.tcp_address
+  - tunnels[].health.https_url
+  - tunnels[].health.dns_name
+---
+
+import ConfigField from '../../../../../components/ConfigField.astro';
+
+<ConfigField path="tunnels[].health" type="object" required="No" defaultValue="No probes" validation="Each non-empty nested target is validated before it reaches a process argument." secret="No; targets may reveal monitoring intent." sideEffects="Defines checks run by hubctl and subscription selection." example="health: { dns_name: example.com }" />
+
+<ConfigField path="tunnels[].health.tcp_address" type="host:port string" required="No" defaultValue="Empty" validation="Valid host or IP plus numeric port 1–65535; unsafe hostname characters and leading dashes are rejected." secret="No." sideEffects="Attempts a TCP connection from the tunnel context." example="192.0.2.53:53" />
+
+<ConfigField path="tunnels[].health.https_url" type="HTTPS URL string" required="No" defaultValue="Empty" validation="Must use https, include a safe hostname, and contain no whitespace." secret="Do not put credentials or tokens in probe URLs." sideEffects="Fetches the URL through the tunnel." example="https://example.com/health" />
+
+<ConfigField path="tunnels[].health.dns_name" type="hostname or IP string" required="No" defaultValue="Empty" validation="At most 253 characters with safe host-label syntax; leading dashes are rejected." secret="No." sideEffects="Resolves the name through the tunnel's DNS context." example="example.com" />
+
+```bash
+sudo hubctl --config /etc/vpn-hub test tunnel office
+```
+
+No configured probe means `unknown` and a non-zero exit, never an inferred healthy status.
+
+Next: [Health semantics](../../concepts/health/).

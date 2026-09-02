@@ -1,0 +1,23 @@
+---
+title: Zero-trust routing
+description: Route private and public traffic through explicit tunnels and ACLs.
+---
+
+## Scenario
+
+All private traffic must be isolated per-device and private subnet, with no implied device peer.
+
+## Steps
+
+1. Declare private subnet tunnels and device egress.
+2. Add `client-acls` only for explicit management operations.
+3. Publish routes and DNS zones to the tunnel with explicit scope.
+
+```sh
+hubctl device set-egress workstation corp-egress
+hubctl tunnel routes corp-private --add 192.0.2.0/24
+hubctl client-acl add phone laptop tcp/22
+```
+
+Expected: device peers remain blocked unless a rule is explicitly added.
+

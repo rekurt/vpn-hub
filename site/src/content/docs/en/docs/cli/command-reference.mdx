@@ -1,0 +1,45 @@
+---
+title: Hubctl command reference
+description: Stable command paths and expected outcomes for operator workflows.
+---
+
+## Global
+
+- `hubctl --help`
+- `hubctl version`
+- `hubctl validate --config <file>`
+
+## Core lifecycle
+
+- `hubctl deploy --config <file> --state-dir <dir>` — reconcile current desired state.
+- `hubctl status --state-dir <dir>` — print revision, state, pending action, and checks.
+- `hubctl verify --config <file>` — validate structure, IDs, and validation constraints.
+
+## Device workflow
+
+- `hubctl device add <name> --egress <tunnel-id> --address 192.0.2.10/32 --output /tmp/laptop.conf`
+- `hubctl device set-egress <name> <tunnel-id>`
+- `hubctl device revoke <name>`
+- `hubctl device unrevoke <name>`
+
+## Tunnel workflow
+
+- `hubctl tunnel list`
+- `hubctl tunnel add <id> --type wireguard --config /tmp/tunnel.yaml` (or equivalent YAML edit flow)
+- `hubctl tunnel disable <id>` / `hubctl tunnel enable <id>`
+- `hubctl tunnel routes <id> --add 198.51.100.0/24`
+- `hubctl tunnel routes <id> --remove 198.51.100.0/24`
+
+## Health and maintenance
+
+- `hubctl routes` — read routing intent and policy paths.
+- `hubctl subscriptions list`
+- `hubctl subscription refresh <id> --timeout 30m`
+- `hubctl subscription restore <id>`
+
+## Bot-oriented safety command
+
+- `hubctl deploy --confirm-within 5m` — requires explicit operator confirmation window.
+
+When uncertain, pair any high-impact change with `--dry-run` and read drift output first.
+

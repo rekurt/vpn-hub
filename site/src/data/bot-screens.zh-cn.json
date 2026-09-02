@@ -1,0 +1,576 @@
+[
+  {
+    "id": "candidates",
+    "locale": "zh-cn",
+    "title": "Candidates",
+    "text": "📋 <b>docs-egress</b>: 2 candidates in the subscription\n\nThe selected candidate is tested in an isolated namespace first; the current upstream changes only after the candidate proves it works.\n",
+    "rows": [
+      [
+        {
+          "label": "• 203.0.113.44:443 (current)",
+          "callback": "sub:pick:docs-egress:0"
+        }
+      ],
+      [
+        {
+          "label": "198.51.100.44:8443",
+          "callback": "sub:pick:docs-egress:1"
+        }
+      ],
+      [
+        {
+          "label": "⬅️ To subscription",
+          "callback": "sub:c:docs-egress"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "client-acls",
+    "locale": "zh-cn",
+    "title": "🔐 Access between devices",
+    "text": "🔐 <b>Access between devices</b>\n\nVPN clients cannot reach one another by default. Only explicit permissions are listed here.\n\n• <code>docs-phone</code> → <code>docs-laptop</code> <code>tcp/22</code>\n",
+    "rows": [
+      [
+        {
+          "label": "➖ docs-phone → docs-laptop tcp/22",
+          "callback": "acl:rm:0"
+        }
+      ],
+      [
+        {
+          "label": "➕ Add",
+          "callback": "acl:add"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "deploy-countdown",
+    "locale": "zh-cn",
+    "title": "🚀 Deploy",
+    "text": "⏳ Revision <code>docs-next-0002</code> was applied and awaits confirmation.\nTime left: <b>3m 20s</b>\n\nWithout confirmation, the agent restores the previous revision.",
+    "rows": [
+      [
+        {
+          "label": "✅ Confirm",
+          "callback": "dep:ok"
+        },
+        {
+          "label": "↩️ Roll back",
+          "callback": "dep:rb!"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "deploy-preview",
+    "locale": "zh-cn",
+    "title": "🚀 Deploy",
+    "text": "🚀 <b>Deploy</b>\n\nActive revision: <code>docs-current-0001</code>\nNew revision: <code>docs-next-0002</code> (2 tunnels, 2 devices)\nExcluded revoked devices: <code>docs-retired</code>\n\n<b>Changes:</b>\n • ➕ tunnel docs-private\n • 🔀 docs-laptop: direct → docs-egress\n • ➕ device docs-phone → direct\n\nWith rollback protection, the agent restores the previous revision if you do not confirm in time, even if the new revision cuts off access.",
+    "rows": [
+      [
+        {
+          "label": "✅ With rollback protection…",
+          "callback": "dep:arm:docs-next-0002"
+        }
+      ],
+      [
+        {
+          "label": "⚡ Apply without protection",
+          "callback": "dep:now:docs-next-0002"
+        }
+      ],
+      [
+        {
+          "label": "↩️ Restore previous revision",
+          "callback": "dep:rb"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "device-card",
+    "locale": "zh-cn",
+    "title": "Devices",
+    "text": "📱 <b>docs-laptop</b>\n\nAddress: <code>192.0.2.10/32</code>\nEgress: <code>docs-egress</code>\nKey: <code>PUBLIC-KEY-E…</code>\n\n🟢 online\nTraffic: ⭱ 3.0 GiB from device, ⭳ 512.0 MiB to device\n",
+    "rows": [
+      [
+        {
+          "label": "🔀 Change egress",
+          "callback": "dev:eg:docs-laptop"
+        }
+      ],
+      [
+        {
+          "label": "📄 Send current profile",
+          "callback": "dev:pr:docs-laptop"
+        }
+      ],
+      [
+        {
+          "label": "📤 Reissue profile",
+          "callback": "dev:re:docs-laptop"
+        }
+      ],
+      [
+        {
+          "label": "🚫 Revoke",
+          "callback": "dev:rv:docs-laptop"
+        }
+      ],
+      [
+        {
+          "label": "⬅️ Devices",
+          "callback": "dev"
+        },
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "devices",
+    "locale": "zh-cn",
+    "title": "📱 Devices",
+    "text": "📱 <b>Devices</b>\n\n🟢 <code>docs-laptop</code> → docs-egress — online\n🚫 <code>docs-phone</code> → direct — never connected, revoked\n",
+    "rows": [
+      [
+        {
+          "label": "docs-laptop",
+          "callback": "dev:c:docs-laptop"
+        },
+        {
+          "label": "docs-phone",
+          "callback": "dev:c:docs-phone"
+        }
+      ],
+      [
+        {
+          "label": "➕ Add device",
+          "callback": "dev:add"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "host",
+    "locale": "zh-cn",
+    "title": "🖥 Host",
+    "text": "🖥 <b>Host</b>\n\nUptime: 26h 3m\nLoad: 0.15 0.10 0.05\nDisk /: 18.0 GiB free of 25.0 GiB\n\n<b>Units:</b>\n🟢 <code>vpn-hub-agent.service</code> — active (running)\n",
+    "rows": [
+      [
+        {
+          "label": "🔄 Refresh",
+          "callback": "host"
+        },
+        {
+          "label": "🔁 Restart agent",
+          "callback": "host:ra"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "hub",
+    "locale": "zh-cn",
+    "title": "⚙️ Hub",
+    "text": "⚙️ <b>Hub</b>\n\nEndpoint: <code>hub.example.test:51820</code>\nClient network: <code>192.0.2.0/24</code>\nDNS: <code>192.0.2.1</code>\nPublic key: <code>PUBLIC-KEY-E…</code>\n\n<b>AmneziaWG parameters:</b>\n • <code>Jc = 5</code>\n • <code>Jmin = 50</code>\n\n⚠️ Changing the endpoint, network, or DNS invalidates issued profiles; devices must be reissued.",
+    "rows": [
+      [
+        {
+          "label": "✏️ Endpoint",
+          "callback": "hub:e:endpoint"
+        },
+        {
+          "label": "✏️ DNS",
+          "callback": "hub:e:dns_address"
+        }
+      ],
+      [
+        {
+          "label": "✏️ Client network",
+          "callback": "hub:e:client_cidr"
+        },
+        {
+          "label": "➕ AWG parameter",
+          "callback": "hub:aa"
+        }
+      ],
+      [
+        {
+          "label": "➖ Jc",
+          "callback": "hub:ad:jc"
+        }
+      ],
+      [
+        {
+          "label": "➖ Jmin",
+          "callback": "hub:ad:jmin"
+        }
+      ],
+      [
+        {
+          "label": "🔑 Rotate hub key",
+          "callback": "hub:rk"
+        },
+        {
+          "label": "📦 Export config",
+          "callback": "hub:dl"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "logs",
+    "locale": "zh-cn",
+    "title": "📜 Logs",
+    "text": "📜 <b>Logs</b>\n\nvpn-hub units on the host:\n• <code>vpn-hub-agent.service</code> — active (running)\n• <code>docs-worker</code> — active (running)\n",
+    "rows": [
+      [
+        {
+          "label": "Agent",
+          "callback": "log:u:vpn-hub-agent.service"
+        },
+        {
+          "label": "Bot",
+          "callback": "log:u:vpn-hub-bot.service"
+        }
+      ],
+      [
+        {
+          "label": "docs-worker",
+          "callback": "log:u:docs-worker"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "main",
+    "locale": "zh-cn",
+    "title": "Management hub",
+    "text": "Management hub\nChoose an action.",
+    "rows": [
+      [
+        {
+          "label": "📊 Status",
+          "callback": "st"
+        },
+        {
+          "label": "📱 Devices",
+          "callback": "dev"
+        }
+      ],
+      [
+        {
+          "label": "🚇 Tunnels",
+          "callback": "tun"
+        },
+        {
+          "label": "📡 Subscriptions",
+          "callback": "sub"
+        }
+      ],
+      [
+        {
+          "label": "🚀 Deploy",
+          "callback": "dep"
+        },
+        {
+          "label": "🗺 Routes",
+          "callback": "rt"
+        }
+      ],
+      [
+        {
+          "label": "🔐 Between devices",
+          "callback": "acl"
+        }
+      ],
+      [
+        {
+          "label": "📜 Logs",
+          "callback": "log"
+        },
+        {
+          "label": "🖥 Host",
+          "callback": "host"
+        }
+      ],
+      [
+        {
+          "label": "⚙️ Hub",
+          "callback": "hub"
+        },
+        {
+          "label": "🔔 Settings",
+          "callback": "set"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "settings",
+    "locale": "zh-cn",
+    "title": "🔔 Notification settings",
+    "text": "🔔 <b>Notification settings</b>\n\nIntervals: health — 5m, drift — 30m, subscriptions — 6h (configured in telegram.yaml).\n\nCategories:\nTap a category to toggle it; the selection is stored on the hub and survives bot restarts.",
+    "rows": [
+      [
+        {
+          "label": "🔔 Automatic rollbacks and deploys",
+          "callback": "set:t:rollback"
+        }
+      ],
+      [
+        {
+          "label": "🔔 Agent errors",
+          "callback": "set:t:agent-error"
+        }
+      ],
+      [
+        {
+          "label": "🔕 Convergence (info)",
+          "callback": "set:t:converge"
+        }
+      ],
+      [
+        {
+          "label": "🔔 Tunnel health",
+          "callback": "set:t:health"
+        }
+      ],
+      [
+        {
+          "label": "🔔 Host drift",
+          "callback": "set:t:drift"
+        }
+      ],
+      [
+        {
+          "label": "🔔 Subscription refresh results",
+          "callback": "set:t:subscription"
+        }
+      ],
+      [
+        {
+          "label": "🔔 Changes outside the bot",
+          "callback": "set:t:oob"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "status",
+    "locale": "zh-cn",
+    "title": "📊 Status",
+    "text": "📊 <b>Status</b>\n\nRevision: <code>docs-current-0001</code> (created 2h ago)\n2 tunnels, 2 devices\n\n⏳ <b>Awaiting confirmation</b>: revision <code>docs-next-0002</code>, 3m 20s left\n\nAgent: 🟢 active (running), restarts: 0\nDrift: ✅ host matches the revision\n",
+    "rows": [
+      [
+        {
+          "label": "✅ Confirm",
+          "callback": "dep:ok"
+        },
+        {
+          "label": "↩️ Roll back",
+          "callback": "dep:rb!"
+        }
+      ],
+      [
+        {
+          "label": "🔄 Refresh",
+          "callback": "st"
+        },
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "subscription-card",
+    "locale": "zh-cn",
+    "title": "Subscriptions",
+    "text": "📡 <b>docs-egress</b> (on)\n\nUpstream: <code>203.0.113.44:443</code>\nA last-known-good upstream is available.\n\n🟢 probe passed\n",
+    "rows": [
+      [
+        {
+          "label": "🔄 Refresh (automatic)",
+          "callback": "sub:r:docs-egress"
+        },
+        {
+          "label": "📋 Candidates",
+          "callback": "sub:cand:docs-egress"
+        }
+      ],
+      [
+        {
+          "label": "↩️ Restore last-known-good",
+          "callback": "sub:lkg:docs-egress"
+        }
+      ],
+      [
+        {
+          "label": "⬅️ Subscriptions",
+          "callback": "sub"
+        },
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "subscriptions",
+    "locale": "zh-cn",
+    "title": "📡 Subscriptions",
+    "text": "📡 <b>Subscriptions</b>\n\n🟢 <code>docs-egress</code> — 203.0.113.44:443\n\nAutomatic refresh: every 6h; a candidate must first prove it works in an isolated namespace.",
+    "rows": [
+      [
+        {
+          "label": "docs-egress",
+          "callback": "sub:c:docs-egress"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "tunnel-card",
+    "locale": "zh-cn",
+    "title": "Tunnels",
+    "text": "🚇 <b>docs-private</b>\n\nRole: private-network\nType: wireguard\nState: on\nSource: subscription <code>[hidden]</code>\nRoutes: <code>198.51.100.0/24</code>\nDNS zones: <code>docs.example.test</code>\n\n🟢 handshake 10s ago (just now)\n",
+    "rows": [
+      [
+        {
+          "label": "⏸ Disable",
+          "callback": "tun:off:docs-private"
+        },
+        {
+          "label": "🩺 Test",
+          "callback": "tun:t:docs-private"
+        }
+      ],
+      [
+        {
+          "label": "🩺 Probes (tcp/https/dns)",
+          "callback": "tun:pr:docs-private"
+        }
+      ],
+      [
+        {
+          "label": "➖ route 198.51.100.0/24",
+          "callback": "tun:rd:docs-private:198.51.100.0/24"
+        }
+      ],
+      [
+        {
+          "label": "➕ Route",
+          "callback": "tun:ra:docs-private"
+        },
+        {
+          "label": "➕ DNS zone",
+          "callback": "tun:za:docs-private"
+        }
+      ],
+      [
+        {
+          "label": "➖ zone docs.example.test",
+          "callback": "tun:zd:docs-private:docs.example.test"
+        }
+      ],
+      [
+        {
+          "label": "⬅️ Tunnels",
+          "callback": "tun"
+        },
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  },
+  {
+    "id": "tunnels",
+    "locale": "zh-cn",
+    "title": "🚇 Tunnels",
+    "text": "🚇 <b>Tunnels</b>\n\n🟢 <code>docs-private</code> — private-network, wireguard, on\n⏸ <code>docs-egress</code> — egress, xray, off\n",
+    "rows": [
+      [
+        {
+          "label": "docs-private",
+          "callback": "tun:c:docs-private"
+        }
+      ],
+      [
+        {
+          "label": "docs-egress",
+          "callback": "tun:c:docs-egress"
+        }
+      ],
+      [
+        {
+          "label": "🩺 Test all",
+          "callback": "tun:ta"
+        }
+      ],
+      [
+        {
+          "label": "🏠 Menu",
+          "callback": "m"
+        }
+      ]
+    ]
+  }
+]

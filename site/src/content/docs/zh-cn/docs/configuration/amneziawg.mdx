@@ -1,0 +1,33 @@
+---
+title: AmneziaWG upstreams
+description: Import provider WireGuard syntax plus the supported AmneziaWG obfuscation parameters.
+coverage: []
+---
+
+Use `type: amneziawg` with the same provider-file shape as [WireGuard](../wireguard/). The `[Interface]` section may additionally contain `Jc`, `Jmin`, `Jmax`, `S1`, `S2`, `H1`, `H2`, `H3`, and `H4`. Names are canonicalized case-insensitively and passed to `awg set`.
+
+```ini
+[Interface]
+PrivateKey = SYNTHETIC-PRIVATE-KEY-REPLACE-BEFORE-USE
+Address = 192.0.2.2/32
+Jc = 4
+Jmin = 64
+Jmax = 256
+S1 = 0
+S2 = 0
+H1 = 1
+H2 = 2
+H3 = 3
+H4 = 4
+
+[Peer]
+PublicKey = W/kKaUP1n48AgIzxs8po0HKV+UEk1vMcTuBW648atSE=
+Endpoint = awg.example.com:51820
+AllowedIPs = 0.0.0.0/0
+```
+
+Provider parameters must match the provider; they are not interchangeable performance knobs. Encrypt the real file because it contains `PrivateKey`. The upstream parameters affect only that provider namespace. `hub.awg_interface` separately controls the client-facing ingress and is copied into device profiles.
+
+Validate the YAML and run a configured probe after deployment. The synthetic file above is intentionally unusable.
+
+Next: [Hub ingress parameters](../hub/) and [Tunnel fields](../tunnels/).

@@ -1,0 +1,14 @@
+---
+title: Provider subscriptions
+description: See how VLESS candidates are bounded, proved, promoted, and restored.
+---
+
+Only an Xray tunnel may use `source.kind: subscription`. Refresh fetches the URL with a bounded request, parses a bounded candidate set, rejects endpoints resolving to special-use or internal addresses, pins accepted hostnames to public addresses, and proves candidates in an isolated canary namespace.
+
+The complete refresh has a two-minute default timeout. A candidate is promoted only after it carries traffic. If every candidate fails, the active upstream stays unchanged. The prior working link is retained as last-known-good and can be restored with `hubctl subscription restore <id>`.
+
+The subscription URL commonly contains a token. It is secret input and is redacted from desired-state JSON and Telegram error messages, but the hub YAML loader does not decrypt inline SOPS values. The supported deployment stores the URL in root-owned `/etc/vpn-hub/hub.yaml` with mode `0600`. SOPS/age runtime decryption applies to provider files, not this YAML field.
+
+Root access or a copied backup can still expose the URL. Limit backups and operator access accordingly. On disclosure, rotate the provider token or URL, deploy and prove the replacement, then revoke the old value. Provider content remains untrusted even when fetched over HTTPS.
+
+Next: [Subscription configuration](../../configuration/subscriptions/).

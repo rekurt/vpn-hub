@@ -1,0 +1,14 @@
+---
+title: Source-aware DNS and split zones
+description: Learn how public queries follow each device egress and private names stay inside their network.
+---
+
+VPN Hub builds one client-facing resolver per egress assignment. nftables redirects a DNS query according to the source device, so public DNS for an `edge-wg` device is forwarded from the `edge-wg` namespace while a `direct` device uses the hub path. The default public resolvers are `1.1.1.1` and `9.9.9.9`.
+
+For a private zone, a forwarder runs inside that private tunnel namespace and queries `dns_servers` reachable there. dnsmasq adds returned addresses to that tunnel's nftables set. Later packets to those addresses follow the private tunnel even when the device uses a different Internet egress.
+
+Validation rejects a `dns_zones` entry without `dns_servers`, malformed zone names, non-IP resolvers, and overlapping zones. DNS-over-TLS from clients is reset so clients can fall back to the hub resolver. DNS-over-HTTPS cannot be reliably intercepted; disable forced DoH on clients that need split DNS.
+
+After DNS-policy changes the agent clears affected conntrack entries and records cleanup state. It does not report the transition complete while cleanup remains pending.
+
+Next: [Private networks](../private-networks/).

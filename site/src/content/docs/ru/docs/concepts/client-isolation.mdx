@@ -1,0 +1,20 @@
+---
+title: Client isolation and ACLs
+description: Understand the default client-to-client drop and narrow TCP or UDP exceptions.
+---
+
+Two enrolled devices share the ingress subnet, but the firewall drops ingress-to-ingress forwarding by default. A client ACL opens one target port in one direction:
+
+```yaml
+client_acls:
+  - source: laptop
+    target: server
+    protocol: tcp
+    port: 22
+```
+
+`source` is a device ID or `any`; `target` must be a concrete device. Protocol is `tcp` or `udp`, port is 1–65535, source and target cannot be the same, and duplicate rules are rejected. Return traffic is admitted by connection tracking.
+
+An ACL is not an application identity, user identity, or host firewall. It admits network traffic from an enrolled client key to a port. Keep the target service authenticated and patched.
+
+Next: [Client ACL reference](../../configuration/client-acls/).

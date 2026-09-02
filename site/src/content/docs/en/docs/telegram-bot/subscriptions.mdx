@@ -1,0 +1,16 @@
+---
+title: Subscription control from bot
+description: Candidate testing, acceptance, and last-known-good workflow.
+---
+
+## Flow
+
+- Start refresh to load candidate upstreams.
+- Inspect health/latency results.
+- Accept winner or restore previous known good candidate.
+
+```sh
+hubctl subscription refresh corp-egress --timeout 20m
+hubctl subscription restore corp-egress
+```
+

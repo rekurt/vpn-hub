@@ -1,0 +1,23 @@
+---
+title: Deploy preview and confirmation
+description: Review planned changes and apply with rollback protection.
+---
+
+Every deploy should show:
+
+- current revision
+- next revision
+- pending changes list
+- rollback deadline
+
+## Safe sequence
+
+1. Open deploy preview.
+2. Validate tunnel and device changes.
+3. Choose confirm-with-timeout.
+4. If confirmation is missed, the previous revision is restored automatically.
+
+## Safety note
+
+This path prevents accidental direct fallback and keeps rollback explicit.
+

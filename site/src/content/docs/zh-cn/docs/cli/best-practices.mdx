@@ -1,0 +1,39 @@
+---
+title: CLI best practices
+description: Operational patterns that reduce outage and accidental policy drift.
+---
+
+## Confirmable deploy flow
+
+1. Build or edit config.
+2. `hubctl validate --config configs/hub.yaml`
+3. `hubctl verify --config configs/hub.yaml`
+4. `hubctl deploy --config configs/hub.yaml --state-dir /var/lib/vpn-hub`
+5. `hubctl status --state-dir /var/lib/vpn-hub`
+
+Use `--confirm-within` for all production deploys.
+
+## Private networks and DNS
+
+Keep private ranges explicit and add DNS zones in one document pass. For mixed environments:
+
+- one private namespace per egress
+- one DNS policy per namespace
+- one tunnel health check per namespace
+
+## Recovery
+
+- Prefer `hubctl device set-egress` over deleting a working tunnel.
+- Keep last known good files in archive before major upgrades.
+- If a publishable host fails, capture `hubctl status` and restart agent only via controlled flow.
+
+## Read-only checks
+
+Run with a user who has only shell-level access before touching SSH credentials:
+
+- `hubctl status --state-dir /var/lib/vpn-hub`
+- `hubctl routes`
+- `hubctl subscriptions list`
+
+Every read checks path before write operations.
+

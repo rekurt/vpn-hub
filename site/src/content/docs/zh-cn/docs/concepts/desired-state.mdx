@@ -1,0 +1,22 @@
+---
+title: Desired state, revisions, and drift
+description: Learn what a revision proves, what the agent observes, and where reconciliation has limits.
+---
+
+Configuration is validated, sorted deterministically, stripped of disabled tunnels, filtered for revoked devices, and hashed into a 16-character revision ID. `hubctl deploy` persists that desired state; the root agent converges the host later.
+
+## What is persisted
+
+The revision records hub public settings, public device keys, egress assignments, enabled tunnels, routes, DNS policy, and ACLs. Credential-bearing `xray-uri` and `subscription` source values are redacted by JSON serialization. Provider private keys, OpenVPN inline material, Xray UUIDs, and the hub private key remain outside the revision.
+
+## Confirmation insurance
+
+`hubctl deploy --confirm-within 5m` records the prior revision and a deadline before saving the new revision. The agent restores the prior revision after the deadline unless `hubctl confirm` clears it. A first deployment has no prior revision and therefore cannot arm rollback.
+
+## Observation is scoped
+
+The agent compares the desired firewall fingerprint, ingress interface/key/port/peers, and REALITY listener fingerprint with observed state. A missing table or changed fingerprint is drift.
+
+An nftables rule edited in place while the table's VPN Hub fingerprint comment remains unchanged is **not guaranteed to be detected or repaired**. The adapter deliberately avoids rebuilding a same-fingerprint table because rebuilding clears dynamic private-DNS address sets and can misroute traffic. Treat root-level live-rule edits as unsupported; change configuration or flush the table so the next reconcile rebuilds it.
+
+Next: [Routing](../routing/) and [Health](../health/).

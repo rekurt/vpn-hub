@@ -1,0 +1,13 @@
+---
+const { steps } = Astro.props as {
+  steps: string[];
+};
+---
+
+<section class="landing-section" id="architecture-map">
+  <h2>Routing map</h2>
+  <ol class="route-map">
+    {steps.map((step) => <li>{step}</li>)}
+  </ol>
+</section>
+

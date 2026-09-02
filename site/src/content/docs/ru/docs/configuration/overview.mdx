@@ -1,0 +1,42 @@
+---
+title: Configuration overview
+description: Choose a single YAML file or directory layout and understand the four top-level collections.
+coverage:
+  - hub
+  - devices[]
+  - tunnels[]
+  - client_acls[]
+---
+
+import ConfigField from '../../../../../components/ConfigField.astro';
+
+VPN Hub accepts one strict YAML document or a directory layout. Unknown keys fail decoding. In a directory, `hub.yaml` holds the base configuration, optional `devices.yaml` adds devices, and each YAML file under `tunnels/` contributes a `tunnels:` list.
+
+```text
+/etc/vpn-hub/
+├── hub.yaml
+├── devices.yaml
+├── tunnels/
+│   ├── office.yaml
+│   └── edge.yaml
+└── secrets/
+```
+
+Relative `source.value` paths resolve below `/etc/vpn-hub` by default. Keep the directory `0700`, ordinary configuration `0600`, and secret-bearing provider material SOPS-encrypted.
+
+<ConfigField path="hub" type="object" required="Yes" defaultValue="None" validation="Must contain endpoint, server_public_key, client_cidr, and dns_address." secret="Contains public control settings; endpoint and topology may still be sensitive." sideEffects="Defines ingress, resolver, fallback listeners, and generated profiles." example="hub: { endpoint: vpn.example.com:51820, ... }" />
+
+<ConfigField path="devices[]" type="array of Device" required="No" defaultValue="Empty array" validation="IDs, addresses, and public keys must be unique; every entry is validated as a whole." secret="Public keys are not private keys; the list reveals enrolled topology." sideEffects="Creates ingress peers and assigns each source address to an Internet egress." example="devices: []" />
+
+<ConfigField path="tunnels[]" type="array of Tunnel" required="No" defaultValue="Empty array" validation="IDs are unique; routes and DNS zones cannot overlap across tunnels." secret="Metadata is not a credential, but source values may be secret." sideEffects="Creates isolated namespaces, routes, resolvers, and provider processes." example="tunnels: []" />
+
+<ConfigField path="client_acls[]" type="array of ClientACL" required="No" defaultValue="Empty array" validation="Each source, target, protocol, and port tuple must be valid and unique." secret="No; it exposes policy relationships." sideEffects="Adds narrow exceptions to default client-to-client isolation." example="client_acls: []" />
+
+Validate after every edit:
+
+```bash
+sudo hubctl --config /etc/vpn-hub validate
+sudo hubctl --config /etc/vpn-hub deploy --dry-run
+```
+
+Next: [Hub fields](../hub/) and [Tunnel fields](../tunnels/).
