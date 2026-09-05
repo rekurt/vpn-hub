@@ -2,7 +2,7 @@
 
 **Explicit multi-VPN routing for a self-hosted Linux hub.** VPN Hub connects devices through AmneziaWG and sends every packet through one deliberately selected path: direct uplink, WireGuard, AmneziaWG, Xray/VLESS, or OpenVPN. It is for operators who want repeatable policy instead of silent fallback.
 
-[Documentation](https://rekurt.github.io/vpn-hub/docs/) · [Cookbook](https://rekurt.github.io/vpn-hub/docs/cookbook/) · [Telegram bot](https://rekurt.github.io/vpn-hub/docs/telegram-bot/) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md)
+[Website](https://rekurt.github.io/vpn-hub/) · [Documentation](https://rekurt.github.io/vpn-hub/docs/) · [Cookbook](https://rekurt.github.io/vpn-hub/docs/cookbook/) · [Telegram bot](https://rekurt.github.io/vpn-hub/docs/telegram-bot/) · [All projects](https://rekurt.github.io/projects/) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md)
 
 ## What it does
 
